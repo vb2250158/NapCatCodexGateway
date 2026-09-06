@@ -375,6 +375,12 @@ function safeLocalUrl(config: RabiLinkRelayRuntimeConfig, pathname: string): str
   const localUrl = new URL(pathname.startsWith("/") ? pathname : `/${pathname}`, base);
   localUrl.protocol = base.protocol;
   localUrl.host = base.host;
+  // Relay requests arrive over loopback too; reject private directory controls here
+  // before the Manager's local-socket guard could mistake them for local UI requests.
+  const normalizedPath = new URL(decodeURIComponent(localUrl.pathname), base).pathname.replace(/\/+$/, "");
+  if (normalizedPath === "/api/speech/model-management/settings") {
+    throw new Error("Model directory settings are available only in the local WebGUI.");
+  }
   return localUrl.toString();
 }
 

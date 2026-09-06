@@ -545,35 +545,47 @@ function replaceRecoverableLockSync(lockPath: string, candidatePath: string, own
   if (!acquireReclaimFenceSync(lockPath, fenceOwner)) return false;
   const stalePath = path.join(path.dirname(lockPath), `.${path.basename(lockPath)}.${randomUUID()}.stale`);
   let staleLinked = false;
-  let candidateMoved = false;
+  let detached = false;
+  let published = false;
   try {
     const checked = readStableSnapshotSync(lockPath);
     if (!checked || !sameSnapshot(observed, checked) || !isRecoverableSnapshot(checked)) return false;
-    fs.linkSync(lockPath, stalePath);
+    // Rename to an unused name: SMB rejects overwrite and can keep an unlinked
+    // name delete-pending. Preserve the old inode under the reclaim fence, then
+    // publish exclusively so a late contender can never be overwritten.
+    fs.renameSync(lockPath, stalePath);
     staleLinked = true;
+    detached = true;
     const linked = readStableSnapshotSync(stalePath);
-    const current = readStableSnapshotSync(lockPath);
-    if (!linked || !current || !sameSnapshot(checked, linked) || !sameSnapshot(checked, current)) return false;
-    fs.renameSync(candidatePath, lockPath);
-    candidateMoved = true;
-    const fenced = readStableSnapshotSync(stalePath);
-    if (!fenced || !sameSnapshot(checked, fenced)) {
-      fs.renameSync(stalePath, lockPath);
-      staleLinked = false;
-      candidateMoved = false;
+    if (!linked || !sameSnapshot(checked, linked)) {
       throw new Error(`Plan storage stale lease renewed during fencing (${path.basename(lockPath)}).`);
     }
-    fs.unlinkSync(stalePath);
-    staleLinked = false;
-    return true;
-  } finally {
-    if (staleLinked) {
-      try { fs.unlinkSync(stalePath); } catch (error) { if (errorCode(error) !== "ENOENT") throw error; }
+    fs.linkSync(candidatePath, lockPath);
+    published = true;
+    const fenced = readStableSnapshotSync(stalePath);
+    if (!fenced || !sameSnapshot(checked, fenced)) {
+      throw new Error(`Plan storage stale lease renewed during fencing (${path.basename(lockPath)}).`);
     }
-    if (candidateMoved && readLeaseMetadata(lockPath)?.owner !== owner) {
+    if (readLeaseMetadata(lockPath)?.owner !== owner) {
       throw new Error(`Plan storage stale-lease fencing lost its candidate (${path.basename(lockPath)}).`);
     }
-    releaseReclaimFenceSync(lockPath, fenceOwner);
+    detached = false;
+    return true;
+  } finally {
+    try {
+      if (detached) {
+        // On renewal/publication failure restore without replacing another owner.
+        // If restoration fails, retain the stale inode as recovery evidence.
+        if (published && readLeaseMetadata(lockPath)?.owner === owner) fs.unlinkSync(lockPath);
+        fs.linkSync(stalePath, lockPath);
+        detached = false;
+      }
+      if (staleLinked) {
+        try { fs.unlinkSync(stalePath); } catch (error) { if (errorCode(error) !== "ENOENT") throw error; }
+      }
+    } finally {
+      releaseReclaimFenceSync(lockPath, fenceOwner);
+    }
   }
 }
 
@@ -584,35 +596,47 @@ async function replaceRecoverableLock(lockPath: string, candidatePath: string, o
   if (!await acquireReclaimFence(lockPath, fenceOwner)) return false;
   const stalePath = path.join(path.dirname(lockPath), `.${path.basename(lockPath)}.${randomUUID()}.stale`);
   let staleLinked = false;
-  let candidateMoved = false;
+  let detached = false;
+  let published = false;
   try {
     const checked = await readStableSnapshot(lockPath);
     if (!checked || !sameSnapshot(observed, checked) || !isRecoverableSnapshot(checked)) return false;
-    await fs.promises.link(lockPath, stalePath);
+    // Rename to an unused name: SMB rejects overwrite and can keep an unlinked
+    // name delete-pending. Preserve the old inode under the reclaim fence, then
+    // publish exclusively so a late contender can never be overwritten.
+    await fs.promises.rename(lockPath, stalePath);
     staleLinked = true;
+    detached = true;
     const linked = await readStableSnapshot(stalePath);
-    const current = await readStableSnapshot(lockPath);
-    if (!linked || !current || !sameSnapshot(checked, linked) || !sameSnapshot(checked, current)) return false;
-    await fs.promises.rename(candidatePath, lockPath);
-    candidateMoved = true;
-    const fenced = await readStableSnapshot(stalePath);
-    if (!fenced || !sameSnapshot(checked, fenced)) {
-      await fs.promises.rename(stalePath, lockPath);
-      staleLinked = false;
-      candidateMoved = false;
+    if (!linked || !sameSnapshot(checked, linked)) {
       throw new Error(`Plan storage stale lease renewed during fencing (${path.basename(lockPath)}).`);
     }
-    await fs.promises.unlink(stalePath);
-    staleLinked = false;
-    return true;
-  } finally {
-    if (staleLinked) {
-      try { await fs.promises.unlink(stalePath); } catch (error) { if (errorCode(error) !== "ENOENT") throw error; }
+    await fs.promises.link(candidatePath, lockPath);
+    published = true;
+    const fenced = await readStableSnapshot(stalePath);
+    if (!fenced || !sameSnapshot(checked, fenced)) {
+      throw new Error(`Plan storage stale lease renewed during fencing (${path.basename(lockPath)}).`);
     }
-    if (candidateMoved && readLeaseMetadata(lockPath)?.owner !== owner) {
+    if (readLeaseMetadata(lockPath)?.owner !== owner) {
       throw new Error(`Plan storage stale-lease fencing lost its candidate (${path.basename(lockPath)}).`);
     }
-    await releaseReclaimFence(lockPath, fenceOwner);
+    detached = false;
+    return true;
+  } finally {
+    try {
+      if (detached) {
+        // On renewal/publication failure restore without replacing another owner.
+        // If restoration fails, retain the stale inode as recovery evidence.
+        if (published && readLeaseMetadata(lockPath)?.owner === owner) await fs.promises.unlink(lockPath);
+        await fs.promises.link(stalePath, lockPath);
+        detached = false;
+      }
+      if (staleLinked) {
+        try { await fs.promises.unlink(stalePath); } catch (error) { if (errorCode(error) !== "ENOENT") throw error; }
+      }
+    } finally {
+      await releaseReclaimFence(lockPath, fenceOwner);
+    }
   }
 }
 

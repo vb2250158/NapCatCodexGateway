@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { GatewayMessageAdapterType, MessageEndpointType } from "../adapters/messageAdapter.js";
 
@@ -41,7 +40,7 @@ export type WebhookLikeScanContext<Runtime> = {
   fenneNotePlaybackUrl: string;
 };
 
-function scanCallbacks<Runtime>(ctx: WebhookLikeScanContext<Runtime>, type: Extract<GatewayMessageAdapterType, "fennenote" | "xiaoai" | "rabilink" | "webhook">): {
+function scanCallbacks<Runtime>(ctx: WebhookLikeScanContext<Runtime>, type: Extract<GatewayMessageAdapterType, "fennenote" | "rabilink" | "webhook">): {
   runtimes: Runtime[];
   callbacks: AdapterEndpoint[];
   callbackReady: boolean;
@@ -84,49 +83,6 @@ export async function scanFenneNoteEndpoint<Runtime>(ctx: WebhookLikeScanContext
     warnings: [
       "RabiRoute 只能检测自己的回调入口和可选播放端；FenneNote 是否真正录音/转写，需要 FenneNote 端或最近请求日志确认。",
       "不要把 FenneNote 叫成 Webhook；日志和消息文件会按 FenneNote 独立分组。"
-    ]
-  };
-}
-
-export async function scanXiaoAiEndpoint<Runtime>(ctx: WebhookLikeScanContext<Runtime>): Promise<MessageAdapterScanResult> {
-  const { runtimes: xiaoaiRuntimes, callbacks: xiaoaiCallbacks, callbackReady: xiaoaiCallbackReady } = scanCallbacks(ctx, "xiaoai");
-  const xiaoaiBridgeDir = path.join(ctx.rootDir, "plugin-adapters", "xiaoai-rabiroute");
-  const xiaoaiBridgePackage = path.join(xiaoaiBridgeDir, "package.json");
-  const xiaoaiBridgeUrl = process.env.XIAOAI_BRIDGE_URL
-    || `http://127.0.0.1:${process.env.XIAOAI_BRIDGE_PORT || "8798"}`;
-  const xiaoaiBridgeHealthUrl = `${xiaoaiBridgeUrl.replace(/\/+$/, "")}/health`;
-  const xiaoaiBridgeHealthy = await ctx.checkHttpEndpoint(xiaoaiBridgeHealthUrl, 1200);
-  const xiaoaiRecent = xiaoaiRuntimes.some((runtime) => ctx.routeHasRecentMessages(runtime, "xiaoai"));
-  const xiaoaiLocalConfig = path.join(xiaoaiBridgeDir, "xiaoai-local.config.json");
-  const openXiaoAiDir = path.join(xiaoaiBridgeDir, "vendor", "open-xiaoai");
-
-  return {
-    type: "xiaoai",
-    label: "小米音箱 / 小爱",
-    maturity: "experimental",
-    installed: fs.existsSync(xiaoaiBridgePackage),
-    installCandidates: [
-      { label: "RabiRoute 小爱桥接适配器", path: xiaoaiBridgeDir },
-      { label: "小爱接入 Runbook", path: path.join(xiaoaiBridgeDir, "RUNBOOK.md") },
-      { label: "open-xiaoai 参考项目", url: "https://github.com/idootop/open-xiaoai" },
-      { label: "xiaogpt 参考项目", url: "https://github.com/yihong0618/xiaogpt" },
-      { label: "小爱音箱接入 RabiRoute 技术路线", url: "https://github.com/vb2250158/RabiRoute/blob/main/docs/xiaoai-integration/xiaoai-rabiroute-intercept-route.md" }
-    ],
-    endpoints: [
-      ...xiaoaiCallbacks,
-      { label: "小爱桥服务", url: xiaoaiBridgeHealthUrl, healthy: xiaoaiBridgeHealthy }
-    ],
-    requirements: [
-      { id: "bridge-package", label: "PC 侧小爱桥适配器", required: true, ok: fs.existsSync(xiaoaiBridgePackage), detail: fs.existsSync(xiaoaiBridgePackage) ? xiaoaiBridgeDir : "缺少 plugin-adapters/xiaoai-rabiroute。" },
-      { id: "bridge-running", label: "小爱桥服务已启动", required: true, ok: xiaoaiBridgeHealthy, detail: xiaoaiBridgeHealthy ? xiaoaiBridgeHealthUrl : `未访问到 ${xiaoaiBridgeHealthUrl}；在小爱桥目录运行 npm start。` },
-      { id: "speaker-client", label: "音箱侧 open-xiaoai / xiaogpt / 自定义桥", required: true, ok: undefined, detail: fs.existsSync(openXiaoAiDir) ? "已发现 vendor/open-xiaoai 参考代码；真机补丁/桥接仍需人工确认。" : "需要能从小爱音箱或桥服务把语音事件转发到 PC 侧。" },
-      { id: "local-config", label: "本地小爱配置", required: false, ok: fs.existsSync(xiaoaiLocalConfig), detail: fs.existsSync(xiaoaiLocalConfig) ? xiaoaiLocalConfig : "可从 xiaoai-local.config.example.json 复制生成本地配置。" },
-      { id: "callback", label: "RabiRoute 小爱回调入口", required: true, ok: xiaoaiCallbackReady, detail: xiaoaiCallbacks[0]?.url || "添加小米音箱消息端并重启 route 后生成。" },
-      { id: "recent-event", label: "最近收到小爱事件", required: true, ok: xiaoaiRecent, detail: xiaoaiRecent ? "已收到过小爱语音转写事件。" : "尚未收到小爱桥转发的事件。" }
-    ],
-    warnings: [
-      "小米音箱不是直接连 RabiRoute：需要 open-xiaoai/xiaogpt/自定义桥这类入口层，把语音文本 POST 到 RabiRoute。",
-      "open-xiaoai 路线涉及机型、固件和刷机风险；只在确认型号和备份后操作。"
     ]
   };
 }

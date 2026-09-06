@@ -5,7 +5,7 @@ import type {
 } from "./gatewayDiagnosticsSnapshot.js";
 
 export type GatewayDiagnosticsSnapshotWorkerContext<Runtime> = Readonly<{
-  reset(): void;
+  reset(personaPresentations: GatewayDiagnosticsWorkerInput["personaPresentations"]): void;
   install(snapshot: GatewayDiagnosticsRuntimeInput): void;
   runtimes(): readonly Runtime[];
   diagnostics(
@@ -28,7 +28,7 @@ export function buildIsolatedGatewayDiagnosticsSnapshot<Runtime>(
   if (process.env.RABIROUTE_MANAGER_READ_PROCESS !== "1") {
     throw new Error("Gateway diagnostics snapshots must be built inside a Manager read worker.");
   }
-  context.reset();
+  context.reset(input.personaPresentations);
   for (const snapshot of input.runtimes) context.install(snapshot);
   const roleInfoCatalogCache = new Map<string, Array<Record<string, unknown>>>();
   const tailCache = new Map<string, Array<Record<string, unknown>>>();

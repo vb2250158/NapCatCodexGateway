@@ -254,7 +254,7 @@ type MessageAdapterScanResult = {
 具体来源要求：
 
 - **FenneNote / 芬妮笔记**：只作为旧消息端兼容说明。RabiRoute 不内置 FenneNote；已有部署可以继续把转写 webhook 指到对应旧入口，但新语音工作应使用 RabiPC 语音消息端与 RabiSpeech。不得为新功能恢复 OumuQ/FenneNote 播放依赖；UI 只需如实显示旧回调入口和最近事件。
-- **小米音箱 / 小爱**：必须说明 RabiRoute 不能直接连接音箱；需要 PC 侧桥接服务（如 `plugin-adapters/xiaoai-rabiroute`）以及音箱侧 open-xiaoai/xiaogpt/自定义桥。UI 要显示桥服务 `/health`、小爱回调入口、runbook、open-xiaoai/xiaogpt 文档和最近事件。
+- **小米音箱 / 小爱**：独立入口已退役，不再提供新增菜单、运行注册或桥服务检测。旧配置字段和消息来源标识仅供兼容读取；旧 Route 应移除 `xiaoai`，按需使用米家。`plugin-adapters/xiaoai-rabiroute` 和旧 runbook 只作历史参考，不得据此恢复独立入口。
 - **NapCat / OneBot**：必须显示 NapCat/QQNT 进程、WebUI、OneBot HTTP 登录资料、WS 地址和多实例状态；支持添加多个 QQ 实例。
 - **通用 Webhook**：必须强调它是兜底入口；如果来源有具体名称，应新增具体消息端而不是继续叫 Webhook。
 

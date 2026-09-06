@@ -452,19 +452,6 @@ export function createFenneNoteAdapter(): MessageAdapter {
   });
 }
 
-export function createXiaoAiAdapter(): MessageAdapter {
-  return createWebhookAdapter({
-    type: "xiaoai",
-    label: "小米音箱 / 小爱",
-    source: "xiaoai",
-    path: config.xiaoaiWebhookPath,
-    port: config.xiaoaiWebhookPort,
-    acceptedTypes: ["voice_transcript", "xiaoai.voice_transcript", "xiaoai.transcript", "webhook.text"],
-    routeKind: "voice_transcript",
-    missingTextMessage: "XiaoAI payload has no text/message/content"
-  });
-}
-
 function closeWebhookServer(server: http.Server): Promise<void> {
   server.closeAllConnections();
   if (!server.listening) return Promise.resolve();

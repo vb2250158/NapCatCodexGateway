@@ -4,20 +4,28 @@ import type {
   SpeechManagedModel,
   SpeechManagedModelCapability,
   SpeechModelManagementJob,
-  SpeechModelManagementSnapshot
+  SpeechModelManagementSnapshot,
+  SpeechModelDirectorySettings
 } from "@shared/speechModelManagement";
 import { managerEventSource } from "../managerApi";
 import { useI18n } from "../i18n";
-import { speechModelManagementClient } from "../speech/speechModelManagementClient";
+import { speechModelManagementClient, SpeechModelManagementRequestError } from "../speech/speechModelManagementClient";
 
-type CapabilityFilter = "all" | SpeechManagedModelCapability;
+type CapabilityFilter = SpeechManagedModelCapability;
 
 const { isEnglish } = useI18n();
 const snapshot = ref<SpeechModelManagementSnapshot>();
 const loading = ref(false);
 const actionError = ref("");
 const search = ref("");
-const capability = ref<CapabilityFilter>("all");
+const capability = ref<CapabilityFilter>("tts");
+const directorySettings = ref<SpeechModelDirectorySettings>();
+const directoryDraft = ref("");
+const directoryLoading = ref(false);
+const directorySaving = ref(false);
+const directoryLocalOnly = ref(false);
+const directoryError = ref("");
+const directorySaved = ref(false);
 let managerEvents: EventSource | null = null;
 let loadVersion = 0;
 
@@ -43,18 +51,17 @@ const copy = computed(() => isEnglish.value ? {
   status: "Status",
   action: "Action",
   search: "Search name, family, or alias",
-  all: "All",
   tts: "Text to speech",
   asr: "Speech recognition",
   speaker: "Speaker recognition",
   sizeUnknown: "Size not measured",
-  coreRuntime: "Works with the core environment",
-  isolatedRuntime: "Needs an additional isolated runtime",
+  coreRuntime: "Uses the core environment",
+  isolatedRuntime: "Requires an isolated environment",
   notDownloaded: "Not downloaded",
-  downloaded: "Weights downloaded",
+  downloaded: "Model downloaded",
   failed: "Last download failed",
   downloading: "Downloading",
-  download: "Download weights",
+  download: "Download model",
   redownload: "Download again",
   prepareFirst: "Install the speech environment first",
   empty: "No models match the current filters.",
@@ -88,18 +95,17 @@ const copy = computed(() => isEnglish.value ? {
   status: "状态",
   action: "操作",
   search: "搜索名称、系列或别名",
-  all: "全部",
   tts: "语音合成",
   asr: "语音识别",
   speaker: "说话人识别",
   sizeUnknown: "尚未测量大小",
-  coreRuntime: "核心环境可直接使用",
-  isolatedRuntime: "还需要单独安装隔离运行环境",
+  coreRuntime: "使用核心环境",
+  isolatedRuntime: "需独立环境",
   notDownloaded: "未下载",
-  downloaded: "权重已下载",
+  downloaded: "模型已下载",
   failed: "上次下载失败",
   downloading: "正在下载",
-  download: "下载权重",
+  download: "下载模型",
   redownload: "重新下载",
   prepareFirst: "请先安装语音运行环境",
   empty: "没有符合当前筛选条件的模型。",
@@ -114,17 +120,15 @@ const copy = computed(() => isEnglish.value ? {
 });
 
 const capabilityItems = computed(() => [
-  { value: "all", label: copy.value.all, icon: "mdi-view-grid-outline" },
   { value: "tts", label: copy.value.tts, icon: "mdi-account-voice" },
   { value: "asr", label: copy.value.asr, icon: "mdi-waveform" },
   { value: "speaker", label: copy.value.speaker, icon: "mdi-account-search-outline" }
 ]);
 
-const models = computed(() => snapshot.value?.models ?? []);
+const models = computed(() => (snapshot.value?.models ?? []).filter(model => model.capability === capability.value));
 const filteredModels = computed(() => {
-  const query = search.value.trim().toLocaleLowerCase();
+  const query = (search.value ?? "").trim().toLocaleLowerCase();
   return models.value.filter(model => {
-    if (capability.value !== "all" && model.capability !== capability.value) return false;
     if (!query) return true;
     return [model.name, model.family, model.alias, model.purposeZh, model.purposeEn]
       .some(value => value.toLocaleLowerCase().includes(query));
@@ -134,6 +138,65 @@ const downloadedCount = computed(() => models.value.filter(model => model.downlo
 const activeJob = computed(() => snapshot.value?.activeJob);
 const displayedJob = computed(() => activeJob.value ?? snapshot.value?.lastJob);
 const runtimeBusy = computed(() => activeJob.value?.kind === "runtime");
+
+const directoryCopy = computed(() => isEnglish.value ? {
+  title: "Model directory", label: "Model root (blank uses environment or default)",
+  effective: "Effective directory", default: "Platform default", save: "Save directory",
+  note: "Saving changes future downloads and file detection only; existing models are not moved. Blank removes the override: environment configuration takes precedence over the platform default.",
+  localOnly: "Model directory settings are available on this computer only.", saved: "Directory saved.",
+  configured: "Configured", environment: "Environment", fallback: "Default"
+} : {
+  title: "模型目录", label: "模型总目录（留空使用环境配置或默认值）",
+  effective: "当前生效目录", default: "平台默认目录", save: "保存目录",
+  note: "保存只改变后续下载和文件检测的位置，不会搬动已有模型。留空移除覆盖值：优先使用环境配置，否则使用平台默认目录。",
+  localOnly: "模型目录仅可在本机设置。", saved: "目录已保存。",
+  configured: "自定义", environment: "环境配置", fallback: "默认"
+});
+const directorySource = computed(() => directorySettings.value?.source === "configured" ? directoryCopy.value.configured
+  : directorySettings.value?.source === "environment" ? directoryCopy.value.environment : directoryCopy.value.fallback);
+
+async function loadDirectorySettings(): Promise<void> {
+  if (directoryLoading.value || directorySaving.value) return;
+  directoryLoading.value = true;
+  directoryError.value = "";
+  try {
+    directorySettings.value = await speechModelManagementClient.directorySettings();
+    directoryDraft.value = directorySettings.value.configuredModelRoot ?? "";
+    directoryLocalOnly.value = false;
+  } catch (error) {
+    directorySettings.value = undefined;
+    directoryLocalOnly.value = error instanceof SpeechModelManagementRequestError && error.status === 403;
+    if (!directoryLocalOnly.value) directoryError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    directoryLoading.value = false;
+  }
+}
+
+async function saveDirectorySettings(): Promise<void> {
+  if (!directorySettings.value || directorySaving.value || activeJob.value) return;
+  directorySaving.value = true;
+  directorySaved.value = false;
+  directoryError.value = "";
+  try {
+    directorySettings.value = await speechModelManagementClient.updateDirectorySettings({
+      modelRoot: (directoryDraft.value ?? "").trim() || null,
+      expectedRevision: directorySettings.value.revision
+    });
+    directoryDraft.value = directorySettings.value.configuredModelRoot ?? "";
+    directorySaved.value = true;
+    await loadSnapshot();
+  } catch (error) {
+    if (error instanceof SpeechModelManagementRequestError && error.status === 403) {
+      directoryLocalOnly.value = true;
+      directorySettings.value = undefined;
+      directoryDraft.value = "";
+    } else {
+      directoryError.value = error instanceof Error ? error.message : String(error);
+    }
+  } finally {
+    directorySaving.value = false;
+  }
+}
 
 function capabilityLabel(value: SpeechManagedModelCapability): string {
   return value === "tts" ? copy.value.tts : value === "asr" ? copy.value.asr : copy.value.speaker;
@@ -235,6 +298,7 @@ function connectEvents(): void {
 }
 
 onMounted(async () => {
+  void loadDirectorySettings();
   await loadSnapshot();
   connectEvents();
 });
@@ -248,94 +312,83 @@ onBeforeUnmount(() => managerEvents?.close());
       {{ actionError }}
     </v-alert>
 
-    <section class="runtime-grid">
-      <v-card class="runtime-card app-card glass-card" variant="flat">
-        <v-card-text>
-          <div class="section-heading">
-            <div>
-              <div class="section-kicker">01 / RUNTIME</div>
-              <h2>{{ copy.runtimeTitle }}</h2>
-              <p>{{ copy.runtimeCopy }}</p>
-            </div>
-            <v-btn icon="mdi-refresh" variant="text" :loading="loading" :aria-label="copy.refresh" @click="loadSnapshot" />
-          </div>
-
-          <div class="runtime-statuses">
-            <div class="runtime-status">
-              <v-icon :color="snapshot?.dependenciesInstalled ? 'success' : 'grey'">
-                {{ snapshot?.dependenciesInstalled ? "mdi-check-decagram" : "mdi-circle-outline" }}
-              </v-icon>
-              <div><span>{{ copy.environment }}</span><b>{{ snapshot?.dependenciesInstalled ? copy.installed : copy.missing }}</b></div>
-            </div>
-            <div class="runtime-status">
-              <v-icon :color="snapshot?.windowsHostInstalled ? 'success' : 'grey'">
-                {{ snapshot?.windowsHostInstalled ? "mdi-check-decagram" : "mdi-circle-outline" }}
-              </v-icon>
-              <div><span>{{ copy.host }}</span><b>{{ snapshot?.windowsHostInstalled ? copy.installed : copy.missing }}</b></div>
-            </div>
-          </div>
-
-          <v-btn
-            color="primary"
-            prepend-icon="mdi-tools"
-            :loading="runtimeBusy"
-            :disabled="!snapshot?.platformSupported || Boolean(activeJob)"
-            @click="installRuntime"
-          >
-            {{ !snapshot?.platformSupported
-              ? copy.unsupported
-              : runtimeBusy
-                ? copy.installingRuntime
-                : snapshot?.dependenciesInstalled && snapshot?.windowsHostInstalled
-                  ? copy.reinstallRuntime
-                  : copy.installRuntime }}
-          </v-btn>
-        </v-card-text>
-      </v-card>
-
-      <v-card v-if="displayedJob" class="job-card app-card" variant="flat">
-        <v-card-text>
-          <div class="section-kicker">02 / TASK</div>
-          <div class="job-heading">
-            <div>
-              <span>{{ activeJob ? copy.currentTask : copy.lastTask }}</span>
-              <h2>{{ displayedJob.kind === "model" ? displayedJob.modelAlias : copy.runtimeTitle }}</h2>
-            </div>
-            <v-chip
-              :color="jobPresentation(displayedJob).color"
-              variant="tonal"
-              :prepend-icon="jobPresentation(displayedJob).icon"
-            >
-              {{ jobPresentation(displayedJob).label }}
-            </v-chip>
-          </div>
-          <p>{{ jobMessage(displayedJob) }}</p>
-          <v-progress-linear v-if="displayedJob.state === 'running'" indeterminate color="primary" rounded />
-          <v-alert v-if="displayedJob.error" type="error" density="compact" variant="tonal" class="mt-3">
-            {{ displayedJob.error }}
-          </v-alert>
-        </v-card-text>
-      </v-card>
-
-      <v-card v-else class="job-card job-card-idle app-card" variant="flat">
-        <v-card-text>
-          <div class="section-kicker">02 / TASK</div>
-          <v-icon size="34" color="primary">mdi-download-circle-outline</v-icon>
-          <h2>{{ isEnglish ? "Ready for an on-demand download" : "可以按需下载" }}</h2>
-          <p>{{ isEnglish ? "Choose one model below. The Manager will keep its state updated without periodic polling." : "在下方选择一个模型。Manager 会通过事件更新任务状态，不会定时轮询。" }}</p>
-        </v-card-text>
-      </v-card>
+    <section class="environment-bar" :aria-label="copy.runtimeTitle" :aria-busy="loading">
+      <strong>{{ copy.runtimeTitle }}</strong>
+      <div class="runtime-statuses">
+        <span class="runtime-status">
+          <v-icon size="18" :color="snapshot?.dependenciesInstalled ? 'success' : undefined">
+            {{ snapshot?.dependenciesInstalled ? "mdi-check-circle-outline" : "mdi-circle-outline" }}
+          </v-icon>
+          {{ copy.environment }}: {{ snapshot ? (snapshot.dependenciesInstalled ? copy.installed : copy.missing) : '—' }}
+        </span>
+        <span class="runtime-status">
+          <v-icon size="18" :color="snapshot?.windowsHostInstalled ? 'success' : undefined">
+            {{ snapshot?.windowsHostInstalled ? "mdi-check-circle-outline" : "mdi-circle-outline" }}
+          </v-icon>
+          {{ copy.host }}: {{ snapshot ? (snapshot.windowsHostInstalled ? copy.installed : copy.missing) : '—' }}
+        </span>
+      </div>
+      <div class="environment-actions">
+        <v-btn
+          color="primary"
+          variant="tonal"
+          prepend-icon="mdi-tools"
+          :loading="runtimeBusy"
+          :disabled="!snapshot?.platformSupported || Boolean(activeJob)"
+          @click="installRuntime"
+        >
+          {{ !snapshot ? copy.runtimeTitle : !snapshot.platformSupported
+            ? copy.unsupported
+            : runtimeBusy
+              ? copy.installingRuntime
+              : snapshot.dependenciesInstalled && snapshot.windowsHostInstalled
+                ? copy.reinstallRuntime
+                : copy.installRuntime }}
+        </v-btn>
+        <v-btn icon="mdi-refresh" variant="text" :loading="loading" :aria-label="copy.refresh" @click="loadSnapshot" />
+      </div>
     </section>
 
-    <v-alert type="info" variant="tonal" class="boundary-alert" icon="mdi-information-slab-circle-outline">
-      <div class="font-weight-bold mb-1">{{ copy.boundaryTitle }}</div>
-      <div>{{ copy.boundaryCopy }}</div>
-    </v-alert>
+    <section v-if="displayedJob" class="job-row" role="status" aria-live="polite" aria-atomic="true">
+      <span>{{ activeJob ? copy.currentTask : copy.lastTask }}</span>
+      <v-chip size="small" :color="jobPresentation(displayedJob).color" variant="tonal" :prepend-icon="jobPresentation(displayedJob).icon">
+        {{ jobPresentation(displayedJob).label }}
+      </v-chip>
+      <span class="job-message">{{ jobMessage(displayedJob) }}</span>
+      <v-progress-linear v-if="displayedJob.state === 'running'" class="job-progress" indeterminate color="primary" :aria-label="copy.jobRunning" />
+      <v-alert v-if="displayedJob.error" class="job-error" type="error" density="compact" variant="tonal">
+        {{ displayedJob.error }}
+      </v-alert>
+    </section>
+
+    <details class="model-help directory-settings">
+      <summary>{{ directoryCopy.title }}</summary>
+      <p v-if="directoryLocalOnly">{{ directoryCopy.localOnly }}</p>
+      <template v-else>
+        <v-alert v-if="directoryError" type="error" density="compact" variant="tonal">{{ directoryError }}</v-alert>
+        <div v-if="directorySettings" class="directory-editor">
+          <p class="directory-path">{{ directoryCopy.effective }} ({{ directorySource }}): <code>{{ directorySettings.effectiveModelRoot }}</code></p>
+          <p class="directory-path">{{ directoryCopy.default }}: <code>{{ directorySettings.defaultModelRoot }}</code></p>
+          <form class="directory-form" @submit.prevent="saveDirectorySettings">
+            <v-text-field v-model="directoryDraft" :label="directoryCopy.label" variant="outlined" density="compact" hide-details clearable :disabled="directorySaving || Boolean(activeJob)" @update:model-value="directorySaved = false" />
+            <v-btn type="submit" color="primary" variant="tonal" :loading="directorySaving" :disabled="directoryLoading || Boolean(activeJob)">{{ directoryCopy.save }}</v-btn>
+          </form>
+          <p>{{ directoryCopy.note }}</p>
+          <p v-if="directorySaved" role="status">{{ directoryCopy.saved }}</p>
+        </div>
+        <v-btn variant="text" prepend-icon="mdi-refresh" :loading="directoryLoading" :disabled="directorySaving" @click="loadDirectorySettings">{{ copy.refresh }}</v-btn>
+      </template>
+    </details>
+
+    <details class="model-help">
+      <summary>{{ copy.boundaryTitle }}</summary>
+      <p>{{ copy.runtimeCopy }}</p>
+      <p>{{ copy.boundaryCopy }}</p>
+    </details>
 
     <section class="library-section">
       <div class="library-header">
         <div>
-          <div class="section-kicker">03 / CATALOG</div>
           <h2>{{ copy.modelLibrary }}</h2>
           <p>{{ downloadedCount }} / {{ models.length }} {{ copy.modelCount }}</p>
         </div>
@@ -348,7 +401,8 @@ onBeforeUnmount(() => managerEvents?.close());
           hide-details
           clearable
           prepend-inner-icon="mdi-magnify"
-          :placeholder="copy.search"
+          :label="copy.search"
+          :aria-label="copy.search"
         />
       </div>
 
@@ -359,13 +413,14 @@ onBeforeUnmount(() => managerEvents?.close());
           :variant="capability === item.value ? 'flat' : 'text'"
           :color="capability === item.value ? 'primary' : undefined"
           :prepend-icon="item.icon"
+          :aria-pressed="capability === item.value"
           @click="capability = item.value as CapabilityFilter"
         >
           {{ item.label }}
         </v-btn>
       </div>
 
-      <div v-if="filteredModels.length" class="model-table-shell">
+      <div v-if="filteredModels.length" class="model-table-shell" tabindex="0" role="region" :aria-label="copy.modelLibrary">
         <table class="model-table">
           <thead>
             <tr>
@@ -396,8 +451,8 @@ onBeforeUnmount(() => managerEvents?.close());
                 </td>
                 <td class="model-table-purpose">{{ purpose(model) }}</td>
                 <td class="model-table-size">{{ sizeLabel(model) }}</td>
-                <td :class="['model-table-runtime', { 'isolated-runtime': model.runtime === 'isolated' }]">
-                  <v-icon size="16">{{ model.runtime === "core" ? "mdi-check-network-outline" : "mdi-call-split" }}</v-icon>
+                <td class="model-table-runtime">
+                  <v-icon size="16">{{ model.runtime === "core" ? "mdi-layers-outline" : "mdi-call-split" }}</v-icon>
                   <span>{{ runtimeLabel(model) }}</span>
                 </td>
                 <td>
@@ -447,34 +502,31 @@ onBeforeUnmount(() => managerEvents?.close());
 <style scoped>
 .model-management-page {
   --model-ink: var(--rr-heading);
-  --model-cyan: var(--rr-accent);
-  --model-blue: #2463eb;
-  gap: 20px;
+  min-width: 0;
+  gap: 12px;
   color: var(--rr-text);
 }
 
-.section-kicker { color: var(--model-cyan); font-size: 11px; font-weight: 900; letter-spacing: .16em; text-transform: uppercase; }
-
-.runtime-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr); gap: 20px; }
-.runtime-card, .job-card { min-height: 250px; }
-.runtime-card :deep(.v-card-text), .job-card :deep(.v-card-text) { height: 100%; padding: 26px; }
-.section-heading, .job-heading, .library-header { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }
-.section-heading h2, .job-heading h2, .library-header h2, .job-card-idle h2 { margin: 5px 0 6px; color: var(--model-ink); font-size: 24px; }
-.section-heading p, .job-card p, .library-header p { margin: 0; color: var(--rr-muted-soft); line-height: 1.65; }
-.runtime-statuses { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 22px 0; }
-.runtime-status { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--rr-border); border-radius: 7px; background: var(--rr-subtle); }
-.runtime-status div { display: grid; gap: 2px; }
-.runtime-status span { color: var(--rr-muted-faint); font-size: 12px; }
-.runtime-status b { color: var(--model-ink); font-size: 14px; }
-.job-card { color: white; background: linear-gradient(145deg, #17375b, #102238) !important; }
-.job-card h2, .job-card p { color: white; }
-.job-card p { opacity: .72; margin: 18px 0; }
-.job-card .section-kicker { color: #77e8e9; }
-.job-card-idle :deep(.v-card-text) { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
-
-.boundary-alert { border: 1px solid var(--rr-info-border); }
-.library-section { display: grid; gap: 16px; padding-top: 6px; }
-.library-header { align-items: flex-end; }
+.environment-bar, .job-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 12px; border: 1px solid var(--rr-border); border-radius: 8px; background: var(--rr-surface); }
+.environment-bar > strong { color: var(--model-ink); }
+.runtime-statuses, .environment-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.environment-actions { margin-left: auto; gap: 8px; }
+.runtime-status { display: inline-flex; align-items: center; gap: 6px; color: var(--rr-muted-soft); font-size: 13px; }
+.job-row { color: var(--rr-muted-soft); font-size: 13px; }
+.job-message { flex: 1 1 220px; overflow-wrap: anywhere; }
+.job-progress, .job-error { flex-basis: 100%; min-width: 0; }
+.job-error { overflow-wrap: anywhere; }
+.model-help { color: var(--rr-muted-soft); font-size: 13px; }
+.model-help summary { cursor: pointer; padding: 8px 0; }
+.model-help p { margin: 4px 0 8px; line-height: 1.6; }
+.model-help summary:focus-visible, .model-table-shell:focus-visible { outline: 2px solid var(--rr-accent); outline-offset: 2px; }
+.directory-editor, .directory-path { min-width: 0; overflow-wrap: anywhere; }
+.directory-form { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.directory-form :deep(.v-input) { flex: 1 1 280px; min-width: 0; }
+.library-section { display: grid; min-width: 0; gap: 12px; }
+.library-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.library-header h2 { margin: 0; color: var(--model-ink); font-size: 20px; }
+.library-header p { margin: 0; color: var(--rr-muted-soft); font-size: 13px; }
 .model-search { width: min(390px, 100%); flex: 0 1 390px; }
 .capability-filter { display: flex; gap: 6px; overflow-x: auto; padding: 5px; border: 1px solid var(--rr-border); border-radius: 8px; background: var(--rr-input); }
 .model-table-shell { overflow-x: auto; border: 1px solid var(--rr-border); border-radius: 8px; background: var(--rr-surface); }
@@ -499,22 +551,24 @@ onBeforeUnmount(() => managerEvents?.close());
 .model-table-size { white-space: nowrap; }
 .model-table-runtime { display: table-cell; }
 .model-table-runtime .v-icon { margin-right: 6px; vertical-align: -3px; }
-.model-table-runtime.isolated-runtime { color: var(--rr-warning-text); }
 .model-table td:last-child, .model-table th:last-child { text-align: right; }
 .model-table td:nth-last-child(2), .model-table th:nth-last-child(2) { text-align: center; }
 .model-error-row td { padding: 0 14px 14px; background: var(--rr-surface); }
 .model-error-row :deep(.v-alert) { overflow-wrap: anywhere; }
 
 @media (max-width: 820px) {
-  .runtime-grid { grid-template-columns: 1fr; }
   .library-header { align-items: stretch; flex-direction: column; }
   .model-search { width: 100%; flex-basis: auto; }
 }
 
 @media (max-width: 640px) {
   .model-management-page { padding: 16px; }
-  .runtime-statuses { grid-template-columns: 1fr; }
-  .capability-filter { align-items: stretch; flex-direction: column; }
+  .environment-actions { margin-left: 0; }
+  .capability-filter { flex-wrap: wrap; }
   .model-table { min-width: 1040px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-row { transition: none; }
 }
 </style>

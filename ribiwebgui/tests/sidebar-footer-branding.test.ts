@@ -7,5 +7,5 @@ const styles = fs.readFileSync(new URL("../src/styles.css", import.meta.url), "u
 
 test("sidebar preserves official brand capitalization", () => {
   assert.match(appSource, />\s*GitHub\s*<\/v-btn>/);
-  assert.match(styles, /\.sidebar-footer-btn\s*\{[^}]*text-transform:\s*none;/s);
+  assert.match(styles, /\.sidebar-footer-btn\.v-btn\s*\{[^}]*text-transform:\s*none;/s);
 });

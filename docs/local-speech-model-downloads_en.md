@@ -10,13 +10,19 @@ This guide covers local models only. Paid speech APIs are archived, and remote c
 
 ## On-demand downloads from Model Management
 
-Open **Model Management** in the RibiWebGUI sidebar, or go directly to `/#/models`. The page lists the allowlisted TTS, ASR, and speaker models with official sources, measured weight sizes where available, download state, and runtime requirements.
+Open **Model Management** at the top right of **Speech Service** in RibiWebGUI. The retired `/#/models` address redirects to Speech Service. The dialog uses a compact environment bar above search and the model table. The only categories are TTS, ASR, and speaker recognition, with TTS selected by default and search scoped to the selected category. A task row appears only when a job exists, and detailed guidance is collapsed by default.
 
 1. Select **Install speech environment** the first time. This prepares plugin-private dependencies and the Windows speech host without downloading weights.
-2. Select **Download weights** on one model card. Manager runs only one install or download job at a time, and the page receives state changes through events instead of periodic queries.
-3. **Weights downloaded** confirms only the files and install manifest. Models marked as requiring an isolated runtime still need the matching source checkout and Python environment described below before RabiSpeech can load them.
+2. Select **Download model** in the model table. Manager runs only one install or download job at a time, and the page receives state changes through events instead of periodic queries.
+3. Model file status and runtime requirements are separate. **Needs isolated runtime** describes a requirement, not a detected missing environment; actual inference still requires the checks described below.
 
-The page and command line share the allowlist in `plugin-adapters/rabi-speech/model-catalog.json`. A browser cannot provide an arbitrary repository, URL, or local path. Licensed ONNX-VITS packages remain manual imports.
+Existing models are checked read-only in the download root and model locations from the current RabiSpeech configuration; no synthetic install entry is required. Checks cover known components, nonempty files, and shards named by indexes. Empty directories and broken links are not downloaded models, but these checks are not full checksum or inference validation. For models stored elsewhere, configure the matching worker model path instead of downloading again or editing status records.
+
+Expand **Model directory** to configure one root. Saving an empty value restores the default, including an existing `RABISPEECH_MODEL_ROOT` environment override. An explicit local absolute path overrides that default; the UI displays the effective directory. Detection and subsequent UI downloads share this root and the catalog's `tts/`, `asr/`, and `speaker/` subpaths. Changing it never moves or deletes models, and separately configured worker locations remain discoverable.
+
+Directory settings are accessible only through the local WebGUI and persist in `data/speech/model-directory-settings.json` under the installation state root, outside release payloads. Changes are rejected during install/download jobs; concurrent edits require refresh rather than silent overwrite. Network paths, drive roots, installation trees, and source worktrees are not accepted as custom roots.
+
+The page and command line share the allowlist in `plugin-adapters/rabi-speech/model-catalog.json`. Downloads cannot supply arbitrary repositories or URLs; the root is changed only through the separately validated local settings endpoint. CLI calls still use an explicit `--root`. Licensed ONNX-VITS packages remain manual imports.
 
 ## Private runtime layout
 

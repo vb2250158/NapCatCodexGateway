@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QMenu
 
 from .desktop_pet_client import DesktopPetPersona, DesktopPetRosterClient
@@ -28,13 +28,19 @@ class DesktopPetManager(QObject):
         self._events = DesktopPetEventStream(manager_url)
         self._events.settings_changed.connect(lambda _payload: self.refresh())
         self._events.connection_changed.connect(self._connection_changed)
-        self._events.start()
         self._refresh_task: QtAsyncTask | None = None
         self._refresh_pending = False
         self._closed = False
         self._controllers: dict[str, DesktopPetController] = {}
         self._roster: dict[str, DesktopPetPersona] = {}
+        self._loading = True
+        self._load_error = ""
+        self._retry_delay_ms = 1000
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setSingleShot(True)
+        self._retry_timer.timeout.connect(self.refresh)
         self._rebuild_menu()
+        self._events.start()
         self.refresh()
 
     @property
@@ -48,6 +54,11 @@ class DesktopPetManager(QObject):
             self._refresh_pending = True
             return
 
+        self._retry_timer.stop()
+        self._loading = True
+        self._load_error = ""
+        self._rebuild_menu()
+
         def completed(task: QtAsyncTask, result: object) -> None:
             if self._refresh_task is not task:
                 return
@@ -55,8 +66,20 @@ class DesktopPetManager(QObject):
             if self._closed:
                 self._refresh_pending = False
                 return
-            if isinstance(result, tuple):
+            self._loading = False
+            try:
+                if isinstance(result, Exception):
+                    raise result
+                if not isinstance(result, tuple):
+                    raise TypeError("Invalid desktop pet roster response")
                 self._apply_roster(result)
+                self._retry_delay_ms = 1000
+            except Exception as error:
+                # A failed request is not an authoritative empty roster.
+                self._load_error = type(error).__name__
+                self._retry_timer.start(self._retry_delay_ms)
+                self._retry_delay_ms = min(self._retry_delay_ms * 2, 30000)
+            self._rebuild_menu()
             if self._refresh_pending:
                 self._refresh_pending = False
                 self.refresh()
@@ -71,6 +94,9 @@ class DesktopPetManager(QObject):
         if self._closed:
             return
         self._closed = True
+        self._retry_timer.stop()
+        self._loading = False
+        self._load_error = ""
         self._events.stop()
         for controller in tuple(self._controllers.values()):
             controller.close()
@@ -110,6 +136,13 @@ class DesktopPetManager(QObject):
 
     def _rebuild_menu(self) -> None:
         self._menu.clear()
+        if self._loading:
+            self._menu.addAction("正在加载虚拟形象…").setEnabled(False)
+        elif self._load_error:
+            self._menu.addAction(f"虚拟形象加载失败（{self._load_error}），将自动重试").setEnabled(False)
+            self._menu.addAction("重试加载", self.refresh)
+        if not self._controllers and (self._loading or self._load_error):
+            return
         if not self._controllers:
             empty = self._menu.addAction("没有启用的虚拟形象")
             empty.setEnabled(False)

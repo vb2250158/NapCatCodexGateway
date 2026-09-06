@@ -134,6 +134,16 @@ When remote WebGUI cannot reach the selected PC Manager, API callers receive str
 
 If plan approval submission coincides with a Manager restart or a temporary network interruption, the page now reports the connection problem explicitly and preserves the feedback text, attachments, and the same idempotent `feedbackId`. Wait until the header shows `Manager connected` or `/meta` responds, then retry directly. Do not retype the feedback or create another approval entry because an older build displayed the raw browser error `Failed to fetch`.
 
+## Persona content unavailable
+
+When persona settings show `Persona file is unavailable.`, first check that the selected file is readable. If the speech page lists personas but the Route persona selector is empty, an older version may have omitted the persona catalog snapshot from the diagnostics worker input. Update to the fixed version, reopen WebGUI from the tray, and verify the content and avatar; recreating the persona file is unnecessary. The diagnostics worker uses the same committed persona snapshot without rescanning shared storage during page requests.
+
+## Plan status loading fails
+
+`PLAN_STATUS_CONFIG_INVALID` can indicate blocked startup migration rather than missing persona configuration. Check the persona's `legacyAliases` and `/meta` `planStorageStartup`; when the alias exists but migration fails, inspect the local Manager log for the concrete cause. Older versions can receive `EPERM` when replacing a stale plan lock on NAS, preventing history backfill and subsequent status conversion. The fixed recovery preserves the old lock under the reclaim fence and uses a vacant name plus exclusive publication. Renewal or contention aborts takeover and preserves recovery evidence.
+
+Back up relevant plan data before updating and let the Manager owned by the full Host perform recovery. Wait for `planStorageStartup.state=ready`, then verify current and archived plan lists. Do not empty plans, delete lock directories, or rewrite statuses directly to hide migration failure.
+
 ## When to restart
 
 Restart when:

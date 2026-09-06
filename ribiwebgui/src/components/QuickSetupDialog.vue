@@ -75,7 +75,6 @@ const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: str
   { type: "remoteAgent", title: "远端 Agent", note: "下游 Agent 设备入口，支持局域网发现和任务投递", icon: "mdi-lan-connect" },
   { type: "heartbeat", title: "定时触发", note: "按固定间隔投递内部提醒", icon: "mdi-timer-outline" },
   { type: "fennenote", title: "FenneNote / 芬妮笔记", note: "桌面语音笔记转写入口", icon: "mdi-note-edit-outline" },
-  { type: "xiaoai", title: "小米音箱 / 小爱", note: "小爱音箱语音转写入口", icon: "mdi-speaker-wireless" },
   { type: "rabilink", title: "眼镜端（经 RabiLink）", note: "眼镜是消息来源；系统内置 RabiLink 负责转接", icon: "mdi-glasses" },
   { type: "webhook", title: "通用 Webhook", note: "没有专用消息端时的通用 POST 兜底入口", icon: "mdi-webhook" }
 ];

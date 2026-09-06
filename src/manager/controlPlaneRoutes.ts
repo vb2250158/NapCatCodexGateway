@@ -463,6 +463,8 @@ import {
   SpeechModelManager,
   SpeechModelManagerError
 } from "./speechModelManager.js";
+import { SpeechModelSettingsError } from "./speechModelSettings.js";
+import { localModelSettingsRequestAllowed } from "./speechModelSettingsAccess.js";
 import {
   parseSpeechProcessResult,
   SPEECH_EXIT_DELIVERED,
@@ -3827,9 +3829,10 @@ export function buildGatewayDiagnosticsWorkerSnapshot(
   input: GatewayDiagnosticsWorkerInput
 ): GatewayDiagnosticsWorkerResult {
   return buildIsolatedGatewayDiagnosticsSnapshot(input, {
-    reset: () => {
+    reset: personaPresentations => {
       for (const id of runtimes.keys()) runtimes.delete(id);
       agentStateByGateway.clear();
+      routeCatalogPersonaPresentations = Object.freeze([...personaPresentations]);
     },
     install: snapshot => {
       runtimes.set(snapshot.definition, {
@@ -6690,6 +6693,36 @@ function writeSpeechModelManagerJson(
 }
 
 function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
+  if (requestUrl.pathname === "/api/speech/model-management/settings") {
+    response.setHeader("cache-control", "no-store");
+    if (!localModelSettingsRequestAllowed(request)) {
+      jsonResponse(response, 403, { code: -1, message: "模型目录设置仅允许本机页面访问。" });
+      return true;
+    }
+    const fail = (error: unknown) => jsonResponse(response,
+      error instanceof SpeechModelSettingsError || error instanceof SpeechModelManagerError ? error.status : 500,
+      { code: -1, message: error instanceof SpeechModelSettingsError || error instanceof SpeechModelManagerError ? error.message : "模型目录设置操作失败。" });
+    if (request.method === "GET") {
+      try { jsonResponse(response, 200, { code: 0, data: speechModelManager.directorySettings() }); } catch (error) { fail(error); }
+    } else if (request.method === "PATCH") {
+      if (managerReadOnly) { jsonResponse(response, 423, { code: -1, message: "Manager is read-only." }); return true; }
+      const expectedGeneration = headerValue(request.headers["x-rabiroute-expected-application-generation-id"]).trim();
+      const expectedInstance = headerValue(request.headers["x-rabiroute-expected-manager-instance-id"]).trim();
+      if (!expectedGeneration || !expectedInstance) {
+        jsonResponse(response, 400, { code: -1, message: "Current application generation and Manager instance headers are required." }); return true;
+      }
+      if (expectedGeneration !== (managerHostIdentity?.applicationGenerationId ?? managerInstanceId) || expectedInstance !== managerInstanceId) {
+        jsonResponse(response, 409, { code: -1, message: "Manager lifecycle changed; reload /meta before retrying." }); return true;
+      }
+      if (!String(request.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
+        jsonResponse(response, 415, { code: -1, message: "Expected application/json." }); return true;
+      }
+      void readJsonBody<unknown>(request).then(body => {
+        jsonResponse(response, 200, { code: 0, data: speechModelManager.updateDirectorySettings(body) });
+      }).catch(fail);
+    } else jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+    return true;
+  }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/events") {
     proxySpeechEventStream(response, {
       openUpstream: signal => speechControl.eventStream(signal),
@@ -8015,7 +8048,8 @@ function activeGatewayDiagnosticsSnapshotService(): GatewayDiagnosticsSnapshotSe
   gatewayDiagnosticsSnapshotService ??= new GatewayDiagnosticsSnapshotService({
     capture: () => captureGatewayDiagnosticsWorkerInput(
       runtimes.values(),
-      gatewayId => agentStateByGateway.get(gatewayId)
+      gatewayId => agentStateByGateway.get(gatewayId),
+      routeCatalogPersonas()
     ),
     minRefreshIntervalMs: 5_000,
     timeoutMs: 60_000,
@@ -8710,7 +8744,10 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
             ? Math.max(0, Date.parse(snapshot.completedAt) - Date.parse(snapshot.startedAt))
             : undefined,
           result: `attempt=${snapshot.attempt}; state=${snapshot.state}; roles=${snapshot.summary?.roles ?? 0}; migrated=${snapshot.summary?.migrated ?? 0}; reconciled=${snapshot.summary?.reconciled ?? 0}; failures=${snapshot.summary?.failures.length ?? 0}`,
-          error: snapshot.lastError ? managerOperationalError(new Error(snapshot.lastError), rootDir) : undefined
+          error: snapshot.lastError ? managerOperationalError(new Error([
+            snapshot.lastError,
+            ...(snapshot.summary?.failures ?? []).slice(0, 10)
+          ].join("\n")), rootDir) : undefined
         });
       }
       });

@@ -3,6 +3,13 @@ import { computed, onMounted, ref } from "vue";
 import type { XiaomiHomeAuthorizationSnapshot } from "@shared/xiaomiHomeAuthContract";
 import type { XiaomiHomeSettingsSnapshot } from "@shared/xiaomiHomeSettingsContract";
 import { xiaomiHomeAuthClient } from "../../xiaomiHomeAuthClient";
+import {
+  HOME_ASSISTANT_AUTHENTICATION_DOCS_URL,
+  HOME_ASSISTANT_INSTALLATION_URL,
+  HOME_ASSISTANT_XIAOMI_HOME_DOCS_URL,
+  homeAssistantLoginUrl,
+  homeAssistantProfileUrl
+} from "../../xiaomiHomeCredentialHelp";
 import { xiaomiHomeSettingsClient } from "../../xiaomiHomeSettingsClient";
 
 const authorization = ref<XiaomiHomeAuthorizationSnapshot | null>(null);
@@ -12,11 +19,13 @@ const accessToken = ref("");
 const loading = ref(true);
 const busy = ref(false);
 const error = ref("");
+const baseUrlError = ref("");
+const accessTokenError = ref("");
 const confirmationOpen = ref(false);
 
 const stateLabel = computed(() => ({
   ready: "已连接",
-  authorization_required: "等待登录",
+  authorization_required: "需要凭证",
   authorization_failed: "凭证失效",
   unreachable: "服务不可达",
   timeout: "连接超时"
@@ -27,6 +36,23 @@ const stateColor = computed(() => authorization.value?.state === "ready"
   : authorization.value?.state === "authorization_required"
     ? "info"
     : "warning");
+
+const stateAlertType = computed<"success" | "info" | "warning">(() => authorization.value?.state === "ready"
+  ? "success"
+  : authorization.value?.state === "authorization_required"
+    ? "info"
+    : "warning");
+
+const stateDetail = computed(() => ({
+  ready: "Home Assistant 已验证，当前凭证保存在本机受保护凭证库。",
+  authorization_required: "尚未保存 Home Assistant 长期访问令牌。",
+  authorization_failed: "Home Assistant 拒绝了当前凭证。请在令牌管理页重新创建长期访问令牌后替换。",
+  unreachable: "当前地址没有响应。请先确认 Home Assistant 已启动，并且这台电脑能打开该地址。",
+  timeout: "连接 Home Assistant 超时。请检查地址、网络和 Home Assistant 运行状态。"
+}[authorization.value?.state || "authorization_required"]));
+
+const loginUrl = computed(() => homeAssistantLoginUrl(baseUrl.value));
+const profileUrl = computed(() => homeAssistantProfileUrl(baseUrl.value));
 
 const sourceLabel = computed(() => authorization.value?.credentialSource === "protected"
   ? "本机受保护凭证"
@@ -52,18 +78,21 @@ async function load(): Promise<void> {
 
 async function connect(): Promise<void> {
   if (busy.value) return;
-  const candidate = accessToken.value.trim();
-  if (!candidate) {
-    error.value = "请粘贴 Home Assistant 长期访问令牌。";
-    return;
-  }
+  error.value = "";
+  baseUrlError.value = "";
+  accessTokenError.value = "";
   if (!settings.value) {
     error.value = "米家设置尚未加载。";
     return;
   }
   const normalizedBaseUrl = baseUrl.value.trim().replace(/\/+$/, "");
   if (!normalizedBaseUrl) {
-    error.value = "请填写 Home Assistant 地址。";
+    baseUrlError.value = "请填写 Home Assistant 地址。";
+    return;
+  }
+  const candidate = accessToken.value.trim();
+  if (!candidate) {
+    accessTokenError.value = "请粘贴 Home Assistant 长期访问令牌。";
     return;
   }
   if (!authorization.value) {
@@ -127,7 +156,7 @@ onMounted(() => void load());
     <div class="section-title-row">
       <div>
         <div class="section-title small-title">连接 Home Assistant</div>
-        <div class="section-note">在这里完成米家消息端所需的地址与凭证；凭证由本机后端加密保存，页面不会再次读取或回显。</div>
+        <div class="section-note">令牌验证后仅保存在本机受保护凭证库。</div>
       </div>
       <v-chip v-if="authorization" size="small" variant="tonal" :color="stateColor">{{ stateLabel }}</v-chip>
     </div>
@@ -135,24 +164,71 @@ onMounted(() => void load());
     <v-alert v-if="error" type="error" variant="tonal" density="compact" class="my-3">{{ error }}</v-alert>
 
     <template v-if="!loading && settings && authorization">
+      <v-alert :type="stateAlertType" variant="tonal" density="compact" class="mt-3">
+        {{ stateDetail }}
+      </v-alert>
       <v-text-field
         v-model="baseUrl"
         label="Home Assistant 地址"
-        placeholder="http://127.0.0.1:8123"
-        hint="默认只接受本机或私网地址；保存与登录均受当前 Manager 代际围栏保护。"
-        persistent-hint
+        placeholder="http://homeassistant.local:8123"
+        hint="填写这台电脑能打开的 Home Assistant 首页地址。"
+        :error-messages="baseUrlError"
         class="mt-3"
+        @update:model-value="baseUrlError = ''"
       />
+      <div class="credential-help-actions">
+        <v-btn
+          :href="loginUrl || undefined"
+          :disabled="!loginUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          variant="tonal"
+          size="small"
+          prepend-icon="mdi-home-assistant"
+        >打开 Home Assistant</v-btn>
+        <v-btn
+          :href="profileUrl || undefined"
+          :disabled="!profileUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          variant="tonal"
+          size="small"
+          prepend-icon="mdi-account-key-outline"
+        >打开令牌管理</v-btn>
+      </div>
+      <div v-if="!loginUrl" class="section-note">先填写有效的 Home Assistant 地址。</div>
       <v-text-field
         v-model="accessToken"
         type="password"
         autocomplete="new-password"
         label="长期访问令牌"
         placeholder="只在本次连接请求中发送"
+        hint="Home Assistant 长期访问令牌，不是小米账号密码或设备 token。"
+        :error-messages="accessTokenError"
         :disabled="busy"
         class="mt-3"
+        @update:model-value="accessTokenError = ''"
         @keyup.enter="connect"
       />
+      <v-expansion-panels variant="accordion" density="compact" class="credential-help-panel">
+        <v-expansion-panel>
+          <v-expansion-panel-title>
+            <span class="credential-help-title"><v-icon icon="mdi-help-circle-outline" size="small" />怎样获取令牌？</span>
+          </v-expansion-panel-title>
+          <v-expansion-panel-text>
+            <ol class="credential-help-steps">
+              <li>先打开 Home Assistant 并完成登录。</li>
+              <li>打开“令牌管理”，在“长期访问令牌”中创建并立即复制；旧令牌无法再次显示。</li>
+              <li>把令牌直接粘贴到上方，不要发送到聊天，再点“验证并连接”。</li>
+            </ol>
+            <div class="credential-setup-links">
+              <a :href="HOME_ASSISTANT_AUTHENTICATION_DOCS_URL" target="_blank" rel="noopener noreferrer">官方令牌说明</a>
+              <a :href="HOME_ASSISTANT_INSTALLATION_URL" target="_blank" rel="noopener noreferrer">安装 Home Assistant</a>
+              <a :href="HOME_ASSISTANT_XIAOMI_HOME_DOCS_URL" target="_blank" rel="noopener noreferrer">接入 Xiaomi Home</a>
+            </div>
+          </v-expansion-panel-text>
+        </v-expansion-panel>
+      </v-expansion-panels>
       <div class="endpoint-actions">
         <v-btn color="primary" :loading="busy" prepend-icon="mdi-shield-key-outline" @click="connect">
           {{ authorization.configured ? "验证并替换凭证" : "验证并连接" }}
@@ -199,11 +275,44 @@ onMounted(() => void load());
   gap: 10px;
   margin-top: 12px;
 }
+.credential-help-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.credential-help-panel {
+  margin-top: 8px;
+}
+.credential-help-steps {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+.credential-help-actions,
+.credential-setup-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.credential-setup-links {
+  font-size: 0.86rem;
+}
+.credential-setup-links a {
+  color: rgb(var(--v-theme-primary));
+  font-weight: 600;
+}
 .credential-summary {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 14px;
   color: rgb(var(--v-theme-on-surface-variant));
   font-size: 0.82rem;
+}
+@media (max-width: 600px) {
+  .credential-help-actions .v-btn {
+    width: 100%;
+  }
 }
 </style>

@@ -491,7 +491,6 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     title: "语音转写",
     note: "来自本机 RabiSpeech 或具体设备的语音输入。",
     choices: [
-      { type: "xiaoai", title: "小米音箱 / 小爱", note: "接收小爱音箱语音转写", icon: "mdi-speaker-wireless" },
       { type: "rabilink", title: "眼镜端（经 RabiLink）", note: "眼镜是消息来源；RabiLink 只是系统内置的转接服务", icon: "mdi-glasses" }
     ]
   },
@@ -843,7 +842,7 @@ function removeAdapter(type: MessageAdapterType): void {
 }
 
 const availableToAdd = computed(() => {
-  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "weixin", "feishu", "remoteAgent", "speech", "heartbeat", "xiaoai", "xiaomiHome", "rabilink", "wearable", "webhook"];
+  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "weixin", "feishu", "remoteAgent", "speech", "heartbeat", "xiaomiHome", "rabilink", "wearable", "webhook"];
   return allTypes.filter(t => !addedAdapters.value.includes(t));
 });
 

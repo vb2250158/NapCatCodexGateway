@@ -627,7 +627,7 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   padding: 16px;
 }
 
-.sidebar-footer-btn {
+.sidebar-footer-btn.v-btn {
   justify-content: flex-start !important;
   text-transform: none;
 }

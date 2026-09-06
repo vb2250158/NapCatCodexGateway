@@ -175,7 +175,6 @@ export async function runGatewayMain(): Promise<void> {
   };
   addHttp("webhook", config.gatewayMessageAdapterTypes.includes("webhook"), "127.0.0.1", config.webhookPort, config.webhookPath);
   addHttp("fennenote", config.gatewayMessageAdapterTypes.includes("fennenote"), "127.0.0.1", config.fenneNoteWebhookPort, config.fenneNoteWebhookPath);
-  addHttp("xiaoai", config.gatewayMessageAdapterTypes.includes("xiaoai"), "127.0.0.1", config.xiaoaiWebhookPort, config.xiaoaiWebhookPath);
   addHttp("rabilink", config.gatewayMessageAdapterTypes.includes("rabilink"), config.rabiLinkWebhookHost, config.rabiLinkWebhookPort, config.rabiLinkWebhookPath);
   addHttp("feishu", config.gatewayMessageAdapterTypes.includes("feishu"), "127.0.0.1", config.feishuWebhookPort, config.feishuWebhookPath);
   console.log(gatewayReadyLine({

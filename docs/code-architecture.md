@@ -590,7 +590,7 @@ SpeechServicePage / SpeechHostMonitor
 
 `src/shared/speechControlContract.ts` 是 Manager 与 WebGUI 之间的稳定 camelCase Interface，也拥有 Route 语音默认值。`src/manager/speechControl.ts` 负责 Route policy、RabiSpeech payload 映射和 read model 正规化。`POST /api/speech/messages` 会等待 Gateway 子任务返回真实终态：Desktop owner `start/steer` 成功才是 `delivered`，关键词模式未命中则是 `recorded`，失败为 4xx/5xx；它不等 Agent 回答、Outbox 或 TTS 播放结束。Python 的 snake_case、模型进程状态和回环地址不能泄漏回 Vue 页面；RabiSpeech 仍是独立的回环 Provider Runtime，不合并进 Manager。本地 Provider 默认启用；外部 API Provider 必须在本机配置显式启用、从环境变量取密钥，并通过 capability 的 `local_only` / `relay_safe` 暴露边界。
 
-模型管理是独立的主机控制面，不属于某条 Route。`GET /api/speech/model-management` 返回环境、目录和任务状态；两个 POST 入口分别安装核心环境和单个允许清单模型。Manager 同一时间只允许一个任务，并继续受只读模式的全局写操作门禁约束。模型清单中的 `runtime=core|isolated` 只说明后续运行环境要求；“权重已下载”不能被展示为推理、波形或真实设备已经验收。
+模型管理是独立的主机控制面，不属于某条 Route。`GET /api/speech/model-management` 返回环境、目录和任务状态；两个 POST 入口分别安装核心环境和单个允许清单模型，不接受任意下载仓库、地址或路径；单独的本机设置入口校验模型总目录覆盖值，目录路径只返回给本机 WebGUI。Manager 同一时间只允许一个任务，并继续受只读模式的全局写操作门禁约束。`src/manager/speechModelFiles.ts` 核对管理目录及已配置模型路径中的代表文件，下载状态不再只取决于安装清单；文件存在不等于校验和或推理就绪。弹窗使用紧凑环境栏、筛选搜索和表格，仅在存在当前或最近任务时显示任务行，说明默认折叠。模型清单中的 `runtime=core|isolated` 只说明运行环境要求，不代表已检测到环境缺失；“模型已下载”不能被展示为推理、波形或真实设备已经验收。
 
 `src/manager/speechEventProxy.ts` 单独拥有 Manager SSE 客户端与 RabiSpeech 上游流的一对一生命周期。浏览器或验收客户端断开时只中止对应的上游 fetch；由此产生的 `AbortError` 是正常终态，必须在代理层消费，不能变成未处理 Node stream error 或拖垮 Manager。上游不是 `text/event-stream` 时在写入 SSE 响应头之前失败关闭，不把旧 Manager/WebGUI HTML 冒充事件流。
 

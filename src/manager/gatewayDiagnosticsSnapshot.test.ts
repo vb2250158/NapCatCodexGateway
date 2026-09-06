@@ -19,7 +19,7 @@ test("a stuck diagnostics worker cannot delay the real Manager health HTTP respo
   let markWorkerStarted = (): void => {};
   const workerStarted = new Promise<void>((resolve) => { markWorkerStarted = resolve; });
   const service = new GatewayDiagnosticsSnapshotService({
-    capture: () => ({ runtimes: [] }),
+    capture: () => ({ runtimes: [], personaPresentations: [] }),
     initialSnapshot,
     minRefreshIntervalMs: 0,
     load: async () => {
@@ -97,7 +97,7 @@ test("published diagnostics snapshots are structurally copied, deeply frozen, an
     refreshedAt: "2026-09-01T08:01:00.000Z"
   } satisfies GatewayDiagnosticsWorkerResult;
   const service = new GatewayDiagnosticsSnapshotService({
-    capture: () => ({ runtimes: [] }),
+    capture: () => ({ runtimes: [], personaPresentations: [] }),
     initialSnapshot: mutableInitial,
     minRefreshIntervalMs: 0,
     now: () => Date.parse("2026-09-01T08:00:30.000Z"),
@@ -128,7 +128,7 @@ test("published diagnostics snapshots are structurally copied, deeply frozen, an
 
 test("warming and failed refreshes expose lifecycle state without publishing a partial revision", async () => {
   const service = new GatewayDiagnosticsSnapshotService({
-    capture: () => ({ runtimes: [] }),
+    capture: () => ({ runtimes: [], personaPresentations: [] }),
     minRefreshIntervalMs: 0,
     load: async () => { throw new Error("NAS diagnostics unavailable"); }
   });

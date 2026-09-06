@@ -93,6 +93,43 @@ test("test HTTP server helper excludes WHATWG Fetch blocked ports", async () => 
   }
 });
 
+test("Relay never forwards local-only model directory settings", async (t) => {
+  let forwarded = 0;
+  const local = http.createServer((request, response) => {
+    if (decodeURIComponent(request.url || "").includes("/model-management/")) forwarded += 1;
+    response.end("test response");
+  });
+  const localPort = await listen(local);
+  t.after(() => close(local));
+  const paths = ["/api/speech/model-management/settings", "/api/speech/model-management/../model-management/settings?x=1", "/api/speech/model-management/%73ettings"];
+  const completed = new Set<string>();
+  let claimed = false;
+  const relay = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (url.pathname === "/api/rabilink/events") { openRelayEvents(response); return; }
+    if (url.pathname === "/worker/webgui-requests") {
+      const requests = claimed ? [] : paths.map((path, index) => ({ id: `private-${index}`, method: index === 1 ? "PATCH" : "GET", path }));
+      claimed = true;
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, requests }));
+      return;
+    }
+    if (request.method === "POST" && url.pathname.endsWith("/response")) {
+      request.resume();
+      request.on("end", () => { completed.add(url.pathname); response.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}'); });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const relayPort = await listen(relay);
+  t.after(() => close(relay));
+  const runtime = new RabiLinkRelayRuntime();
+  t.after(() => runtime.stop());
+  runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: "test-only-token", deviceId: "test-pc", deviceGuid: "test-guid", deviceName: "Test PC", claimWaitMs: 60000,
+    localWebguiUrl: `http://127.0.0.1:${localPort}`, speechProxyEnabled: false, localSpeechUrl: `http://127.0.0.1:${localPort}` });
+  await waitForRelayRuntime(runtime, "local-only settings rejection", () => completed.size === paths.length, () => ({ completed: completed.size }));
+  assert.equal(forwarded, 0);
+});
+
 test("global Relay runtime registers the PC and proxies remote WebGUI requests", async (t) => {
   const localWebgui = http.createServer((request, response) => {
     response.writeHead(request.url === "/meta" ? 200 : 404, { "content-type": "application/json" });

@@ -138,24 +138,26 @@ test("a renewal during stale fencing restores the previous owner instead of dele
   const lockPath = planStorageLeasePath(roleDir, planId);
   const staleOwner = "remote-host:9876:renewing";
   writeLock(lockPath, expiredRemoteRecord(staleOwner), 120_000);
-  const originalRename = fs.renameSync;
+  const originalLink = fs.linkSync;
   let injected = false;
-  (fs as typeof fs & { renameSync: typeof fs.renameSync }).renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
+  (fs as typeof fs & { linkSync: typeof fs.linkSync }).linkSync = ((source: fs.PathLike, destination: fs.PathLike) => {
     if (!injected && path.resolve(String(destination)) === path.resolve(lockPath)
-      && String(source).endsWith(".candidate")) {
+      && String(source).endsWith(".candidate") && !fs.existsSync(lockPath)) {
       injected = true;
       const renewed = new Date();
-      fs.utimesSync(lockPath, renewed, renewed);
+      const stale = fs.readdirSync(path.dirname(lockPath)).find(name => name.endsWith(".stale"));
+      assert.ok(stale);
+      fs.utimesSync(path.join(path.dirname(lockPath), stale), renewed, renewed);
     }
-    return originalRename(source, destination);
-  }) as typeof fs.renameSync;
+    return originalLink(source, destination);
+  }) as typeof fs.linkSync;
   try {
     assert.throws(
       () => withPlanStorageLease(roleDir, planId, () => undefined),
       /renewed during fencing/
     );
   } finally {
-    (fs as typeof fs & { renameSync: typeof fs.renameSync }).renameSync = originalRename;
+    (fs as typeof fs & { linkSync: typeof fs.linkSync }).linkSync = originalLink;
   }
 
   assert.equal(injected, true);
@@ -297,4 +299,80 @@ test("an asynchronous holder fails closed and preserves an atomically replaced o
   }, { heartbeatIntervalMs: 10 }), isLeaseLost);
 
   assert.equal(JSON.parse(fs.readFileSync(lockPath, "utf8")).owner, replacementOwner);
+});
+
+for (const asynchronous of [false, true]) {
+  test(`stale lease publication avoids SMB rename-over-existing (${asynchronous ? "async" : "sync"})`, async (t) => {
+    const roleDir = temporaryRole(t);
+    const planId = "smb-stale";
+    const lockPath = planStorageLeasePath(roleDir, planId);
+    writeLock(lockPath, expiredRemoteRecord("old-owner"), 120_000);
+    const rejectOverwrite = (source: fs.PathLike, destination: fs.PathLike) => {
+      if (fs.existsSync(destination)) throw Object.assign(new Error("SMB overwrite denied"), { code: "EPERM" });
+    };
+    const renameSync = fs.renameSync;
+    const rename = fs.promises.rename;
+    t.mock.method(fs, "renameSync", (source: fs.PathLike, destination: fs.PathLike) => {
+      rejectOverwrite(source, destination);
+      return renameSync(source, destination);
+    });
+    t.mock.method(fs.promises, "rename", async (source: fs.PathLike, destination: fs.PathLike) => {
+      rejectOverwrite(source, destination);
+      return rename(source, destination);
+    });
+    let ran = false;
+    if (asynchronous) await withPlanStorageLeaseAsync(roleDir, planId, async () => { ran = true; });
+    else withPlanStorageLease(roleDir, planId, () => { ran = true; });
+    assert.equal(ran, true);
+    assert.deepEqual(fs.readdirSync(path.dirname(lockPath)), []);
+  });
+
+  test(`failed stale lease publication restores old owner (${asynchronous ? "async" : "sync"})`, async (t) => {
+    const roleDir = temporaryRole(t);
+    const planId = "failed-publication";
+    const lockPath = planStorageLeasePath(roleDir, planId);
+    writeLock(lockPath, expiredRemoteRecord("preserved-owner"), 120_000);
+    const linkSync = fs.linkSync;
+    const link = fs.promises.link;
+    const injectFailure = (source: fs.PathLike, destination: fs.PathLike) => {
+      if (String(source).endsWith(".candidate") && String(destination) === lockPath && !fs.existsSync(lockPath)) {
+        throw Object.assign(new Error("publication denied"), { code: "EACCES" });
+      }
+    };
+    t.mock.method(fs, "linkSync", (source: fs.PathLike, destination: fs.PathLike) => {
+      injectFailure(source, destination);
+      return linkSync(source, destination);
+    });
+    t.mock.method(fs.promises, "link", async (source: fs.PathLike, destination: fs.PathLike) => {
+      injectFailure(source, destination);
+      return link(source, destination);
+    });
+    if (asynchronous) await assert.rejects(withPlanStorageLeaseAsync(roleDir, planId, async () => assert.fail("must not run")), /publication denied/);
+    else assert.throws(() => withPlanStorageLease(roleDir, planId, () => assert.fail("must not run")), /publication denied/);
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, "utf8")).owner, "preserved-owner");
+    assert.deepEqual(fs.readdirSync(path.dirname(lockPath)), [path.basename(lockPath)]);
+  });
+}
+
+test("a late contender is preserved when exclusive stale replacement loses publication", (t) => {
+  const roleDir = temporaryRole(t);
+  const planId = "late-contender";
+  const lockPath = planStorageLeasePath(roleDir, planId);
+  writeLock(lockPath, expiredRemoteRecord("previous-owner"), 120_000);
+  const linkSync = fs.linkSync;
+  let injected = false;
+  t.mock.method(fs, "linkSync", (source: fs.PathLike, destination: fs.PathLike) => {
+    if (!injected && String(source).endsWith(".candidate") && String(destination) === lockPath && !fs.existsSync(lockPath)) {
+      injected = true;
+      writeLock(lockPath, { owner: "late-contender", host: os.hostname(), pid: process.pid });
+    }
+    return linkSync(source, destination);
+  });
+  assert.throws(() => withPlanStorageLease(roleDir, planId, () => assert.fail("must not run")), { code: "EEXIST" });
+  assert.equal(injected, true);
+  assert.equal(JSON.parse(fs.readFileSync(lockPath, "utf8")).owner, "late-contender");
+  assert.equal(fs.existsSync(`${lockPath}.reclaim`), false);
+  const retained = fs.readdirSync(path.dirname(lockPath)).filter(name => name.endsWith(".stale"));
+  assert.equal(retained.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(path.dirname(lockPath), retained[0]!), "utf8")).owner, "previous-owner");
 });

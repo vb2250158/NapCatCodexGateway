@@ -3,6 +3,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
+import { configuredModelPaths, modelFilesPresent, speechConfigPath } from "./speechModelFiles.js";
+import { SpeechModelSettingsStore } from "./speechModelSettings.js";
 import type {
   SpeechManagedModel,
   SpeechManagedModelCapability,
@@ -19,6 +21,7 @@ type CatalogModel = {
   kind: "huggingface" | "file";
   repository?: string;
   download_url?: string;
+  download_mode?: string;
   target: string;
   size_gib?: number;
   runtime: SpeechManagedModelRuntime;
@@ -67,7 +70,8 @@ export type SpeechModelManagerOptions = {
 export class SpeechModelManager {
   private readonly platform: NodeJS.Platform;
   private readonly pluginRoot: string;
-  private readonly modelRoot: string;
+  private readonly settingsStore: SpeechModelSettingsStore;
+  private get modelRoot(): string { return this.directorySettings().effectiveModelRoot; }
   private readonly catalog: CatalogPayload;
   private readonly spawnInstaller: typeof spawn;
   private readonly onChange?: (snapshot: SpeechModelManagementSnapshot) => void;
@@ -79,28 +83,42 @@ export class SpeechModelManager {
   constructor(private readonly options: SpeechModelManagerOptions) {
     this.platform = options.platform ?? process.platform;
     this.pluginRoot = path.join(options.packageRoot ?? options.rootDir, "plugin-adapters", "rabi-speech");
-    this.modelRoot = path.resolve(
-      options.modelRoot
-        || process.env.RABISPEECH_MODEL_ROOT
-        || defaultModelRoot(options.rootDir)
-    );
+    this.settingsStore = new SpeechModelSettingsStore(options.rootDir, [options.rootDir, options.packageRoot ?? options.rootDir]);
     this.catalog = this.readCatalog();
     this.spawnInstaller = options.spawnInstaller ?? spawn;
     this.onChange = options.onChange;
   }
 
+  directorySettings() {
+    return this.settingsStore.read(path.resolve(this.options.modelRoot || defaultModelRoot(this.options.rootDir)), this.options.modelRoot ? undefined : process.env.RABISPEECH_MODEL_ROOT?.trim());
+  }
+
+  updateDirectorySettings(body: unknown) {
+    if (this.activeJob) throw new SpeechModelManagerError("安装或下载进行中，不能切换模型目录。", 409);
+    this.settingsStore.write(body);
+    this.publish();
+    return this.directorySettings();
+  }
+
+  private runtimeRoot(): string {
+    const statePlugin = path.join(this.options.rootDir, "plugin-adapters", "rabi-speech");
+    return fs.existsSync(path.join(statePlugin, ".deps")) ? statePlugin : this.pluginRoot;
+  }
+
   snapshot(): SpeechModelManagementSnapshot {
+    const runtimeRoot = this.runtimeRoot();
+    const configPath = speechConfigPath(runtimeRoot);
     const manifest = this.readManifest();
     const manifestRows = new Map((manifest.models ?? []).map(item => [String(item.alias || ""), item]));
     return {
       platformSupported: this.platform === "win32",
-      dependenciesInstalled: fs.existsSync(path.join(this.pluginRoot, ".deps")),
-      windowsHostInstalled: fs.existsSync(path.join(this.pluginRoot, "runtime", "RabiSpeech.exe")),
+      dependenciesInstalled: fs.existsSync(path.join(runtimeRoot, ".deps")),
+      windowsHostInstalled: fs.existsSync(path.join(runtimeRoot, "runtime", "RabiSpeech.exe")),
       catalogVersion: this.catalog.schema_version,
       models: this.catalog.models.map(model => {
         const manifestRow = manifestRows.get(model.alias);
-        const targetExists = fs.existsSync(path.join(this.modelRoot, ...model.target.split("/")));
-        const downloaded = manifestRow?.status === "installed" && targetExists;
+        const downloaded = modelFilesPresent(path.join(this.modelRoot, ...model.target.split("/")), model)
+          || configuredModelPaths(model, configPath).some(candidate => modelFilesPresent(candidate, { ...model, download_mode: undefined }));
         const downloading = this.activeJob?.kind === "model"
           && this.activeJob.modelAlias === model.alias
           && this.activeJob.state === "running";
@@ -137,7 +155,7 @@ export class SpeechModelManager {
     this.assertWindows();
     return this.startJob({
       kind: "runtime",
-      command: path.join(this.pluginRoot, "scripts", "install.ps1"),
+      command: path.join(this.runtimeRoot(), "scripts", "install.ps1"),
       args: [],
       message: "正在安装 RabiSpeech 语音运行环境。"
     });
@@ -149,13 +167,15 @@ export class SpeechModelManager {
     if (!this.catalog.models.some(model => model.alias === normalized)) {
       throw new SpeechModelManagerError("未知的语音模型，未启动下载。", 404);
     }
-    if (!fs.existsSync(path.join(this.pluginRoot, ".deps"))) {
+    this.settingsStore.assertConfiguredRootSafe();
+    const runtimeRoot = this.runtimeRoot();
+    if (!fs.existsSync(path.join(runtimeRoot, ".deps"))) {
       throw new SpeechModelManagerError("请先在模型管理页安装语音运行环境，再下载模型。", 409);
     }
     return this.startJob({
       kind: "model",
       modelAlias: normalized,
-      command: path.join(this.pluginRoot, "scripts", "install_models.ps1"),
+      command: path.join(runtimeRoot, "scripts", "install_models.ps1"),
       args: [
         "-Model", normalized,
         "-ModelRoot", this.modelRoot,
@@ -210,7 +230,7 @@ export class SpeechModelManager {
         "powershell.exe",
         ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", input.command, ...input.args],
         {
-          cwd: this.pluginRoot,
+          cwd: path.dirname(path.dirname(input.command)),
           windowsHide: true,
           stdio: ["ignore", "pipe", "pipe"]
         }

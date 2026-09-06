@@ -2,7 +2,7 @@ import { createFeishuAdapter } from "./feishuAdapter.js";
 import { createHeartbeatAdapter } from "./heartbeatAdapter.js";
 import { createNapCatAdapter } from "./napcatAdapter.js";
 import { createRabiLinkAdapter } from "./rabilinkAdapter.js";
-import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./webhookAdapter.js";
+import { createFenneNoteAdapter, createWebhookAdapter } from "./webhookAdapter.js";
 import { createWeComAdapter } from "./wecomAdapter.js";
 import { createWeixinAdapter } from "./weixinAdapter.js";
 import type { MessageAdapterDefinition } from "./messageAdapter.js";
@@ -27,17 +27,6 @@ export const fenneNoteMessageAdapterDefinition: MessageAdapterDefinition = {
     lifecycle: "fiber"
   },
   create: () => createFenneNoteAdapter()
-};
-
-export const xiaoAiMessageAdapterDefinition: MessageAdapterDefinition = {
-  manifest: {
-    type: "xiaoai",
-    label: "小米音箱 / 小爱",
-    host: "gateway",
-    transport: "http",
-    lifecycle: "fiber"
-  },
-  create: () => createXiaoAiAdapter()
 };
 
 export const rabiLinkMessageAdapterDefinition: MessageAdapterDefinition = {
@@ -110,7 +99,6 @@ export function builtinMessageAdapterDefinitions(): MessageAdapterDefinition[] {
   return [
     webhookMessageAdapterDefinition,
     fenneNoteMessageAdapterDefinition,
-    xiaoAiMessageAdapterDefinition,
     rabiLinkMessageAdapterDefinition,
     heartbeatMessageAdapterDefinition,
     napcatMessageAdapterDefinition,

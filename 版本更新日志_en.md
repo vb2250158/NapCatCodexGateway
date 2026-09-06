@@ -7,6 +7,46 @@ English | <a href="./版本更新日志.md">简体中文</a>
 # Version update
 
 ## Unreleased
+
+### Source submission review and delivery limits (0.2.3, Unreleased)
+
+- This submission publishes source only, not a Windows runtime package or installation update. Home Assistant help links reject URLs containing a username or password so credentials do not enter browser links.
+- Four Medium findings remain owned by `RabiRoute maintainer` and must be fixed and retested before the next Windows runtime-package delivery: junctions beneath download targets, manifests, or temporary-file paths can bypass root restrictions; synchronous CIM and model-file probing can block Manager; an already-started directory PATCH can write after new ingress is fenced; and that PATCH has no request-body size limit. These depend on local configuration, filesystem layout, or an already-accepted request. This source submission does not treat them as resolved or claim installed-runtime acceptance.
+
+### Plan storage lock recovery
+
+- Stale plan lock reclamation now moves the old lock to an unused name under the reclaim fence, then publishes the candidate exclusively rather than relying on overwrite renames on SMB. Renewal or competing acquisition aborts takeover; restoration never overwrites another owner, and a failed restoration preserves the old lock as recovery evidence. This implementation note does not claim NAS runtime acceptance.
+
+### Persona diagnostics snapshots
+
+- Page diagnostics workers now receive and install the Manager's committed persona presentation snapshot, preventing missing snapshots from making Route persona lists or persona content unavailable. Page requests do not rescan the shared persona directory for this purpose.
+
+### Xiaomi Home credential help
+
+- The Xiaomi Home connection card now links to the Home Assistant home page, token management, and official documentation, with collapsible credential setup steps. Address and token errors are shown separately; guidance distinguishes Home Assistant long-lived access tokens from Xiaomi account passwords and device tokens. Paste the token directly into the connection form, not into chat.
+
+### Screenshot hotkey recovery
+
+- Failed hotkey registration is no longer permanently blocked by an exited thread. Added bounded backoff retries and failure notifications, with safer cancellation across the worker and Windows message queue.
+
+### Desktop pet loading recovery
+
+- The tray distinguishes loading, loading failure, and an authoritative empty avatar roster. Failures expose a retry action and use backoff recovery instead of silently reporting no enabled avatars. Transient request failures preserve existing pets; closing cancels retries and ignores late results.
+
+### Sidebar brand text
+
+- Raised sidebar button style specificity so later Vuetify capitalization rules cannot turn `GitHub` into `GITHUB`; the link target is unchanged.
+
+### Model management
+
+- Categories are now TTS, ASR, and speaker recognition only, defaulting to TTS with category-scoped counts and search. Added a local model root setting: empty restores the default, and an explicit value overrides it. Detection and downloads share the effective root without moving or deleting models. Saves enforce local access, lifecycle identity, settings revision, and idle-job checks.
+- Replaced large dialog cards with a compact environment bar, conditional task row, and collapsed guidance so model filters, search, and the table appear sooner. The action is now labeled **Download model**. Runtime requirements use neutral wording instead of implying a detected missing environment.
+- Model file detection no longer requires an `installed` download-manifest entry. It checks configured local model locations and known model files; empty directories, missing shards, and broken directory links do not count as downloaded. File checks do not replace checksum integrity or inference acceptance.
+
+### Message adapter entries
+
+- Removed the Xiaomi speaker / XiaoAI add menu, quick setup choice, rule category, built-in runtime registration, and discovery entry; Xiaomi Home remains available. Legacy `xiaoai` configuration fields and message-source identifiers remain readable, but no dedicated speaker receiver is registered. Remove the adapter from old Routes and use Xiaomi Home where appropriate. Historical bridge material is no longer current integration guidance.
+
 ### Data-mutation logging
 
 - Manager and Gateway now write configuration, plan, memory, message-record, delivery-receipt, identity, speech, health-record, attachment, and runtime-state mutations to one daily JSONL stream. Records carry the owning module, action, target, data source, outcome, revision/digest, and request trace fields without storing message bodies, credentials, health measurements, or media content.

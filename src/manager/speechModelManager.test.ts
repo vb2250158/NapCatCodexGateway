@@ -69,6 +69,57 @@ function fakeInstaller(calls: Array<{ command: string; args: string[] }>): {
   return { spawnInstaller, children };
 }
 
+function putFile(filename: string, content = "fixture model bytes"): void {
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  fs.writeFileSync(filename, content);
+}
+
+test("model files without an installation manifest are recognized; empty and zero-byte targets are not", () => {
+  const fixture = makeFixture();
+  try {
+    const manager = new SpeechModelManager({ rootDir: fixture.root, modelRoot: fixture.modelRoot });
+    const target = path.join(fixture.modelRoot, "asr/fixture");
+    putFile(path.join(target, "config.json"), "{}");
+    putFile(path.join(target, "model.safetensors"), "");
+    assert.equal(manager.snapshot().models[0]?.downloaded, false);
+    putFile(path.join(target, "model.safetensors"));
+    assert.equal(manager.snapshot().models[0]?.downloaded, true);
+    assert.equal(fs.existsSync(path.join(fixture.modelRoot, "install-manifest.json")), false);
+  } finally { fixture.cleanup(); }
+});
+
+test("an installed manifest does not make an empty directory downloaded", () => {
+  const fixture = makeFixture();
+  try {
+    fs.mkdirSync(path.join(fixture.modelRoot, "asr/fixture"), { recursive: true });
+    putFile(path.join(fixture.modelRoot, "install-manifest.json"), JSON.stringify({ models: [{ alias: "asr-fixture", status: "installed" }] }));
+    assert.equal(new SpeechModelManager({ rootDir: fixture.root, modelRoot: fixture.modelRoot }).snapshot().models[0]?.downloaded, false);
+  } finally { fixture.cleanup(); }
+});
+
+test("state-owned runtime dependencies are reported with separate immutable package assets", () => {
+  const fixture = makeFixture();
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "speech-state-regression-"));
+  try {
+    fs.mkdirSync(path.join(stateRoot, "plugin-adapters/rabi-speech/.deps"), { recursive: true });
+    putFile(path.join(stateRoot, "plugin-adapters/rabi-speech/runtime/RabiSpeech.exe"));
+    putFile(path.join(stateRoot, "plugin-adapters/rabi-speech/scripts/install_models.ps1"));
+    putFile(path.join(stateRoot, "plugin-adapters/rabi-speech/scripts/install.ps1"));
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const fake = fakeInstaller(calls);
+    const manager = new SpeechModelManager({ rootDir: stateRoot, packageRoot: fixture.root, modelRoot: fixture.modelRoot, platform: "win32", spawnInstaller: fake.spawnInstaller });
+    const state = manager.snapshot();
+    assert.equal(state.dependenciesInstalled, true);
+    assert.equal(state.windowsHostInstalled, true);
+    manager.installModel("asr-fixture");
+    assert.ok(calls[0]?.args.includes(path.join(stateRoot, "plugin-adapters/rabi-speech/scripts/install_models.ps1")));
+    fake.children[0]?.emit("close", 0);
+    manager.installRuntime();
+    assert.ok(calls[1]?.args.includes(path.join(stateRoot, "plugin-adapters/rabi-speech/scripts/install.ps1")));
+    fake.children[1]?.emit("close", 0);
+  } finally { fixture.cleanup(); fs.rmSync(stateRoot, { recursive: true, force: true }); }
+});
+
 async function nextTurn(): Promise<void> {
   await new Promise<void>(resolve => setImmediate(resolve));
 }
@@ -164,6 +215,8 @@ test("speech model manager launches one allowlisted download and reports install
     });
     const running = manager.installModel("asr-fixture");
     assert.equal(running.activeJob?.modelAlias, "asr-fixture");
+    assert.throws(() => manager.updateDirectorySettings({ modelRoot: null, expectedRevision: 0 }),
+      (error: unknown) => error instanceof SpeechModelManagerError && error.status === 409);
     assert.equal(running.models[0]?.status, "downloading");
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.command, "powershell.exe");
@@ -178,7 +231,8 @@ test("speech model manager launches one allowlisted download and reports install
       (error: unknown) => error instanceof SpeechModelManagerError && error.status === 409
     );
 
-    fs.mkdirSync(path.join(fixture.modelRoot, "asr", "fixture"), { recursive: true });
+    putFile(path.join(fixture.modelRoot, "asr", "fixture", "config.json"), "{}");
+    putFile(path.join(fixture.modelRoot, "asr", "fixture", "model.safetensors"));
     fs.writeFileSync(path.join(fixture.modelRoot, "install-manifest.json"), JSON.stringify({
       models: [{ alias: "asr-fixture", status: "installed" }]
     }));

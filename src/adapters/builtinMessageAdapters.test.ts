@@ -11,13 +11,7 @@ test("built-in Message Adapter manifests include only Gateway-owned adapters", (
     transport: "http",
     lifecycle: "fiber"
   });
-  assert.deepEqual(manifests.find((manifest) => manifest.type === "xiaoai"), {
-    type: "xiaoai",
-    label: "小米音箱 / 小爱",
-    host: "gateway",
-    transport: "http",
-    lifecycle: "fiber"
-  });
+  assert.equal(manifests.some((manifest) => manifest.type === "xiaoai"), false);
   assert.deepEqual(manifests.find((manifest) => manifest.type === "rabilink"), {
     type: "rabilink",
     label: "RabiLink / Relay 直连",

@@ -738,6 +738,8 @@ def save_screenshot_image(project_root: Path, image: QImage, prefix: str = "scre
 
 class WindowsGlobalHotkey(QObject):
     activated = Signal()
+    registration_failed = Signal(str)
+    _RETRY_DELAYS_SECONDS = (0.25, 0.5, 1.0, 2.0)
 
     def __init__(self, hotkey_id: int, thread_name: str) -> None:
         super().__init__()
@@ -747,18 +749,23 @@ class WindowsGlobalHotkey(QObject):
         self._thread_id = 0
         self._stop_requested = threading.Event()
         self._hotkey: tuple[int, int] | None = None
+        self._shortcut = ""
+        self._failure_reported = False
 
     def configure(self, enabled: bool, shortcut: str) -> None:
         hotkey = parse_hotkey(shortcut) if enabled else None
-        if hotkey == self._hotkey and (hotkey is None or self._thread is not None):
+        if hotkey == self._hotkey and (hotkey is None or (self._thread is not None and self._thread.is_alive())):
             return
         self.stop()
+        if hotkey != self._hotkey:
+            self._failure_reported = False
+        self._shortcut = shortcut
         self._hotkey = hotkey
         if hotkey is not None:
             self.start()
 
     def start(self) -> None:
-        if sys.platform != "win32" or self._thread is not None or self._hotkey is None:
+        if sys.platform != "win32" or (self._thread is not None and self._thread.is_alive()) or self._hotkey is None:
             return
         self._stop_requested.clear()
         self._thread = threading.Thread(target=self._run, name=self._thread_name, daemon=True)
@@ -772,26 +779,46 @@ class WindowsGlobalHotkey(QObject):
         if self._thread_id:
             ctypes.windll.user32.PostThreadMessageW(self._thread_id, 0x0012, 0, 0)
         thread.join(timeout=1.5)
-        self._thread = None
-        self._thread_id = 0
+        # Never discard a live owner or clear its cancellation for a replacement.
+        if not thread.is_alive():
+            self._thread = None
+            self._thread_id = 0
 
     def _run(self) -> None:
         from ctypes import wintypes
 
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
+        message = wintypes.MSG()
+        # PostThreadMessage cannot wake a thread until its message queue exists.
+        user32.PeekMessageW(ctypes.byref(message), None, 0, 0, 0)
         self._thread_id = int(kernel32.GetCurrentThreadId())
         modifiers, virtual_key = self._hotkey or (0, 0)
-        if not user32.RegisterHotKey(None, self._hotkey_id, modifiers, virtual_key):
-            self._thread_id = 0
-            return
+        registered = False
         try:
-            message = wintypes.MSG()
+            for attempt in range(len(self._RETRY_DELAYS_SECONDS) + 1):
+                if self._stop_requested.is_set():
+                    return
+                if user32.RegisterHotKey(None, self._hotkey_id, modifiers, virtual_key):
+                    registered = True
+                    self._failure_reported = False
+                    break
+                if attempt == len(self._RETRY_DELAYS_SECONDS):
+                    if not self._failure_reported:
+                        self._failure_reported = True
+                        self.registration_failed.emit(
+                            f"快捷键 {self._shortcut} 重试后仍无法注册，请检查占用或更换快捷键。"
+                        )
+                    return
+                if self._stop_requested.wait(self._RETRY_DELAYS_SECONDS[attempt]):
+                    return
             while not self._stop_requested.is_set() and user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
-                if message.message == 0x0312 and message.wParam == self._hotkey_id:
+                if not self._stop_requested.is_set() and message.message == 0x0312 and message.wParam == self._hotkey_id:
                     self.activated.emit()
         finally:
-            user32.UnregisterHotKey(None, self._hotkey_id)
+            if registered:
+                user32.UnregisterHotKey(None, self._hotkey_id)
+            self._thread_id = 0
 
 
 class WindowsGlobalScreenshotHotkey(WindowsGlobalHotkey):
@@ -2738,6 +2765,12 @@ class SystemScreenshotController(QObject):
 
     def _connect_plugin_hotkey(self, hotkey: WindowsGlobalHotkey, handler_id: str) -> None:
         hotkey.activated.connect(lambda target=handler_id: self._execute_command(target))
+        if isinstance(hotkey, WindowsGlobalHotkey):
+            hotkey.registration_failed.connect(self._notify_hotkey_failure)
+
+    @Slot(str)
+    def _notify_hotkey_failure(self, message: str) -> None:
+        self._notify("系统快捷键", message, True)
 
     def _execute_builtin_command(self, handler_id: str) -> None:
         if handler_id == "desktop.capture-screenshot":

@@ -8,6 +8,7 @@ import {
 import { sanitizeConfigName, sanitizeRoleId, routeRuntimeParts } from "../shared/routeIdentity.js";
 import { roleFilePath, roleFolderPath } from "../shared/routePaths.js";
 import type { GatewayRuntime } from "./runtimeRegistry.js";
+import type { RouteCatalogPersonaPresentation } from "./routeCatalogTransaction.js";
 
 export type GatewayDiagnosticsRuntimeInput = Readonly<{
   definition: GatewayDefinition;
@@ -29,6 +30,7 @@ export type GatewayDiagnosticsRuntimeInput = Readonly<{
 
 export type GatewayDiagnosticsWorkerInput = Readonly<{
   runtimes: readonly GatewayDiagnosticsRuntimeInput[];
+  personaPresentations: readonly RouteCatalogPersonaPresentation[];
 }>;
 
 export type GatewayDiagnosticsWorkerResult = Readonly<{
@@ -62,9 +64,11 @@ export type GatewayDiagnosticsSnapshotServiceOptions = Readonly<{
 
 export function captureGatewayDiagnosticsWorkerInput(
   runtimes: readonly GatewayRuntime[],
-  agentStatesFor: (gatewayId: string) => Readonly<Record<string, Readonly<Record<string, unknown>>>> | undefined
+  agentStatesFor: (gatewayId: string) => Readonly<Record<string, Readonly<Record<string, unknown>>>> | undefined,
+  personaPresentations: readonly RouteCatalogPersonaPresentation[]
 ): GatewayDiagnosticsWorkerInput {
   return structuredClone({
+    personaPresentations,
     runtimes: runtimes.map((runtime): GatewayDiagnosticsRuntimeInput => ({
       definition: runtime.definition,
       processPid: runtime.process?.pid ?? null,

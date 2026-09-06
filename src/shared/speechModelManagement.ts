@@ -29,6 +29,20 @@ export type SpeechModelManagementJob = {
   error?: string;
 };
 
+/** Local-machine-only settings; never include these paths in remote model snapshots. */
+export type SpeechModelDirectorySettings = {
+  revision: number;
+  configuredModelRoot: string | null;
+  effectiveModelRoot: string;
+  defaultModelRoot: string;
+  source: "configured" | "environment" | "default";
+};
+
+export type SpeechModelDirectorySettingsPatch = {
+  modelRoot: string | null;
+  expectedRevision: number;
+};
+
 export type SpeechModelManagementSnapshot = {
   platformSupported: boolean;
   dependenciesInstalled: boolean;

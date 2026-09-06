@@ -19,8 +19,7 @@ import {
   scanFenneNoteEndpoint,
   scanRabiLinkEndpoint,
   scanWearableEndpoint,
-  scanWebhookEndpoint,
-  scanXiaoAiEndpoint
+  scanWebhookEndpoint
 } from "../messageEndpoints/webhookLikeScans.js";
 import { scanWeComEndpoint } from "../messageEndpoints/wecomManager.js";
 
@@ -401,7 +400,6 @@ export function createBuiltinMessageAdapterScanProviders(
       };
     }),
     provider("fennenote", "FenneNote / 芬妮笔记", "experimental", () => scanFenneNoteEndpoint(webhookLikeContext)),
-    provider("xiaoai", "小米音箱 / 小爱", "experimental", () => scanXiaoAiEndpoint(webhookLikeContext)),
     provider("xiaomiHome", "米家 / Xiaomi Home", "experimental", async () => scanXiaomiHomeEndpoint(await context.xiaomiHomeHealth())),
     provider("rabilink", "RabiLink / Relay 直连", "experimental", () => scanRabiLinkEndpoint(webhookLikeContext)),
     provider("wearable", "智能手表/手环", "experimental", () => scanWearableEndpoint(webhookLikeContext)),

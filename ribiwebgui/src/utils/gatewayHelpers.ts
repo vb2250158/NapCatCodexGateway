@@ -490,12 +490,6 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       groups: [{ title: "语音转写", routeKinds: ["voice_transcript"] }]
     },
     {
-      adapter: "xiaoai",
-      title: "小米音箱 / 小爱",
-      note: "来自小爱音箱的语音转写输入；底层是 HTTP 回调，但日志和配置按小米音箱独立显示。",
-      groups: [{ title: "小爱语音事件", routeKinds: ["voice_transcript"] }]
-    },
-    {
       adapter: "xiaomiHome",
       title: "米家 / Xiaomi Home",
       note: "Home Assistant 中的米家状态与摄像头事件；由 Manager 集成投递到当前人格，不会启动 Gateway 常驻 adapter。",
