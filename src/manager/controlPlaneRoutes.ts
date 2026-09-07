@@ -5,6 +5,8 @@ import path from "node:path";
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { NapcatLifecycleOwner, validateNapcatBindings, type NapcatBinding } from "./napcatLifecycleOwner.js";
+import { createNapcatProcessDriver } from "./napcatProcessDriver.js";
 import {
   buildAgentDeliveryTestEnvelope,
   parseAgentDeliveryTestResult,
@@ -18,7 +20,7 @@ import { AgentRequestStore, type AgentRequestRecord } from "../agentRequests/sto
 import { agentRequestStatePath } from "../agentRequests/persistence.js";
 import { projectDirectoryLayout } from "../shared/projectDirectoryLayout.js";
 import { resolveRuntimeLayout } from "../shared/runtimeLayout.js";
-import { listCodexDesktopThreads } from "../codexDesktopBridge.js";
+import { listCodexDesktopThreads, readCodexDesktopThread } from "../codexDesktopBridge.js";
 import { isDshSessionId } from "../dshSessionBridge.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { selectAgentThreadRouteId } from "./agentThreadRouteSelection.js";
@@ -55,6 +57,7 @@ import {
   nextFreeLocalPort,
   prepareManagedNapcatInstance,
   readNapcatLoginPanel,
+  requestNapcatBotExit,
   restartNapcatInstance as restartNapcatInstanceEndpoint,
   runNapcatLoginAction,
   scanNapcatEndpoint,
@@ -103,6 +106,7 @@ import {
   type IdentityRelationPatch
 } from "../identityRelations.js";
 import { listConversationSituations } from "../conversationSituationStore.js";
+import { AgentCompletionDeliveryService, completionTaskContextFromPlans, deliverCompletionToEndpoint } from "./agentCompletionDelivery.js";
 import type { ReviewedReplySourceEvidence } from "../replyImageDescriptions.js";
 import {
   handleAgentSend,
@@ -162,6 +166,7 @@ import {
   normalizeCodexHookSettings,
   normalizeGatewayDefinition as sharedNormalizeGatewayDefinition,
   validateGatewayPortConflicts as sharedValidateGatewayPortConflicts,
+  validateNapcatRouteCardinality,
   type CodexHookSettings,
   type CodexPlanAssistantSession,
   type CodexReasoningEffort,
@@ -219,7 +224,8 @@ import {
   ManagerWatchBroker,
   disabledManagerWatchBrokerStatus,
   publicManagerWatchBrokerStatus,
-  type ManagerWatchBrokerStatus
+  type ManagerWatchBrokerStatus,
+  type ManagerWatchDiagnostic
 } from "./managerWatchBroker.js";
 import { resolveCodexRuntimeState } from "./codexRuntimeState.js";
 import { resolveReportedCodexBindingUpdate } from "./codexBindingUpdate.js";
@@ -404,8 +410,11 @@ import { handlePlanAttachmentApi } from "./planAttachmentRoutes.js";
 import { roleInfoPayload } from "./roleInfoPayload.js";
 import type { ScanDiagnostic } from "./scanController.js";
 import { PersonaSyncLanServer } from "./personaSyncLanServer.js";
+import { RabiDirectVideo } from "./rabiDirectVideo.js";
+import { createDirectVideoRoutes } from "./rabiDirectVideoRoutes.js";
 import { handlePersonaSyncApi, type PersonaSyncRouteContext } from "./personaSyncRoutes.js";
 import { handlePersonaVoiceTranscriptApi } from "./personaVoiceTranscriptRoutes.js";
+import { handlePersonaChatHistoryApi } from "./personaChatHistoryRoutes.js";
 import {
   ManagerReadWorkerError,
   managerCatalogWorkerPool,
@@ -1002,6 +1011,16 @@ const managerHost = managerHostOverride || (!managerReadOnly && rabiGlobalConfig
 const managerShouldAutostart = !managerReadOnly && managerAutostartEnabled();
 const remoteAgentPublicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || process.env.GATEWAY_MANAGER_PUBLIC_HOST || "";
 const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
+const napcatProcessOwner = new NapcatLifecycleOwner({
+  statePath: path.join(rootDir, "data", ".runtime", "napcat-process-ownership.json"),
+  driver: createNapcatProcessDriver(async binding => {
+    const instance = sharedNormalizeNapCatInstances(runtimes.get(binding.gatewayId)?.definition ?? { id: binding.gatewayId } as GatewayDefinition)
+      .find(item => item.id === binding.instanceId && item.httpUrl === binding.httpUrl);
+    if (instance) await requestNapcatBotExit(instance.httpUrl, instance.accessToken);
+  }),
+  log: (event, detail) => managerOperationalLog.record("info", event, { result: detail })
+});
+
 const managerEventClients = new Map<http.ServerResponse, NodeJS.Timeout>();
 
 function removeManagerEventClient(response: http.ServerResponse): void {
@@ -1193,7 +1212,51 @@ function currentPersonaMessageAuthority(): PersonaMessageAuthority {
   personaMessageAuthority ??= loadPersonaMessageAuthority(rootDir);
   return personaMessageAuthority;
 }
+const agentCompletionDelivery = new AgentCompletionDeliveryService({
+  rules: () => {
+    const roles = new Set<string>();
+    return [...runtimes.values()].flatMap(runtime => {
+      const roleId = sanitizeRoleId(runtime.definition.agentRoleId);
+      if (!roleId || roles.has(roleId) || runtime.definition.enabled === false) return [];
+      roles.add(roleId);
+      return (runtime.definition.codexHooks?.completionDeliveries ?? []).map(rule => ({ roleId, rule }));
+    });
+  },
+  taskContext: ({ roleId }, request) => {
+    const plans = listPlans(roleDirForApi(roleId));
+    let taskName: string | undefined;
+    try { taskName = readCodexDesktopThread(request.sessionId)?.title?.trim(); }
+    catch (error) {
+      managerOperationalLog.record("warn", "completion_task_title_unavailable", {
+        action: request.sessionId, error: managerOperationalError(error, rootDir)
+      });
+    }
+    return completionTaskContextFromPlans(request.sessionId, plans, taskName);
+  },
+  deliver: async ({ rule }, hook, deliveryId, context) => {
+    const runtime = runtimes.get(rule.destination.gatewayId);
+    if (!runtime || runtime.definition.enabled === false) throw new Error("目标消息路线未启用。");
+    const instances = runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition);
+    const instance = instances.find(item => item.id === rule.destination.params.instanceId && item.enabled !== false);
+    if (rule.destination.channel === "napcat" && !instance) throw new Error("目标 QQ 账号未启用或已被移除。");
+    const options = {
+      rootDir, routeRoot, rolesRoot, publishEvent: publishManagerEvent, speechServiceUrl: speechServiceUrl(),
+      runtimes: [{ ...runtime.definition, napcatInstances: instances.map(item => ({ ...item, accessToken: item.accessToken ?? "" })) }]
+    };
+    await deliverCompletionToEndpoint(rule, hook, deliveryId,
+      runtime.definition.routeProfiles?.[0]?.id || runtime.definition.id, options, context);
+  }
+});
 const codexHookContextService = new CodexHookContextService({
+  deliverAgentCompletion: async request => {
+    const results = await agentCompletionDelivery.handle(request);
+    for (const result of results) {
+      managerOperationalLog.record(result.status === "failed" ? "warn" : "info", "agent_completion_delivery", {
+        action: result.ruleId, outcome: result.status, result: result.reason
+      });
+    }
+    return results;
+  },
   rolesRoot: () => rolesRoot,
   storePath: path.join(rootDir, "data", "codex-hook", "sessions.json"),
   deliverPlanTaskCompletion,
@@ -1202,6 +1265,10 @@ const codexHookContextService = new CodexHookContextService({
   recordAgentRequestStop,
   findPangHuProgressIssue,
   deliverPangHuProgressNotification,
+  chatHistoryRoleIds: request => [...gatewayIdsForManagedSession(request.sessionId, request.cwd)]
+    .map(id => sanitizeRoleId(runtimes.get(id)?.definition.agentRoleId))
+    .filter((roleId): roleId is string => Boolean(roleId)),
+  onChatHistoryChanged: roleId => publishManagerEvent("persona_chat_history_changed", { roleId }),
   planStorageReady: () => planStorageStartupStatus().state === "ready"
 });
 const languageStyleValidator = new LanguageStyleValidator();
@@ -1345,6 +1412,10 @@ const remoteAgentToken = process.env.REMOTE_AGENT_TOKEN?.trim() || "";
 let remoteAgentHub: RemoteAgentHub | undefined;
 let agentAdapterCatalogService: AgentAdapterCatalogService | undefined;
 let watchedConfigSnapshot = "";
+// Route catalog mutations already apply their committed snapshot to the live
+// Manager. The config watcher observes that same durable write later; consuming
+// that one echo prevents a second lifecycle recapture and Gateway restart.
+let pendingManagedConfigWatchEchoes = 0;
 let configWatchLifecycle: ManagerWatchBrokerStatus = disabledManagerWatchBrokerStatus();
 let pluginPackageWatchLifecycle: ManagerWatchBrokerStatus = disabledManagerWatchBrokerStatus();
 
@@ -1458,6 +1529,7 @@ async function removeGatewayConfig(
   }
   try {
     await requireRouteCatalogLifecycle().remove(configName, expectedContentHash, operationId);
+    pendingManagedConfigWatchEchoes += 1;
   } catch (error) {
     throw routeCatalogMutationFailure(error);
   }
@@ -1472,11 +1544,14 @@ async function writeConfig(
     throw new Error("routes must be an array");
   }
 
+  config.gateways.forEach(validateNapcatRouteCardinality);
   const normalized = { gateways: config.gateways.map(normalizeDefinition) };
+  validateNapcatBindings(routeNapcatBindings(normalized.gateways));
   sharedAutoAssignGatewayPorts(normalized.gateways, managerPort);
   sharedValidateGatewayPortConflicts(normalized.gateways);
   try {
     await requireRouteCatalogLifecycle().replace(normalized, expectedContentHash, operationId);
+    pendingManagedConfigWatchEchoes += 1;
     return readConfig();
   } catch (error) {
     throw routeCatalogMutationFailure(error);
@@ -1698,6 +1773,8 @@ async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>)
 }
 
 async function writeAdapterConfigFile(definition: GatewayDefinition): Promise<void> {
+  validateNapcatRouteCardinality(definition);
+  validateNapcatBindings(routeNapcatBindings([...readConfig().gateways.filter(item => item.id !== definition.id), definition]));
   const desired = structuredClone(definition);
   const committed = readConfig().gateways.find(item => item.id === desired.id);
   const live = runtimes.get(desired.id);
@@ -1706,6 +1783,7 @@ async function writeAdapterConfigFile(definition: GatewayDefinition): Promise<vo
   }
   try {
     await requireRouteCatalogLifecycle().upsert(desired);
+    pendingManagedConfigWatchEchoes += 1;
   } catch (error) {
     throw routeCatalogMutationFailure(error);
   }
@@ -1777,18 +1855,13 @@ async function addManagedNapcatInstance(
   const runtime = runtimes.get(gatewayId);
   if (!runtime) throw new Error(`未找到路由：${gatewayId}`);
   const definition = runtime.definition;
+  if (definition.enabled === false || !sharedDefinitionUsesNapcat(definition)) throw new Error("NapCat 未绑定到启用的 Rabi 消息端，不能启动或登录。");
   const instances = sharedNormalizeNapCatInstances(definition);
   if (instances.length > 0) {
     throw new Error("每个 Route 只能绑定一个 NapCat；如需另一个 QQ，请新建 Route。");
   }
   const index = instances.length + 1;
-  const usedIds = new Set(instances.map((item) => item.id));
-  let id = sanitizeInstanceId(`napcat-${index}`, `napcat-${index}`);
-  let idSuffix = index + 1;
-  while (usedIds.has(id)) {
-    id = sanitizeInstanceId(`napcat-${idSuffix}`, `napcat-${idSuffix}`);
-    idSuffix += 1;
-  }
+  const id = `napcat-${randomUUID()}`;
   const used = new Set<number>();
   for (const runtimeItem of runtimes.values()) {
     for (const item of sharedNormalizeNapCatInstances(runtimeItem.definition)) {
@@ -1847,6 +1920,7 @@ async function removeManagedNapcatInstance(request: NapcatRemoveRequest): Promis
   if (!runtime) throw new Error(`未找到路由：${gatewayId}`);
   const instances = sharedNormalizeNapCatInstances(runtime.definition);
   const existing = instances.find((item) => item.id === instanceId);
+  if (!existing) throw new Error("NapCat 未绑定到启用的 Rabi 消息端，不能启动或登录。");
   const stop = await stopNapcatInstanceEndpoint(napcatManagerCtx(), {
     gatewayId,
     instanceId,
@@ -1875,14 +1949,6 @@ async function removeManagedNapcatInstance(request: NapcatRemoveRequest): Promis
     webuiUrl: request.webuiUrl ?? existing?.webuiUrl,
     botUserId: existing?.botUserId
   });
-  if (!existing) {
-    await writeAdapterConfigFile(runtime.definition);
-    return {
-      ok: true,
-      message: "已关闭并忽略扫描发现的 NapCat 实例。",
-      stop
-    };
-  }
   runtime.definition.napcatInstances = instances.filter((item) => item.id !== instanceId);
   const primary = runtime.definition.napcatInstances.find((item) => item.enabled !== false);
   if (primary) {
@@ -2040,7 +2106,17 @@ async function loadRuntimes(): Promise<void> {
   }
 }
 
-function applyRouteCatalogSnapshot(snapshot: RouteCatalogSnapshot): void {
+function routeNapcatBindings(definitions: GatewayDefinition[]): NapcatBinding[] {
+  return definitions
+    .filter(definition => definition.enabled !== false && sharedDefinitionUsesNapcat(definition))
+    .flatMap(definition => sharedNormalizeNapCatInstances(definition).filter(instance => instance.enabled !== false).map(instance => ({
+      gatewayId: definition.id, instanceId: instance.id, botUserId: String(instance.botUserId || "").trim() || undefined,
+      workingDir: instance.workingDir ? path.resolve(rootDir, instance.workingDir) : undefined,
+      httpUrl: instance.httpUrl, webuiUrl: instance.webuiUrl
+    })));
+}
+
+async function applyRouteCatalogSnapshot(snapshot: RouteCatalogSnapshot): Promise<void> {
   if (
     normalizePathForComparison(snapshot.routeRoot) !== normalizePathForComparison(routeRoot)
     || normalizePathForComparison(snapshot.rolesRoot) !== normalizePathForComparison(rolesRoot)
@@ -2056,6 +2132,7 @@ function applyRouteCatalogSnapshot(snapshot: RouteCatalogSnapshot): void {
     ids.add(definition.id);
   }
   sharedValidateGatewayPortConflicts(normalized);
+  if (!managerReadOnly) await napcatProcessOwner.reconcile(routeNapcatBindings(normalized));
   gatewayRuntimeService.loadDefinitions(normalized);
   routeCatalogConfig = { gateways: structuredClone(normalized) };
   routeCatalogPersonaPresentations = Object.freeze(snapshot.personas.map(item => Object.freeze({
@@ -2109,6 +2186,20 @@ async function reloadChangedConfig(
 type ConfigWatcher = Pick<ManagerWatchBroker, "close">;
 type PluginPackageWatcher = Pick<ManagerWatchBroker, "close">;
 
+function recordWatchDiagnostic(source: "config" | "plugin_tree", diagnostic: ManagerWatchDiagnostic): void {
+  const { status } = diagnostic;
+  managerOperationalLog.record(diagnostic.event === "manager_watch_degraded" ? "warn" : "info", diagnostic.event, {
+    source,
+    owner: "ManagerWatchBroker",
+    operationId: `${managerInstanceId}:${source}:${status.attempts}`,
+    childPid: status.activeWorkerPid,
+    durationMs: diagnostic.durationMs,
+    result: `previous=${diagnostic.previousState}; state=${status.state}; attempt=${status.attempts}; timeoutMs=${diagnostic.timeoutMs}; timeouts=${status.timeouts}; restarts=${status.restarts}; errors=${status.errors.length}; lastSuccessAt=${status.lastSuccessAt ?? "never"}`,
+    action: managerOperationalError(new Error(diagnostic.reason), rootDir)?.message,
+    error: diagnostic.error ? managerOperationalError(diagnostic.error, rootDir) : undefined
+  });
+}
+
 function startPluginPackageWatcher(
   directories: readonly string[],
   reconcile: (reason: string) => Promise<void>
@@ -2119,6 +2210,7 @@ function startPluginPackageWatcher(
     request: { kind: "plugin_tree", roots: directories },
     debounceMs: 160,
     onStatus: status => { pluginPackageWatchLifecycle = status; },
+    onDiagnostic: diagnostic => recordWatchDiagnostic("plugin_tree", diagnostic),
     onSnapshot: async result => {
       if (result.partial) {
         console.warn(`Plugin watch snapshot is partial (${result.errors.length} unavailable path(s)); Manager remains online.`);
@@ -2156,12 +2248,18 @@ function startConfigWatcher(
       explicitFiles: [configRepository.managerConfigPath]
     }),
     onStatus: status => { configWatchLifecycle = status; },
+    onDiagnostic: diagnostic => recordWatchDiagnostic("config", diagnostic),
     onSnapshot: async (result, reason) => {
       if (result.partial) {
         console.warn(`Config watch snapshot is partial (${result.errors.length} unavailable path(s)); Manager remains online.`);
       }
       if (initialized && result.snapshot !== watchedConfigSnapshot) {
         watchedConfigSnapshot = result.snapshot;
+        if (pendingManagedConfigWatchEchoes > 0) {
+          pendingManagedConfigWatchEchoes -= 1;
+          broker.requestRefresh("after managed route catalog write");
+          return;
+        }
         await reloadChangedConfig(reason, reconcileManagerPlugins, afterReload);
         broker.requestRefresh("after config root refresh");
       } else {
@@ -2714,27 +2812,24 @@ function routeHasRecentMessages(runtime: GatewayRuntime, type: MessageAdapterTyp
   }
 }
 
-function napcatManagerCtx(
-  onLaunch?: (request: ManagedNapcatLaunchRequest, child?: ChildProcess) => void,
-  recordLaunchPids?: (request: ManagedNapcatLaunchRequest, pids: readonly string[]) => void,
-  beforeLaunch?: () => void
-) {
+function napcatManagerCtx(beforeLaunch?: () => void) {
   return {
     rootDir,
-    getRuntimes: () => [...runtimes.values()].map((runtime) => ({
-      ...runtime,
-      status: readGatewayStatus(runtime.definition) as Record<string, unknown>
-    })),
+    getRuntimes: () => [...runtimes.values()].map(runtime => ({ ...runtime, status: readGatewayStatus(runtime.definition) as Record<string, unknown> })),
     normalizeNapCatInstances: sharedNormalizeNapCatInstances,
     appendLog,
     checkHttpEndpoint,
-    launchNapcatProcess: (plan: NapcatLaunchPlan, visible: boolean, request: ManagedNapcatLaunchRequest) => {
+    runBindingOperation: <T>(request: ManagedNapcatLaunchRequest, operation: () => Promise<T>) => napcatProcessOwner.run(request, operation),
+    stopOwnedInstance: (request: ManagedNapcatLaunchRequest) => napcatProcessOwner.remove(request),
+    stopOwnedInstanceForRestart: (request: ManagedNapcatLaunchRequest) => napcatProcessOwner.stopForRestart(request),
+    launchNapcatProcess: async (plan: NapcatLaunchPlan, visible: boolean, request: ManagedNapcatLaunchRequest) => {
       beforeLaunch?.();
+      napcatProcessOwner.prepareLaunch(request);
       const child = launchManagedNapcatProcess(plan, visible);
-      onLaunch?.(request, child);
+      await napcatProcessOwner.recordLaunch(request, child.pid);
       return child;
     },
-    recordNapcatLaunchPids: recordLaunchPids
+    recordNapcatLaunchPids: (request: ManagedNapcatLaunchRequest) => napcatProcessOwner.recordLaunch(request)
   };
 }
 
@@ -4407,8 +4502,10 @@ function gatewayIdsForManagedSession(sessionId: string, cwd?: string): Set<strin
   const gatewayIds = new Set<string>();
   for (const runtime of runtimes.values()) {
     if (
-      String(runtime.definition.codexThreadId || "").trim() === exactSessionId
-      && hookWorkspaceMatches(runtime.definition.codexCwd, cwd)
+      (String(runtime.definition.codexThreadId || "").trim() === exactSessionId
+        && hookWorkspaceMatches(runtime.definition.codexCwd, cwd))
+      || (String(runtime.definition.dshSessionId || "").trim() === exactSessionId
+        && hookWorkspaceMatches(runtime.definition.dshCwd, cwd))
     ) {
       gatewayIds.add(runtime.definition.id);
     }
@@ -4434,8 +4531,7 @@ function codexHookSettingsForSession(sessionId: string, cwd?: string): CodexHook
   const exactSessionId = String(sessionId || "").trim();
   const managedGatewayIds = gatewayIdsForManagedSession(exactSessionId, cwd);
   const matches = [...runtimes.values()].filter((runtime) => (
-    normalizeAgentAdapters(runtime.definition.agentAdapters).includes("codex")
-    && managedGatewayIds.has(runtime.definition.id)
+    managedGatewayIds.has(runtime.definition.id)
   ));
   if (matches.length === 0) return { ...DEFAULT_CODEX_HOOK_SETTINGS };
   const settings = matches.map((runtime) => normalizeCodexHookSettings(runtime.definition.codexHooks));
@@ -7324,6 +7420,7 @@ function handleRoleKnowledgeApi(
   resolveRoleStorageApplication: () => RoleStorageApplication = currentRoleStorageApplication
 ): boolean {
   if (handleWearableHealthApi(request, pathname, response)) return true;
+  if (handlePersonaChatHistoryApi(request, new URL(request.url || pathname, "http://127.0.0.1"), response, resolveRoleDir)) return true;
   if (handlePersonaVoiceTranscriptApi(
     request,
     new URL(request.url || pathname, "http://127.0.0.1"),
@@ -8985,6 +9082,11 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       set managerServicesReady(value) { managerServicesReady = value; },
     }) }),
     Object.freeze({ capability: "host.manager.rabilink-relay@1", value: Object.freeze({
+      createDirectVideoReceiver: () => new RabiDirectVideo(path.join(rootDir, "data", "rabilink", "video")),
+      createDirectVideoRoutes: (receiver: RabiDirectVideo) => createDirectVideoRoutes(receiver, managerReadOnly, readJsonBody, jsonResponse),
+      ManagerPluginRequestTracker,
+      registerManagerPluginHandlerRoutes,
+      managerPluginRoutes,
       personaSyncLanServer,
       rabiLinkRelayRuntime,
       syncRabiLinkRelayRuntime,
@@ -9231,6 +9333,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     Object.freeze({ capability: "host.manager.napcat-supervisor@1", value: Object.freeze({
       NapcatSupervisorService,
       autoLoginNapcatInstancesOnRabiStart,
+      get routeCatalogReady() { return routeCatalogStartupLifecycle.snapshot().state === "ready"; },
       managerReadOnly,
       managerShouldAutostart,
       get activeNapcatControlContext() { return activeNapcatControlContext; },
@@ -9697,6 +9800,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   planStorageStartupLifecycle.onReady(() => startPlanDependentBackground());
   routeCatalogStartupLifecycle.onReady(() => {
     syncRunningGateways();
+    startActiveNapcatSupervisor();
     if (!planDependentBackgroundStarted) {
       startPlanDependentBackground();
     } else {

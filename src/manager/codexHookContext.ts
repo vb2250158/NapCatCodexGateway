@@ -17,6 +17,7 @@ import {
   type PangHuProgressNotificationResult
 } from "./panghuProgressNotificationGate.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { appendPersonaChatReply } from "../personaChatHistory.js";
 
 const STORE_VERSION = 7;
 const MAX_CONTEXT_CHARS = 6200;
@@ -120,6 +121,7 @@ type CodexHookSessionStoreFile = {
 };
 
 export type CodexHookContextRequest = {
+  agentType?: string;
   sessionId: string;
   eventName: CodexHookEventName;
   prompt?: string;
@@ -136,6 +138,7 @@ export type CodexHookContextRequest = {
 };
 
 export type CodexHookContextResult = {
+  completionDeliveries?: import("./agentCompletionDelivery.js").CompletionDeliveryResult[];
   action: "none" | "bind" | "status" | "refresh" | "off";
   binding: CodexHookSessionBinding | null;
   additionalContext: string;
@@ -161,6 +164,7 @@ export class CodexHookPlanStorageUnavailableError extends Error {
 }
 
 export type CodexHookContextServiceOptions = {
+  deliverAgentCompletion?: (request: CodexHookContextRequest) => Promise<import("./agentCompletionDelivery.js").CompletionDeliveryResult[]>;
   rolesRoot: () => string;
   storePath: string;
   deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
@@ -170,6 +174,8 @@ export type CodexHookContextServiceOptions = {
   findPangHuProgressIssue?: (plan: PlanItem) => PangHuProgressNotificationDelivery["issue"] | undefined;
   deliverPangHuProgressNotification?: (delivery: PangHuProgressNotificationDelivery) => Promise<PangHuProgressNotificationResult>;
   planStorageReady?: () => boolean;
+  chatHistoryRoleIds?: (request: CodexHookContextRequest) => readonly string[];
+  onChatHistoryChanged?: (roleId: string) => void;
 };
 
 function nowIso(): string {
@@ -388,8 +394,13 @@ export class CodexHookContextService {
   private readonly findPangHuProgressIssue?: (plan: PlanItem) => PangHuProgressNotificationDelivery["issue"] | undefined;
   private readonly deliverPangHuProgressNotification?: (delivery: PangHuProgressNotificationDelivery) => Promise<PangHuProgressNotificationResult>;
   private readonly planStorageReady?: () => boolean;
+  private readonly chatHistoryRoleIds?: CodexHookContextServiceOptions["chatHistoryRoleIds"];
+  private readonly onChatHistoryChanged?: CodexHookContextServiceOptions["onChatHistoryChanged"];
+
+  private readonly deliverAgentCompletion?: CodexHookContextServiceOptions["deliverAgentCompletion"];
 
   constructor(options: CodexHookContextServiceOptions) {
+    this.deliverAgentCompletion = options.deliverAgentCompletion;
     this.rolesRoot = options.rolesRoot;
     this.storePath = path.resolve(options.storePath);
     this.deliverPlanTaskCompletion = options.deliverPlanTaskCompletion;
@@ -399,6 +410,8 @@ export class CodexHookContextService {
     this.findPangHuProgressIssue = options.findPangHuProgressIssue;
     this.deliverPangHuProgressNotification = options.deliverPangHuProgressNotification;
     this.planStorageReady = options.planStorageReady;
+    this.chatHistoryRoleIds = options.chatHistoryRoleIds;
+    this.onChatHistoryChanged = options.onChatHistoryChanged;
   }
 
   listRoles(): string[] {
@@ -469,7 +482,15 @@ export class CodexHookContextService {
       };
     }
     const enabled = !this.hookEnabled || this.hookEnabled(request);
-    if (request.eventName === "Stop") return this.handleStop(request, enabled);
+    if (request.eventName === "Stop") {
+      const result = await this.handleStop(request, enabled);
+      if (!result.additionalContext.trim() && result.planTaskCompletion?.status !== "failed"
+        && result.agentRequestStop?.status !== "failed" && result.projectFileChangeReminder?.status !== "failed"
+        && result.pangHuProgressNotification?.status !== "failed" && this.deliverAgentCompletion) {
+        result.completionDeliveries = await this.deliverAgentCompletion(request);
+      }
+      return result;
+    }
     if (!enabled) {
       const binding = this.getBinding(request.sessionId);
       return {
@@ -672,6 +693,7 @@ export class CodexHookContextService {
   }
 
   private async handleStop(request: CodexHookContextRequest, planCompletionEnabled: boolean): Promise<CodexHookContextResult> {
+    await this.recordChatReply(request);
     const agentRequestStop = await this.recordAgentRequestStopResult(request);
     const progress = planCompletionEnabled ? await this.handlePangHuProgressStop(request) : undefined;
     if (progress?.status === "failed") {
@@ -727,6 +749,22 @@ export class CodexHookContextService {
       ...(progress ? { pangHuProgressNotification: progress } : {}),
       projectFileChangeReminder: projectFileChangeReminder.result
     };
+  }
+
+  private async recordChatReply(request: CodexHookContextRequest): Promise<void> {
+    if (!request.turnId?.trim() || !request.lastAssistantMessage?.trim()) return;
+    const sessionId = this.requireSessionId(request.sessionId);
+    const binding = this.getBinding(sessionId);
+    if (binding?.cwd && request.cwd && normalizedWorkspace(binding.cwd) !== normalizedWorkspace(request.cwd)) return;
+    const roleIds = new Set(this.chatHistoryRoleIds?.(request) ?? []);
+    if (binding) roleIds.add(binding.roleId);
+    // No guessed persona and no cross-persona fanout for ambiguous task ownership.
+    if (roleIds.size !== 1) return;
+    const role = this.requireRole([...roleIds][0]);
+    const record = await appendPersonaChatReply(role.roleDir, {
+      sessionId, turnId: request.turnId.trim(), text: request.lastAssistantMessage
+    });
+    if (record) this.onChatHistoryChanged?.(role.roleId);
   }
 
   private recordProjectFileChange(sessionId: string, request: CodexHookContextRequest): void {

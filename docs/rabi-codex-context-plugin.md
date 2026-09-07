@@ -10,6 +10,12 @@
 
 该插件只注册并执行自身 `PLUGIN_ROOT` 下的 Hook。安装、升级和运行均不改写其他插件的 `hooks.json`、市场条目或启用状态，可与独立的语言风格 Hook 同时加载。
 
+## 人格聊天记录
+
+Manager 在 `Stop` 收到非空 `last_assistant_message`（或 `lastAssistantMessage`）和 `turn_id`（或 `turnId`）时，将完整正文追加到唯一归属人格的 `chat-history/final-replies.jsonl`。归属复用显式 Hook 绑定、Route 任务及计划/秘书/消息处理任务绑定；归属冲突或缺失时不写入。Codex 和通过同一 Hook API 上报的 DSH 回复共用此入口，不读取桌面聊天数据库或补录旧消息。
+
+`GET /api/roles/:roleId/chat-history?limit=50&cursor=<byte-offset>` 返回 `entries` 和 `nextCursor`，按追加顺序倒序读取；cursor 省略时从最新位置开始，`nextCursor=null` 表示已到最早记录。正文不截断，分页最多 100 条且达到约 1 MiB 后提前返回游标。`sessionId + turnId + 正文` 的摘要用于重复回调去重。追加成功后发布 `persona_chat_history_changed`，WebGUI 仅在聊天记录标签激活时读取，支持重连刷新与手动翻页。该记录动作独立于计划完成通知开关，并保留现有启动恢复门禁。
+
 ## 唯一边界
 
 Rabi PC / RabiRoute Manager 是以下事实的唯一管理者：

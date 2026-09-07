@@ -365,7 +365,7 @@ function appendPeerUrls(params: URLSearchParams, config: RabiLinkRelayRuntimeCon
 }
 
 function workerCapabilities(config: RabiLinkRelayRuntimeConfig): string {
-  return ["webgui", "persona-sync", PERSONA_SYNC_PLAN_PACKAGE_CAPABILITY, config.speechProxyEnabled ? "speech" : ""]
+  return ["webgui", "video-direct", "persona-sync", PERSONA_SYNC_PLAN_PACKAGE_CAPABILITY, config.speechProxyEnabled ? "speech" : ""]
     .filter(Boolean)
     .join(",");
 }
@@ -579,7 +579,9 @@ async function proxySpeechRequest(
       if (["accept", "content-type", "user-agent"].includes(lower)) headers[lower] = String(value || "");
     }
     const requestBody = request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined;
-    const managerSpeechIngress = localPath === "/api/speech/messages";
+    const managerVideoOffer = method === "POST" && localPath === "/api/rabilink/video/offer";
+    if (!managerVideoOffer && !config.speechProxyEnabled) throw new Error("Speech proxy is disabled.");
+    const managerSpeechIngress = localPath === "/api/speech/messages" || managerVideoOffer;
     const response = await localFetchWithTimeout(
       managerSpeechIngress ? safeLocalUrl(config, localPath) : safeSpeechUrl(config, localPath), {
       method,
@@ -846,7 +848,7 @@ export class RabiLinkRelayRuntime {
       webguiDrain = attempt;
     };
     const drainSpeech = (): void => {
-      if (!config.speechProxyEnabled || speechDrain || !this.active(generation, signal)) return;
+      if (speechDrain || !this.active(generation, signal)) return;
       let retry = false;
       const attempt: Promise<void> = this.drainChannel(
         signal,

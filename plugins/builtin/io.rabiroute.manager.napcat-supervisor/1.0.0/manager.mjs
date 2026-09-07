@@ -37,7 +37,10 @@ export const activate = definePlugin({
             },
             onError: error => console.warn(`NapCat startup auto login failed: ${error instanceof Error ? error.message : String(error)}`)
         });
-        const start = () => { void supervisor.start(); };
+        const start = () => {
+            if (!runtime.routeCatalogReady) return;
+            void supervisor.start();
+        };
         const stop = async () => { await supervisor.stop(); };
         runtime.startActiveNapcatSupervisor = start;
         runtime.stopActiveNapcatSupervisor = stop;

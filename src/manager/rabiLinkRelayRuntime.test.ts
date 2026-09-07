@@ -222,7 +222,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
     deviceGuid: "guid-a",
     deviceName: "Test PC",
     waitMs: "0",
-    capabilities: "webgui,persona-sync,persona-sync-plan-package-v1",
+    capabilities: "webgui,video-direct,persona-sync,persona-sync-plan-package-v1",
     peerUrls: JSON.stringify(["http://192.168.1.10:24001"])
   });
   assert.equal(finishedBody?.deviceId, "pc-a");
@@ -657,7 +657,7 @@ test("global Relay runtime proxies the independent speech plugin without exposin
     () => relayState.finishedBody !== undefined,
     () => ({ declaredCapabilities, localMethod: localState.method, relayReceiptReceived: relayState.finishedBody !== undefined })
   );
-  assert.equal(declaredCapabilities, "webgui,persona-sync,persona-sync-plan-package-v1,speech");
+  assert.equal(declaredCapabilities, "webgui,video-direct,persona-sync,persona-sync-plan-package-v1,speech");
   assert.equal(localState.method, "POST");
   assert.equal(localState.url, "/v1/audio/transcriptions?language=zh");
   assert.equal(localState.authorization, undefined);

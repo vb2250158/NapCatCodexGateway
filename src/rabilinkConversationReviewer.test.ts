@@ -66,7 +66,7 @@ test("automatic conversation review waits for an idle Codex thread and then adva
   const second = await reviewer.check();
   assert.equal(second.status, "delivered");
   assert.equal(second.pendingUserCount, 1);
-  assert.match(prompts.at(-1) || "", /^\[消息源\]\n消息源类型：系统\n事件类型：rabilink_auto_review\n事件名称：RabiLink 自动复盘\n事件 ID：[^\n]+\n消息路线 ID：Ilias\n\n\[消息内容\]\n/);
+  assert.match(prompts.at(-1) || "", /^\[消息源\]\n消息源类型：系统\n事件类型：rabilink_auto_review\n事件名称：RabiLink 自动复盘\n事件 ID：[^\n]+\n消息路线 ID：Ilias\n消息包发送时间：[^\n]+\n\n\[消息内容\]\n/);
   assert.match(prompts.at(-1) || "", /统一会话账本/);
   assert.match(prompts.at(-1) || "", /历史会话索引/);
   assert.match(prompts.at(-1) || "", /本次涉及 Route：Ilias/);
@@ -111,7 +111,7 @@ test("a touchpad review request guides the current turn immediately even without
   assert.equal(result.status, "delivered");
   assert.equal(result.manual, true);
   assert.equal(guided.length, 1);
-  assert.match(guided[0], /^\[消息源\]\n消息源类型：系统\n事件类型：rabilink_review_request\n事件名称：RabiLink 手动复盘\n事件 ID：[^\n]+\n消息路线 ID：RabiLink\n\n\[消息内容\]\n/);
+  assert.match(guided[0], /^\[消息源\]\n消息源类型：系统\n事件类型：rabilink_review_request\n事件名称：RabiLink 手动复盘\n事件 ID：[^\n]+\n消息路线 ID：RabiLink\n消息包发送时间：[^\n]+\n\n\[消息内容\]\n/);
   assert.match(guided[0], /当前 turn 正在执行/);
   assert.match(guided[0], /http:\/\/127\.0\.0\.1:8790\/api\/agent\/send/);
   assert.match(guided[0], /"routeId":"RabiLink"/);
@@ -212,7 +212,7 @@ test("an idle Codex thread periodically reflects on user intent even without a n
   assert.equal(first.status, "delivered");
   assert.equal(first.reflection, true);
   assert.equal(first.pendingUserCount, 0);
-  assert.match(prompts[0], /^\[消息源\]\n消息源类型：系统\n事件类型：rabilink_reflection\n事件名称：RabiLink 定期复盘\n事件 ID：[^\n]+\n消息路线 ID：RabiLink\n\n\[消息内容\]\n/);
+  assert.match(prompts[0], /^\[消息源\]\n消息源类型：系统\n事件类型：rabilink_reflection\n事件名称：RabiLink 定期复盘\n事件 ID：[^\n]+\n消息路线 ID：RabiLink\n消息包发送时间：[^\n]+\n\n\[消息内容\]\n/);
   assert.match(prompts[0], /连续反思/);
   assert.match(prompts[0], /当前活动、真正目标、阻碍、下一步/);
   assert.match(prompts[0], /计划、任务、记忆或最近工具结果/);

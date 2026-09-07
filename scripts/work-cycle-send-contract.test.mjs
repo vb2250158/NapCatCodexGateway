@@ -98,3 +98,29 @@ test("inquiry delivery id is stable for one plan cycle and kind", () => {
   assert.notEqual(first, nextCycle);
   assert.match(first, /^work-cycle-inquiry-/);
 });
+
+test("delivery key distinguishes multiple QA files in one plan cycle", () => {
+  const android = stableWorkCycleDeliveryId({
+    planId: plan.id,
+    cycleId: "cycle-one",
+    kind: "qa",
+    deliveryKey: "android-package"
+  });
+  const androidRetry = stableWorkCycleDeliveryId({
+    planId: plan.id,
+    cycleId: "cycle-one",
+    kind: "qa",
+    deliveryKey: "android-package"
+  });
+  const windows = stableWorkCycleDeliveryId({
+    planId: plan.id,
+    cycleId: "cycle-one",
+    kind: "qa",
+    deliveryKey: "windows-package"
+  });
+
+  assert.equal(android, androidRetry);
+  assert.notEqual(android, windows);
+  assert.match(android, /^work-cycle-qa-/);
+  assert.match(windows, /^work-cycle-qa-/);
+});

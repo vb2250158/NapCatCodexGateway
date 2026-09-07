@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -48,7 +48,7 @@
     "relay:rabilink:speech:check": "node --check scripts/rabilink-relay-server.mjs && node --import ./scripts/test-manager-runtime-env.mjs --test scripts/rabilink-proxy-request-queue.test.mjs && node --import ./scripts/test-manager-runtime-env.mjs --import tsx --test src/manager/rabiLinkRelayRuntime.test.ts",
     "relay:rabilink:worker:deploy": "npx wrangler deploy --config wrangler.rabilink-relay.toml",
     "send:onebot": "node scripts/send-onebot-message.mjs",
-    "build:plugins": "node scripts/build-plugin-packages.mjs",
+    "build:plugins": "node scripts/build-plugin-packages.mjs && node scripts/build-agent-hook-packages.mjs",
     "check:plugin-architecture": "node scripts/check-plugin-platform-architecture.mjs"
   },
   "dependencies": {
@@ -59,6 +59,7 @@
     "cordis": "4.0.0-rc.8",
     "dotenv": "^16.4.7",
     "qrcode": "^1.5.4",
+    "werift": "0.24.4",
     "ws": "^8.18.0"
   },
   "devDependencies": {

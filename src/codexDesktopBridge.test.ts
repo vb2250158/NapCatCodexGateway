@@ -53,6 +53,7 @@ type IpcRequest = {
   version?: number;
   params?: {
     conversationId?: string;
+    following?: boolean;
     turnStart?: {
       request?: Record<string, any>;
       context?: Record<string, any>;
@@ -76,7 +77,8 @@ function encodeFrame(value: unknown): Buffer {
 }
 
 async function createMockDesktopRouter(
-  handler: (request: IpcRequest, methods: string[]) => Record<string, unknown> | Promise<Record<string, unknown>>
+  handler: (request: IpcRequest, methods: string[]) => Record<string, unknown> | Promise<Record<string, unknown>>,
+  snapshot: Record<string, unknown> | null = { latestModel: "test-owner-model" }
 ): Promise<{ pipePath: string; methods: string[]; close: () => Promise<void> }> {
   const pipePath = testPipePath("rabiroute-codex-desktop");
   const methods: string[] = [];
@@ -92,6 +94,13 @@ async function createMockDesktopRouter(
         if (pending.length < 4 + length) return;
         const request = JSON.parse(pending.subarray(4, 4 + length).toString("utf8")) as IpcRequest;
         pending = pending.subarray(4 + length);
+        if (request.type === "broadcast" && request.method === "thread-stream-following-changed") {
+          if (request.params?.following && snapshot) socket.write(encodeFrame({
+            type: "broadcast", method: "thread-stream-state-changed",
+            params: { conversationId: request.params.conversationId, change: { type: "snapshot", conversationState: snapshot } }
+          }));
+          continue;
+        }
         if (request.method) methods.push(request.method);
         void Promise.resolve(handler(request, methods))
           .then((response) => socket.write(encodeFrame(response)))
@@ -252,7 +261,7 @@ test("Desktop bridge starts a new turn when the task is idle", async () => {
 });
 
 
-test("Desktop bridge retries an unconfirmed steer with start before reporting delivery", async () => {
+test("Desktop bridge never resends an accepted steer when its receipt is delayed", async () => {
   const methods: string[] = [];
   const events: CodexDesktopDeliveryEvent[] = [];
   let receiptReads = 0;
@@ -271,28 +280,31 @@ test("Desktop bridge retries an unconfirmed steer with start before reporting de
   });
 
   try {
-    const delivery = await bridge.deliver({
+    await assert.rejects(bridge.deliver({
       threadId: "019f0000-0000-7000-8000-000000000113",
       prompt: "[投递编号] deliveryId: 88888888-1111-4222-8333-444444444444\n验证投递",
       cwd: process.cwd(),
       sandbox: "workspace-write"
-    });
-
-    assert.equal(delivery.action, "started");
+    }), { name: "CodexDesktopDeliveryUnconfirmedError" });
     assert.deepEqual(methods.filter(method => method.startsWith("thread-follower-")), [
-      "thread-follower-steer-turn",
-      "thread-follower-start-turn"
+      "thread-follower-steer-turn"
     ]);
     assert.deepEqual(events.map(event => event.stage), [
       "queued",
+      "queue_released",
       "steer_requested",
+      "steer_accepted",
       "delivery_receipt_missing",
-      "delivery_retry_start",
-      "start_requested",
-      "start_accepted",
-      "delivery_receipt_confirmed",
-      "delivery_accepted"
+      "delivery_unconfirmed"
     ]);
+    const requested = events.find(event => event.stage === "steer_requested")!;
+    const accepted = events.find(event => event.stage === "steer_accepted")!;
+    assert.ok(requested.requestId);
+    assert.equal(accepted.requestId, requested.requestId);
+    assert.equal(accepted.outcome, "accepted");
+    assert.ok(accepted.elapsedMs! >= 0);
+    assert.ok(events.every(event => event.deliveryMarker === "88888888-1111-4222-8333-444444444444"));
+    assert.ok(!JSON.stringify(events).includes("验证投递"));
   } finally {
     bridge.close();
     await router.close();
@@ -338,9 +350,11 @@ test("Desktop bridge starts a new turn when current Desktop reports NoActiveTurn
     assert.deepEqual(turnStart?.context, { attachments: [], commentAttachments: [] });
     assert.deepEqual(events.map((event) => event.stage), [
       "queued",
+      "queue_released",
       "steer_requested",
       "steer_rejected",
       "start_fallback",
+      "model_checked",
       "start_requested",
       "start_accepted",
       "delivery_accepted"
@@ -358,6 +372,53 @@ test("Desktop bridge starts a new turn when current Desktop reports NoActiveTurn
     await router.close();
   }
 });
+
+for (const scenario of ["delayed-receipt", "timeout-confirmed", "timeout-unconfirmed", "start-unconfirmed"] as const) {
+  test(`Desktop delivery diagnostics and no resend: ${scenario}`, async () => {
+    const events: CodexDesktopDeliveryEvent[] = [];
+    const marker = "55555555-1111-4222-8333-444444444444";
+    let receiptReads = 0;
+    const router = await createMockDesktopRouter(request => {
+      if (request.method === "initialize") return { type: "response", requestId: request.requestId, resultType: "success", result: { clientId: "rabi" } };
+      if (scenario === "start-unconfirmed" && request.method === "thread-follower-steer-turn") {
+        return { type: "response", requestId: request.requestId, resultType: "error", error: "no active turn to steer" };
+      }
+      if (scenario.startsWith("timeout")) return { type: "response", requestId: request.requestId, resultType: "error", error: "thread-follower-steer-turn-timeout" };
+      return { type: "response", requestId: request.requestId, resultType: "success", result: {} };
+    });
+    const bridge = new CodexDesktopBridge({
+      pipePaths: [router.pipePath],
+      deliveryReceiptGraceMs: 40,
+      deliveryReceiptPollMs: 10,
+      deliveryReceiptReader: () => ++receiptReads >= 2 && (scenario === "delayed-receipt" || scenario === "timeout-confirmed"),
+      onDeliveryEvent: event => events.push(event)
+    });
+    try {
+      const pending = bridge.deliver({ threadId: "019f0000-0000-7000-8000-000000000114", prompt: `private prompt\ndeliveryId: ${marker}`, cwd: process.cwd(), sandbox: "workspace-write" });
+      if (scenario.endsWith("unconfirmed")) {
+        await assert.rejects(pending, { name: "CodexDesktopDeliveryUnconfirmedError" });
+        assert.equal(events.at(-1)?.stage, "delivery_unconfirmed");
+        assert.ok(!events.some(event => event.stage === "delivery_accepted"));
+      } else {
+        assert.equal((await pending).action, "steered");
+        assert.ok(events.some(event => event.stage === "delivery_receipt_confirmed"));
+      }
+      assert.deepEqual(router.methods.filter(method => method.startsWith("thread-follower-")), scenario === "start-unconfirmed"
+        ? ["thread-follower-steer-turn", "thread-follower-start-turn"] : ["thread-follower-steer-turn"]);
+      assert.ok(receiptReads >= 2);
+      assert.ok(events.every(event => event.deliveryMarker === marker));
+      assert.ok(!JSON.stringify(events).includes("private prompt"));
+      if (scenario.startsWith("timeout")) {
+        const rejected = events.find(event => event.stage === "steer_rejected")!;
+        assert.equal(rejected.outcome, "timeout");
+        assert.equal(rejected.requestId, events.find(event => event.stage === "steer_requested")?.requestId);
+      }
+    } finally {
+      bridge.close();
+      await router.close();
+    }
+  });
+}
 test("Desktop bridge accepts a timed-out start when the exact Agent delivery marker reached the rollout", async () => {
   const prompt = "[Agent 回复合同]\n本次投递 deliveryId：11111111-2222-4333-8444-555555555555\n\n[消息内容]\ncontinue";
   const seen: Array<{ threadId: string; marker: string }> = [];
@@ -502,6 +563,29 @@ test("Desktop bridge drops connection-scoped active state when it closes", async
     await router.close();
   }
 });
+
+for (const scenario of [
+  { name: "blank owner collaboration overrides valid latestModel", snapshot: { latestModel: "valid-model", latestCollaborationMode: { settings: { model: "" } } } },
+  { name: "blank explicit request model", snapshot: { latestModel: "valid-model" }, model: "  " },
+  { name: "owner snapshot unavailable", snapshot: null }
+]) {
+  test(`Desktop bridge refuses start: ${scenario.name}`, async () => {
+    const events: CodexDesktopDeliveryEvent[] = [];
+    const router = await createMockDesktopRouter(request => ({
+      type: "response", requestId: request.requestId,
+      resultType: request.method === "thread-follower-steer-turn" ? "error" : "success",
+      error: request.method === "thread-follower-steer-turn" ? "NoActiveTurn" : undefined,
+      result: { clientId: "rabi" }
+    }), scenario.snapshot);
+    const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath], requestTimeoutMs: 100, onDeliveryEvent: event => events.push(event) });
+    try {
+      await assert.rejects(bridge.deliver({ threadId: "model-test", prompt: "private message", cwd: process.cwd(), sandbox: "workspace-write", model: scenario.model }), { name: "CodexDesktopModelSettingsError" });
+      assert.equal(router.methods.includes("thread-follower-start-turn"), false);
+      assert.equal(events.filter(event => event.stage === "model_rejected").length, 1);
+      assert.equal(JSON.stringify(events).includes("private message"), false);
+    } finally { bridge.close(); await router.close(); }
+  });
+}
 
 test("Desktop bridge starts a message processing turn with the configured Luna model", async () => {
   let turnStartParams: Record<string, any> | undefined;

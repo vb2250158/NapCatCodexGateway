@@ -291,7 +291,8 @@ test("Codex managed-task settings are removed when a route has no Codex adapter"
   assert.equal(normalized.codexPlanAssistantSessions, undefined);
   assert.equal(normalized.codexMemoryConsolidationAgentEnabled, undefined);
   assert.equal(normalized.codexMemoryConsolidationAgentModel, undefined);
-  assert.equal(normalized.codexHooks, undefined);
+  // Hook settings belong to the persona and survive changes to its Agent adapter.
+  assert.deepEqual(normalized.codexHooks, normalizeCodexHookSettings(undefined));
 });
 
 test("message adapter policies normalize allowed outbound file roots", () => {
@@ -421,7 +422,8 @@ test("Codex Hook settings default enabled and preserve explicit opt-out", () => 
     reasoningContextEnabled: true,
     planTaskCompletionEnabled: true,
     agentCommunicationEnforcementEnabled: true,
-    onlyPrimaryPersonaCanSendMessages: false
+    onlyPrimaryPersonaCanSendMessages: false,
+    completionDeliveries: []
   });
   const normalized = normalizeGatewayDefinition(gateway({
     codexHooks: {
@@ -437,7 +439,8 @@ test("Codex Hook settings default enabled and preserve explicit opt-out", () => 
     reasoningContextEnabled: true,
     planTaskCompletionEnabled: false,
     agentCommunicationEnforcementEnabled: false,
-    onlyPrimaryPersonaCanSendMessages: true
+    onlyPrimaryPersonaCanSendMessages: true,
+    completionDeliveries: []
   });
 });
 

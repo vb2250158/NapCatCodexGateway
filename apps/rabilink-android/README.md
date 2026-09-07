@@ -33,7 +33,7 @@ RabiLink Relay
 - 手机日常首页是会话列表；所有已配置人格都会显示，未启用或尚无聊天能力的人格保留配置引导而不会消失。点一个已启用 RabiLink 消息端的人格进入聊天，返回后可继续选择其他人格；设置、健康和眼镜能力保持独立入口。
 - 手机后端通过受限 `audio-streams/rabilink/start|chunk|stop` 接口把手机/眼镜的连续 16 kHz mono PCM 送到所选 Rabi PC。Android 不做 VAD、切句、ASR 或声纹；RabiSpeech 在 PC 端切句和识别后自动写主机通用语音库，再按固定的 `routeProfileId` 投给 RabiLink/手机消息端。启动请求分别提交稳定 `source_device_id` 与临时 `stream_id`，普通回复只回稳定设备，不会发给带音频后缀的流 ID。`/api/rabilink/speech/messages` 只保留兼容与调试用途；需要播报时再由 Rabi PC TTS 合成并以 PCM 发回。
 - 眼镜 HUD 使用“连接 / 聆听 / 上传 / 播报 / 暂停 / 异常”状态角标。手机通过同一条有序 Classic BT 通道发送 `PLAYBACK_BEGIN → PCM → PLAYBACK_END`；眼镜必须先在主线程确认暂停采集，播放线程才接受 PCM，避免 TTS 开头被麦克风回录。它会核对消息 ID/PCM 长度，并且只有 `AudioTrack` 播放头到达 marker 后才回 `played` 并恢复聆听；Activity 销毁会把未完成播放明确回为 `playback_failed`。旧版没有 BEGIN/END 的 PCM 仍可兼容播放，但不会冒充已确认播放。
-- 照片已接入消息附件上行；Relay/worker 支持视频文件附件，但真眼镜视频回调尚待接线，不代表实时视频已完成。
+- 照片已接入消息附件上行。视频新增 [手机到电脑直连接入](../../docs/rabilink-direct-video.md)：手机真机数据通道已验证，眼镜 Phone SDK 蓝牙连接仍失败、未出帧；普通精简包不含视频 SDK，显式视频构建才启用此入口。视频不经过 Relay，不启用 TURN 兜底。
 - 人格头像通过 Manager 的受控头像接口提供给 Relay；手机只缓存 Relay 代理的二进制和不透明版本号。会话元数据和本地消息缓存先立即渲染，头像再独立异步加载，并明确显示加载中、缓存校验中、旧缓存或不可用。头像变化由 `persona_avatar_changed` SSE 事件只刷新对应人格；前台重连后的列表读取仅作恢复，不以轮询作为正确性机制。
 - `RabiConversationService` 持有消息 cursor、通知和手机/眼镜 I/O；发送目标在入队时固定，切换会话不会把排队消息改投给别人。手机录音由独立 `RabiPhoneAudioCapture` 管理 WakeLock、卡死检测、受控重启和运行指标。录音回调只进入有界接收队列，独立单写线程把连续 PCM 写入手机私有 `audio-spool`：按 5 秒/160 KiB/输入状态边界动态封口，`.partial` 经 fsync 后原子改名；每段有稳定单调序号、起止时间、字节数、SHA-256、来源、Route 和上传状态。网络与上传在另一执行器处理，不阻塞采集；只有 PC 回传匹配的 `sequence + chunkId + accepted_bytes + sha256` 后，分片才进入可清理状态。文字、控制、媒体以及 `delivered/played/playback_failed` 回执也各自先写磁盘。
 - 设置页以一个持久化真源提供 `已暂停 / 手机模式 / 眼镜模式`。切到眼镜模式时先暂停手机麦克风；只有真实眼镜蓝牙连接事件到达后才启动眼镜 PCM，连接前或断线后保持暂停并显示原因，不会静默回退成双路采集。运行卡片由服务广播事件刷新，显示连接、目标 Route/人格、采集、眼镜、可靠队列和最近错误，不运行一秒一次的业务状态轮询。

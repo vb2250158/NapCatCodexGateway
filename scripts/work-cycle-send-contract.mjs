@@ -68,10 +68,10 @@ export function buildProactiveGroupReplyContext({ routeConfig, issueGroupId, exp
   };
 }
 
-export function stableWorkCycleDeliveryId({ planId, cycleId, kind }) {
+export function stableWorkCycleDeliveryId({ planId, cycleId, kind, deliveryKey }) {
   const normalizedKind = text(kind) || "send";
   const digest = createHash("sha256")
-    .update(`${text(planId)}\n${text(cycleId)}\n${normalizedKind}`, "utf8")
+    .update(`${text(planId)}\n${text(cycleId)}\n${normalizedKind}\n${text(deliveryKey)}`, "utf8")
     .digest("hex");
   return `work-cycle-${normalizedKind}-${digest}`;
 }

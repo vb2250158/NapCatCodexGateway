@@ -1,3 +1,5 @@
+import { normalizeAgentCompletionDeliveries, type AgentCompletionDeliveryRule } from "./agentHookAutomation.js";
+export { normalizeAgentCompletionDeliveries, type AgentCompletionDeliveryRule } from "./agentHookAutomation.js";
 import {
   resolveRouteIdentity,
   sanitizeRoleId
@@ -89,6 +91,7 @@ export type CodexHookSettings = {
   planTaskCompletionEnabled: boolean;
   agentCommunicationEnforcementEnabled: boolean;
   onlyPrimaryPersonaCanSendMessages?: boolean;
+  completionDeliveries?: AgentCompletionDeliveryRule[];
 };
 export const DEFAULT_CODEX_HOOK_SETTINGS: CodexHookSettings = {
   sessionContextEnabled: true,
@@ -158,7 +161,8 @@ export function normalizeCodexHookSettings(value: unknown): CodexHookSettings {
     reasoningContextEnabled: raw.reasoningContextEnabled !== false,
     planTaskCompletionEnabled: raw.planTaskCompletionEnabled !== false,
     agentCommunicationEnforcementEnabled: raw.agentCommunicationEnforcementEnabled !== false,
-    onlyPrimaryPersonaCanSendMessages: raw.onlyPrimaryPersonaCanSendMessages === true
+    onlyPrimaryPersonaCanSendMessages: raw.onlyPrimaryPersonaCanSendMessages === true,
+    completionDeliveries: normalizeAgentCompletionDeliveries(raw.completionDeliveries)
   };
 }
 
@@ -1075,6 +1079,12 @@ export function sanitizeInstanceId(value: unknown, fallback: string): string {
   return raw.replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/-+/g, "-").replace(/^[-_]+|[-_]+$/g, "") || fallback;
 }
 
+export function validateNapcatRouteCardinality(definition: GatewayDefinition): void {
+  if (Array.isArray(definition.napcatInstances) && definition.napcatInstances.length > 1) {
+    throw new Error("一条路由只能绑定一个 QQ，请为另一个 QQ 新建路由。");
+  }
+}
+
 export function normalizeNapCatInstances(definition: GatewayDefinition): NapCatInstanceDefinition[] {
   const source = Array.isArray(definition.napcatInstances) ? definition.napcatInstances : [];
   // A Route owns exactly one NapCat endpoint. Older configurations may contain
@@ -1092,7 +1102,7 @@ export function normalizeNapCatInstances(definition: GatewayDefinition): NapCatI
     ...item,
     id,
     name: item.name?.trim() || id,
-    enabled: true,
+    enabled: item.enabled !== false,
     autoLoginOnRabiStart: item.autoLoginOnRabiStart !== false,
     gatewayPort,
     httpUrl: item.httpUrl?.trim() || definition.napcatHttpUrl || "http://127.0.0.1:3000",
@@ -1417,7 +1427,9 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     codexMemoryConsolidationAgentModel: memoryConsolidationSupported
       ? normalizeCodexMemoryConsolidationAgentModel(definition.codexMemoryConsolidationAgentModel)
       : undefined,
-    codexHooks: hooksSupported
+    codexHooks: definition.agentRoleId
+      ? normalizeCodexHookSettings(definition.codexHooks)
+      : hooksSupported
       ? {
           ...normalizeCodexHookSettings(definition.codexHooks),
           onlyPrimaryPersonaCanSendMessages: (primaryAgentAdapter === "codex" || primaryAgentAdapter === "dsh")

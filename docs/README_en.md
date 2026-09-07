@@ -83,6 +83,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [RabiLink glasses three-route comparison](rabilink-glasses-route-comparison_en.md) — host, lifecycle, device capability, release cost, and current guidance for native Lingzhu agent, AIUI, and native app routes.
 - [Rabi mobile message endpoint](mobile-message-endpoint_en.md) — **Experimental integration** for standalone phone chat, optional glasses, reliable queues, notifications, attachments, configuration assistance, and device acceptance boundaries.
 - [RabiLink phone edge hub](rabilink-phone-edge-hub_en.md)
+- [Phone-to-PC direct video](rabilink-direct-video_en.md) — experimental signalling and direct transport; camera capture and cross-network acceptance remain pending.
 - [RabiLink wearable health endpoint](rabilink-wearable-health_en.md) — **Experimental integration** for phone settings, structured health history, Agent queries, alert thresholds, and the Xiaomi ADB fallback.
 - [AIUI-to-phone/native-glasses parity checklist](rabilink-aiui-native-parity_en.md) — migration status separated by code, automation, and real-device evidence.
 - [RabiLink AIUI residency boundaries](rabilink-aiui-residency-plan_en.md)

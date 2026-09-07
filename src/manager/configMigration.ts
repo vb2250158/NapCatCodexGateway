@@ -5,6 +5,7 @@ import {
   ensureDefaultPersonaAutomations,
   mergePersonaAutomationRules,
   normalizePersonaAutomationRules,
+  normalizeCodexHookSettings,
   normalizeRecentMessageLimits,
   normalizeSpeechTriggerKeywords,
   notificationRulesFromPersonaAutomations,
@@ -36,7 +37,7 @@ type JsonObject = Record<string, unknown>;
 
 export type PersonaConfigFragment = Pick<
   GatewayDefinition,
-  "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords" | "languageStyle"
+  "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords" | "languageStyle" | "codexHooks"
 >;
 
 function isJsonObject(value: unknown): value is JsonObject {
@@ -128,6 +129,9 @@ export function personaConfigFragmentFromValue(parsed: unknown): Partial<Gateway
     if (Array.isArray(parsed.speechTriggerKeywords)) {
       fragment.speechTriggerKeywords = normalizeSpeechTriggerKeywords(parsed.speechTriggerKeywords);
     }
+    if (parsed.codexHooks != null) {
+      fragment.codexHooks = normalizeCodexHookSettings(parsed.codexHooks);
+    }
     if (parsed.languageStyle != null) {
       fragment.languageStyle = normalizeLanguageStyleBinding(parsed.languageStyle);
     }
@@ -158,6 +162,7 @@ function normalizedPersonaConfigValue(
     recentMessageLimits: existingRecentMessageLimits,
     speechTriggerKeywords: existingSpeechTriggerKeywords,
     languageStyle: existingLanguageStyle,
+    codexHooks: existingHooks,
     automationRules: existingAutomationRules,
     notificationRules: existingNotificationRules,
     ...base
@@ -175,6 +180,9 @@ function normalizedPersonaConfigValue(
   const materializeDefaults = options.materializeDefaults !== false;
   return {
     ...base,
+    ...((fragment.codexHooks ?? existingHooks) != null
+      ? { codexHooks: normalizeCodexHookSettings(fragment.codexHooks ?? existingHooks) }
+      : {}),
     ...(materializeDefaults || isJsonObject(recentMessageLimits) || recentMessageLimit != null
       ? { recentMessageLimits: normalizeRecentMessageLimits(recentMessageLimits, recentMessageLimit) }
       : {}),
@@ -316,6 +324,7 @@ function mergeIntoPersona(rolesRoot: string, roleId: string, fragment: PersonaCo
       fragment.automationRules,
       personaAutomationRulesFromNotificationRules(fragment.notificationRules)
     ),
+    codexHooks: current.codexHooks ?? fragment.codexHooks,
     recentMessageLimits: hasCurrentLimits ? current.recentMessageLimits : fragment.recentMessageLimits,
     recentMessageLimit: hasCurrentLimits ? undefined : fragment.recentMessageLimit,
     speechTriggerKeywords: hasCurrentKeywords ? current.speechTriggerKeywords : fragment.speechTriggerKeywords
@@ -371,6 +380,7 @@ function migrateAdapterConfig(options: ConfigMigrationOptions, configName: strin
   const fallbackRoleId = sanitizeRoleId(typeof parsed.agentRoleId === "string" ? parsed.agentRoleId : undefined);
   if (fallbackRoleId) {
     mergeIntoPersona(options.rolesRoot, fallbackRoleId, {
+      codexHooks: parsed.codexHooks != null ? normalizeCodexHookSettings(parsed.codexHooks) : undefined,
       automationRules: Array.isArray(parsed.automationRules)
         ? normalizePersonaAutomationRules(parsed.automationRules)
         : undefined,
@@ -395,7 +405,8 @@ function migrateAdapterConfig(options: ConfigMigrationOptions, configName: strin
     mergeIntoPersona(options.rolesRoot, item.roleId, { notificationRules: item.rules });
   }
 
-  const hasLegacyRuleFields = Array.isArray(parsed.automationRules)
+  const hasLegacyRuleFields = (fallbackRoleId && parsed.codexHooks != null)
+    || Array.isArray(parsed.automationRules)
     || Array.isArray(parsed.notificationRules)
     || parsed.roleNotificationRules != null
     || parsed.roleRouteNames != null
@@ -416,6 +427,7 @@ function migrateAdapterConfig(options: ConfigMigrationOptions, configName: strin
     speechTriggerKeywords: _speechTriggerKeywords,
     ...adapterOnly
   } = parsed;
+  if (fallbackRoleId) delete adapterOnly.codexHooks;
   const legacySpeechPushMode = Array.isArray(parsed.routeProfiles)
     ? parsed.routeProfiles
         .filter(isJsonObject)

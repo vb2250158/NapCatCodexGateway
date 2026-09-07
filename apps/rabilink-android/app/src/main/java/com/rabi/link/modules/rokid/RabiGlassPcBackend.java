@@ -1492,6 +1492,13 @@ public final class RabiGlassPcBackend {
         return new JSONObject(new String(request(method, path, contentType, body, timeout), StandardCharsets.UTF_8));
     }
 
+    public JSONObject exchangeVideoOffer(String sdp) throws Exception {
+        if (!configured()) throw new IllegalStateException("RabiLink is not configured");
+        byte[] body = new JSONObject().put("deviceId", deviceId).put("sdp", sdp).toString().getBytes(StandardCharsets.UTF_8);
+        if (body.length > 64 * 1024) throw new IllegalArgumentException("Video signalling is too large");
+        return jsonRequest("POST", "/api/rabilink/video/offer", "application/json", body, 30000);
+    }
+
     private byte[] request(String method, String path, String contentType, byte[] body, int timeout) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(baseUrl + path).openConnection();
         connection.setRequestMethod(method); connection.setConnectTimeout(15000); connection.setReadTimeout(timeout);

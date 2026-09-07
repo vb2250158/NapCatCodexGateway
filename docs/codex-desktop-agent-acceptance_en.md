@@ -71,7 +71,7 @@ The creation transaction must also persist a runtime Manager reservation. It rec
 - Listing must support all tasks or reliable pagination. A first-page-only list must not claim to be complete.
 - For same-name tasks in one workspace, sort by parseable `updatedAt` and bind the unique maximum; never use database return order. Require selection only when the maximum time is tied or all candidate times are unusable.
 - “Task created, initial delivery failed” is a recoverable delivery state, not a missing task.
-- Delivery state is explicit: internal transitional `accepted` means only that RabiRoute entered the Desktop path. Every real Desktop delivery carries a UUID `deliveryId`, and it is `delivered` only after that marker appears in the target task rollout. If `start/steer` IPC succeeds without the marker, retry `steer` once as `start`; if the marker is still absent, mark the delivery `failed`. Route acceptance, IPC success, or merely selecting the task must never impersonate Desktop receipt.
+- Delivery state is explicit: internal transitional `accepted` means only that RabiRoute entered the Desktop path. Every real Desktop delivery carries a UUID `deliveryId`, and it is `delivered` only after that marker appears in the target task rollout. Accepted IPC without a recorded marker, or a timeout without receipt confirmation, raises `CodexDesktopDeliveryUnconfirmedError`. The result is unconfirmed, not delivered, and no automatic resend occurs. Only an explicit inactive-turn response permits `steer` to fall back to `start`. Read the original task before retrying; delayed persistence is not proof of non-delivery. Route acceptance, IPC success, or merely selecting the task must never impersonate Desktop receipt.
 - A matched ordinary endpoint event is delivered directly: first attempt `steer` against the active turn, then `start` only when that turn is inactive or absent. Heartbeat may use its dedicated busy-skip exception, while speech may use its dedicated hot/keyword exception.
 - Manager must not decide task activity from the Desktop IPC memory set alone. It timestamp-merges the connection-scoped active marker with the latest rollout lifecycle event: a newer completion, abort, or failure supersedes an older active marker; a genuinely newer IPC start remains active until rollout catches up; disconnect clears that connection's markers immediately.
 
@@ -109,7 +109,7 @@ Do not deliver after a failed save. Do not roll back a successfully created task
 | Saved ID points to an archived task and an active same-name task exists | Create a new task and persist its ID; do not reuse the same-name task |
 | Saved ID points to an archived task with no active same-name task | Create a new task, persist the replacement binding, and deliver there |
 | Bound ID confirmed deleted after delivery | Create a replacement, update the original plan `taskBinding`, deliver, and return a warning |
-| IPC succeeds but the target rollout lacks this `deliveryId` | Fall back from idle-task `steer` to `start`; fail rather than report delivery if the marker remains absent |
+| IPC succeeds but the target rollout lacks this `deliveryId` | Report an unconfirmed result with the original marker; do not send `start` again |
 | Deleted/invalid ID, unique name match | Rebind; task count unchanged |
 | No name match | Create one task, persist ID, deliver to it |
 | Desktop index is briefly delayed | Wait for the same ID; do not create a duplicate |
@@ -144,3 +144,13 @@ When one Codex task actually changes project files inside its bound workspace du
 The reminder never PATCHes a plan, creates a task, or replaces `taskBinding`. Read-only tools, failed or unchanged writes, paths outside the workspace, and tasks without a matching plan binding do not produce a reminder. If the Manager is unavailable, the task remains non-blocking and receives a delivery diagnostic.
 
 See [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) for the general contract and [Agent Adapter Integration Lessons](agent-adapter-integration-lessons_en.md) for the failed designs and their root causes.
+
+## Delivery diagnostics
+
+Before starting an idle task without an explicit model, delivery temporarily subscribes to the current Desktop owner's IPC snapshot and checks the effective model (the collaboration mode model takes precedence), then unsubscribes. Old transcripts are never used to select a model automatically. An empty model or a missing snapshot after at most 3 seconds prevents start without automatic retry. Select a model in the target Codex task before retrying; `The '' model is not supported` is a settings error that waiting cannot resolve. Active tasks still use steer without changing their running model.
+
+`queue_released.elapsedMs` records time waiting in the same-task queue. `model_checked` records the model and its `request` / `desktop-owner` source; `model_rejected` explains why start was prevented. An explicitly configured model remains authoritative and is never automatically replaced.
+
+`codex-adapter.log.jsonl` in the runtime data directory records `desktop_delivery_*` stages. Correlate a delivery by `data.deliveryMarker` and `data.threadId`, and pair IPC requests and responses by `data.requestId`. Fields include method, protocol version, `elapsedMs`, receipt wait limit `receiptWaitMs`, and `outcome`. This change does not add prompt, attachment body, or credential logging.
+
+`steer_accepted` / `start_accepted` indicate IPC acceptance; `delivery_receipt_confirmed` indicates that the marker reached the task record; `delivery_unconfirmed` requires reading the original task without automatic resending. None establishes model completion, which still requires the final answer and completion event.

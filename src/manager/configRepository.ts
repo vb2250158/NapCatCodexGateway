@@ -293,7 +293,7 @@ export class ManagerConfigRepository {
     roleId: string,
     fragment: Pick<
       GatewayDefinition,
-      "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords" | "languageStyle"
+      "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords" | "languageStyle" | "codexHooks"
     >
   ): void {
     writePersonaConfigFile(this.personaConfigPath(roleId), {
@@ -371,7 +371,7 @@ export class ManagerConfigRepository {
     const activeConfigNames = new Set<string>();
     const groupedByRole = new Map<string, Pick<
       GatewayDefinition,
-      "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords" | "languageStyle"
+      "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords" | "languageStyle" | "codexHooks"
     >>();
     for (let i = 0; i < normalized.gateways.length; i += 1) {
       const definition = normalized.gateways[i];
@@ -396,6 +396,7 @@ export class ManagerConfigRepository {
           recentMessageLimits: previous?.recentMessageLimits ?? definition.recentMessageLimits,
           speechTriggerKeywords: previous?.speechTriggerKeywords ?? definition.speechTriggerKeywords,
           languageStyle: previous?.languageStyle ?? definition.languageStyle,
+          codexHooks: previous?.codexHooks ?? definition.codexHooks,
           automationRules: mergePersonaAutomationRules(previous?.automationRules, definition.automationRules),
           notificationRules: mergeNotificationRules(previous?.notificationRules, definition.notificationRules)
         });
@@ -430,6 +431,7 @@ export class ManagerConfigRepository {
     } = definition;
     return {
       ...adapterOnly,
+      ...(definition.agentRoleId ? { codexHooks: undefined } : {}),
       remoteAgentDefaultCwd: this.configPathValue(adapterOnly.remoteAgentDefaultCwd),
       codexCwd: this.configPathValue(adapterOnly.codexCwd),
       copilotCwd: this.configPathValue(adapterOnly.copilotCwd),

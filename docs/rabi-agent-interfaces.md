@@ -949,6 +949,8 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 关闭
 ```
 
+默认“待补充信息”只表示：分析已完成，但现有信息仍无法形成可审批的具体方案，且缺失信息会影响原因、改法、实施范围或验收合同。暂未复现、疑似历史已修复、等待目标包、等待 QA 或等待是否关闭都不使用该状态；这些情况应继续分析，或按证据进入“等待打包”“等待 QA”“关闭”。
+
 查询计划：
 
 ```http
@@ -1016,7 +1018,7 @@ POST /roles/:roleId/plans
 
 新增计划必须提供有序的 `steps`。`plan.status` 只能写当前人格状态目录中的 enabled key。`archiveStatus` 独立，只允许“未归档、已归档”。步骤不保存独立状态；`currentStepId` 表示当前步骤，`completedAt` 表示已经完成。Manager 返回 key 及其配置的 label、description、palette、order 和 views，WebGUI 与托盘只消费这些字段。
 
-仍在调查、分析后确认信息不足、完整审批等待和获批执行分别写 `planWorkflow.roles.analysis`、`roles.informationNeeded`、`roles.approval`、`roles.execution` 所指的 key。包体、QA、讨论和暂停同样通过 roles 查找；步骤名称、说明、`waitingFor` 与审批合同不再覆盖 `plan.status`。
+仍在调查、分析完成但无法形成可审批具体方案、完整审批等待和获批执行分别写 `planWorkflow.roles.analysis`、`roles.informationNeeded`、`roles.approval`、`roles.execution` 所指的 key。包体、QA、讨论和暂停同样通过 roles 查找；步骤名称、说明、`waitingFor` 与审批合同不再覆盖 `plan.status`。
 
 只有代码、Prefab、资源、配置等会产生项目内容变动的计划才应采用“实施/开发验证/适用同步提交 → 等待打包 → 等待 QA → QA 通过完成；失败回实施”的流程。调查、设计评审、运营、资料收集、外部依赖与控制面维护按自身真实步骤推进；Agent 或批处理不得为这些计划虚构 package 或 QA 步骤。Manager 不根据标题、说明或 `kind` 自动补流程。
 

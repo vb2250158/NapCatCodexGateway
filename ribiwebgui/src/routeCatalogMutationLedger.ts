@@ -8,7 +8,10 @@ export type PendingRouteCatalogMutation = Readonly<{
 }>;
 
 export const ROUTE_CATALOG_PENDING_STORAGE_KEY = "rabiroute.route-catalog.pending.v2";
-export const GATEWAY_MUTATION_TIMEOUT_MS = 12_000;
+// Route-catalog writes run in a dedicated Manager worker. Its request fence
+// is 30 seconds, so the browser must not abandon an otherwise valid commit
+// before that worker can return its durable receipt.
+export const GATEWAY_MUTATION_TIMEOUT_MS = 35_000;
 
 export function routeCatalogMutationFailureIsDefinitive(statusCode: number): boolean {
   return Number.isInteger(statusCode)

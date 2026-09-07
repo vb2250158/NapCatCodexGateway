@@ -6,6 +6,12 @@ English | <a href="./troubleshooting.md">简体中文</a>
 
 # Troubleshooting
 
+## Transient Manager degradation
+
+Search `logs/manager/manager-operations-YYYY-MM-DD.jsonl` for `manager_watch_degraded` and `manager_watch_recovered`. `source=config` identifies configuration watching; `source=plugin_tree` identifies plugin-directory watching. Records include child PID, attempt, duration, timeout limit, cumulative timeouts and restarts, and last success time. Failures include redacted error details and stacks. Ordinary unchanged refreshes do not repeat records, and recovery preserves earlier failures in the log. `operationId` identifies the Manager instance, watcher, and scan attempt.
+
+Rediscover the current Manager address through Host, then read `/meta` for current health. Historical timeout counters do not mean the application is still degraded.
+
 > Status: current guide. The formal Codex path is Desktop IPC plus the target task owner; real messages do not use a shared port, per-route stdio process, or fallback Runtime.
 
 ## Forwarded QQ messages show only an ID or `[object Object]`

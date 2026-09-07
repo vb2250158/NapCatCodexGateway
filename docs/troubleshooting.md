@@ -6,6 +6,12 @@
 
 # 排障
 
+## Manager 短暂降级
+
+在 `logs/manager/manager-operations-YYYY-MM-DD.jsonl` 搜索 `manager_watch_degraded` 和 `manager_watch_recovered`。`source=config` 表示配置目录监控，`source=plugin_tree` 表示插件目录监控。每条记录包含子进程 PID、扫描次数、耗时、超时上限、累计超时和重启次数、最近成功时间；异常记录还包含经过脱敏的具体错误与堆栈。相同状态的普通刷新不重复记录，恢复后旧异常仍保留在日志中。通过 `operationId` 对应同一 Manager 实例、监控模块和扫描尝试。
+
+先从 Host 重新获取当前 Manager 地址，再读取 `/meta` 判断当前状态；历史超时次数不表示此刻仍在降级。
+
 > 状态：现行指南。Codex 正式链路是 Desktop IPC 与目标任务 owner；真实消息不使用共享 4510、每 route stdio 或备用 Runtime。
 
 ## QQ 合并转发只显示转发 ID 或 `[object Object]`

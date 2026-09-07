@@ -74,7 +74,11 @@ export type CodexDesktopDelivery = {
 
 export type CodexDesktopDeliveryStage =
   | "queued"
+  | "queue_released"
+  | "model_checked"
+  | "model_rejected"
   | "steer_requested"
+  | "steer_accepted"
   | "steer_rejected"
   | "start_fallback"
   | "start_requested"
@@ -82,7 +86,7 @@ export type CodexDesktopDeliveryStage =
   | "start_rejected"
   | "delivery_receipt_confirmed"
   | "delivery_receipt_missing"
-  | "delivery_retry_start"
+  | "delivery_unconfirmed"
   | "delivery_accepted"
   | "owner_load_retry";
 
@@ -97,6 +101,12 @@ export type CodexDesktopDeliveryEvent = {
   payloadShape?: "turnStart.request+context";
   protocolVersion?: number;
   error?: string;
+  requestId?: string;
+  elapsedMs?: number;
+  receiptWaitMs?: number;
+  model?: string;
+  modelSource?: "request" | "desktop-owner";
+  outcome?: "accepted" | "rejected" | "timeout" | "confirmed" | "unconfirmed";
 };
 
 export type CodexDesktopBridgeOptions = {
@@ -412,6 +422,7 @@ export class CodexDesktopBridge {
   private readonly activeThreads = new Set<string>();
   private readonly activeThreadSinceMs = new Map<string, number>();
   private readonly deliveryQueues = new Map<string, Promise<CodexDesktopDelivery>>();
+  private readonly snapshotReaders = new Map<string, (state: Record<string, any>) => void>();
 
   constructor(options: CodexDesktopBridgeOptions = {}) {
     this.options = {
@@ -468,6 +479,10 @@ export class CodexDesktopBridge {
       if (message.method === "thread-stream-state-changed" && message.params && typeof message.params === "object") {
         const params = message.params as { conversationId?: unknown; threadId?: unknown; change?: unknown };
         const threadId = nonEmptyString(params.conversationId) || nonEmptyString(params.threadId);
+        const snapshot = params.change as { type?: string; conversationState?: Record<string, any> } | undefined;
+        if (snapshot?.type === "snapshot" && snapshot.conversationState) {
+          this.snapshotReaders.get(threadId)?.(snapshot.conversationState);
+        }
         const change = JSON.stringify(params.change ?? params);
         if (threadId && (change.includes('"threadRuntimeStatus":{"type":"active"') || change.includes('"status":"inProgress"'))) {
           this.activeThreads.add(threadId);
@@ -558,9 +573,8 @@ export class CodexDesktopBridge {
     }
   }
 
-  private async request(method: string, params: unknown, version = 1, beforeInitialized = false): Promise<IpcResponse> {
+  private async request(method: string, params: unknown, version = 1, beforeInitialized = false, requestId = randomUUID()): Promise<IpcResponse> {
     if (!beforeInitialized) await this.connect();
-    const requestId = randomUUID();
     const response = new Promise<IpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
@@ -652,15 +666,30 @@ export class CodexDesktopBridge {
   private async deliveryReceiptConfirmed(params: CodexDesktopTurnDelivery): Promise<boolean> {
     const marker = this.deliveryMarker(params);
     if (!marker) return true;
+    const startedAt = Date.now();
     const confirmed = await this.confirmDeliveryReceipt(params);
-    this.deliveryEvent(params, confirmed ? "delivery_receipt_confirmed" : "delivery_receipt_missing", { action: undefined });
+    this.deliveryEvent(params, confirmed ? "delivery_receipt_confirmed" : "delivery_receipt_missing", {
+      elapsedMs: Date.now() - startedAt,
+      receiptWaitMs: this.options.deliveryReceiptGraceMs,
+      outcome: confirmed ? "confirmed" : "unconfirmed"
+    });
     return confirmed;
+  }
+
+  private unconfirmedDelivery(params: CodexDesktopTurnDelivery, method: CodexDesktopDeliveryEvent["method"], error?: unknown): Error {
+    const message = `Codex Desktop delivery unconfirmed for ${params.threadId}: ${method}. The message may already be accepted; no automatic resend was attempted. Read the original task before retrying.${error ? ` Original error: ${diagnosticErrorMessage(error)}` : ""}`;
+    this.deliveryEvent(params, "delivery_unconfirmed", { method, outcome: "unconfirmed", error: message });
+    const result = new Error(message);
+    result.name = "CodexDesktopDeliveryUnconfirmedError";
+    return result;
   }
 
   private async steer(params: CodexDesktopTurnDelivery): Promise<boolean> {
     const imageAttachments = this.imageAttachments(params.imagePaths);
     const method = "thread-follower-steer-turn";
-    this.deliveryEvent(params, "steer_requested", { method, protocolVersion: desktopIpcProtocolVersion.followerSteerTurn });
+    const requestId = randomUUID();
+    const startedAt = Date.now();
+    this.deliveryEvent(params, "steer_requested", { method, requestId, protocolVersion: desktopIpcProtocolVersion.followerSteerTurn });
     try {
       const response = await this.request(method, {
         conversationId: params.threadId,
@@ -679,14 +708,65 @@ export class CodexDesktopBridge {
           cwd: params.cwd,
           createdAt: Date.now()
         }
-      });
+      }, desktopIpcProtocolVersion.followerSteerTurn, false, requestId);
       const error = responseError(response, method);
       if (error) throw error;
+      this.deliveryEvent(params, "steer_accepted", { method, requestId, elapsedMs: Date.now() - startedAt, outcome: "accepted" });
       return false;
     } catch (error) {
-      this.deliveryEvent(params, "steer_rejected", { method, error: diagnosticErrorMessage(error) });
-      if (isTurnDeliveryTimeout(error, method) && await this.confirmDeliveryReceipt(params)) return true;
+      const timedOut = isTurnDeliveryTimeout(error, method);
+      this.deliveryEvent(params, "steer_rejected", { method, requestId, elapsedMs: Date.now() - startedAt, outcome: timedOut ? "timeout" : "rejected", error: diagnosticErrorMessage(error) });
+      if (timedOut) {
+        if (this.deliveryMarker(params) && await this.deliveryReceiptConfirmed(params)) return true;
+        throw this.unconfirmedDelivery(params, method, error);
+      }
       throw error;
+    }
+  }
+
+  /** Read the live owner, never a cached rollout or an independently resumed runtime. */
+  async readThreadModel(threadId: string): Promise<string> {
+    await this.connect();
+    if (this.snapshotReaders.has(threadId)) throw new Error("Codex Desktop model check already pending");
+    let timer: NodeJS.Timeout | undefined;
+    const following = (value: boolean) => this.write({
+      type: "broadcast", sourceClientId: this.clientId, version: 1,
+      method: "thread-stream-following-changed",
+      params: { conversationId: threadId, hostId: "local", following: value }
+    });
+    try {
+      const snapshot = new Promise<string>((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("Codex Desktop 未返回任务模型设置；消息未发送，请打开目标任务后重试。")), Math.min(this.options.requestTimeoutMs, 3_000));
+        this.snapshotReaders.set(threadId, (state) => {
+          const collaboration = state.latestThreadSettings?.collaborationMode ?? state.latestCollaborationMode;
+          // Collaboration settings override the model in Desktop's turn/start preparation.
+          const model = collaboration != null
+            ? collaboration.settings?.model
+            : state.latestThreadSettings?.model ?? state.latestModel;
+          resolve(nonEmptyString(model));
+        });
+      });
+      following(true);
+      return await snapshot;
+    } finally {
+      clearTimeout(timer);
+      this.snapshotReaders.delete(threadId);
+      if (this.socket && !this.socket.destroyed) following(false);
+    }
+  }
+
+  private async checkStartModel(params: CodexDesktopTurnDelivery): Promise<void> {
+    const startedAt = Date.now();
+    const modelSource = params.model === undefined ? "desktop-owner" : "request";
+    try {
+      const model = params.model === undefined ? await this.readThreadModel(params.threadId) : nonEmptyString(params.model);
+      if (!model) throw new Error("Codex Desktop 任务的模型名称为空；消息未发送。请在该任务选择模型后重试。");
+      this.deliveryEvent(params, "model_checked", { model, modelSource, elapsedMs: Date.now() - startedAt });
+    } catch (error) {
+      this.deliveryEvent(params, "model_rejected", { modelSource, elapsedMs: Date.now() - startedAt, error: diagnosticErrorMessage(error) });
+      const failure = new Error(diagnosticErrorMessage(error));
+      failure.name = "CodexDesktopModelSettingsError";
+      throw failure;
     }
   }
 
@@ -697,14 +777,15 @@ export class CodexDesktopBridge {
       input: this.turnInput(params.prompt, params.imagePaths),
       cwd: params.cwd
     };
-    if (params.model) {
+    const model = nonEmptyString(params.model);
+    if (model) {
       const effort = params.reasoningEffort ?? "medium";
-      request.model = params.model;
+      request.model = model;
       request.effort = effort;
       request.collaborationMode = {
         mode: "default",
         settings: {
-          model: params.model,
+          model,
           reasoning_effort: effort,
           developer_instructions: ""
         }
@@ -720,9 +801,13 @@ export class CodexDesktopBridge {
   }
 
   private async start(params: CodexDesktopTurnDelivery): Promise<boolean> {
+    await this.checkStartModel(params);
     const method = "thread-follower-start-turn";
+    const requestId = randomUUID();
+    const startedAt = Date.now();
     this.deliveryEvent(params, "start_requested", {
       method,
+      requestId,
       payloadShape: "turnStart.request+context",
       protocolVersion: desktopIpcProtocolVersion.followerStartTurn
     });
@@ -730,14 +815,18 @@ export class CodexDesktopBridge {
       const response = await this.request(method, {
         conversationId: params.threadId,
         turnStart: this.startTurnEnvelope(params)
-      }, desktopIpcProtocolVersion.followerStartTurn);
+      }, desktopIpcProtocolVersion.followerStartTurn, false, requestId);
       const error = responseError(response, method);
       if (error) throw error;
-      this.deliveryEvent(params, "start_accepted", { method, action: "started" });
+      this.deliveryEvent(params, "start_accepted", { method, requestId, elapsedMs: Date.now() - startedAt, outcome: "accepted", action: "started" });
       return false;
     } catch (error) {
-      this.deliveryEvent(params, "start_rejected", { method, error: diagnosticErrorMessage(error) });
-      if (isTurnDeliveryTimeout(error, method) && await this.confirmDeliveryReceipt(params)) return true;
+      const timedOut = isTurnDeliveryTimeout(error, method);
+      this.deliveryEvent(params, "start_rejected", { method, requestId, elapsedMs: Date.now() - startedAt, outcome: timedOut ? "timeout" : "rejected", error: diagnosticErrorMessage(error) });
+      if (timedOut) {
+        if (this.deliveryMarker(params) && await this.deliveryReceiptConfirmed(params)) return true;
+        throw this.unconfirmedDelivery(params, method, error);
+      }
       throw error;
     }
   }
@@ -746,11 +835,10 @@ export class CodexDesktopBridge {
     try {
       const steerReceiptConfirmed = await this.steer(params);
       if (steerReceiptConfirmed || await this.deliveryReceiptConfirmed(params)) return "steered";
-      this.deliveryEvent(params, "delivery_retry_start", {
-        method: "thread-follower-start-turn",
-        error: "Desktop accepted steer but the delivery marker was not written to the target task."
-      });
+      // A delayed rollout is not proof of non-delivery. Starting again can duplicate accepted input.
+      throw this.unconfirmedDelivery(params, "thread-follower-steer-turn");
     } catch (error) {
+      if (error instanceof Error && error.name === "CodexDesktopDeliveryUnconfirmedError") throw error;
       if (!isInactiveTurn(error)) throw error;
       this.deliveryEvent(params, "start_fallback", {
         method: "thread-follower-steer-turn",
@@ -759,7 +847,7 @@ export class CodexDesktopBridge {
     }
     const startReceiptConfirmed = await this.start(params);
     if (!startReceiptConfirmed && !await this.deliveryReceiptConfirmed(params)) {
-      throw new Error(`Codex Desktop accepted thread-follower-start-turn for ${params.threadId}, but the target task did not record this Agent delivery. Message is not marked delivered.`);
+      throw this.unconfirmedDelivery(params, "thread-follower-start-turn");
     }
     return "started";
   }
@@ -773,10 +861,11 @@ export class CodexDesktopBridge {
         const action = await this.deliverToOwner(params);
         this.activeThreads.add(params.threadId);
         this.activeThreadSinceMs.set(params.threadId, deliveryStartedAtMs);
-        this.deliveryEvent(params, "delivery_accepted", { action, openedThread });
+        this.deliveryEvent(params, "delivery_accepted", { action, openedThread, elapsedMs: Date.now() - deliveryStartedAtMs });
         return { threadId: params.threadId, action, openedThread, transport: "desktop-ipc" };
       } catch (error) {
         lastError = error;
+        if (error instanceof Error && error.name === "CodexDesktopDeliveryUnconfirmedError") throw error;
         if (!isDesktopOwnerLoading(error)) throw error;
         if (!openedThread) {
           openedThread = true;
@@ -794,11 +883,15 @@ export class CodexDesktopBridge {
   }
 
   async deliver(params: CodexDesktopTurnDelivery): Promise<CodexDesktopDelivery> {
+    const queuedAt = Date.now();
     this.deliveryEvent(params, "queued");
     const key = params.threadId;
     const previous = this.deliveryQueues.get(key);
     const scheduled = (previous ? previous.catch(() => undefined) : Promise.resolve())
-      .then(() => this.deliverNow(params));
+      .then(() => {
+        this.deliveryEvent(params, "queue_released", { elapsedMs: Date.now() - queuedAt });
+        return this.deliverNow(params);
+      });
     this.deliveryQueues.set(key, scheduled);
     try {
       return await scheduled;

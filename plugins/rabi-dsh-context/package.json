@@ -1,0 +1,9 @@
+{
+  "name": "rabi-dsh-context",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.mjs",
+  "files": ["index.mjs", "manager-client.mjs", "cordis.patch.yml", "README.md", "README_en.md"],
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "license": "MIT"
+}

@@ -74,6 +74,12 @@ public final class RabiConversationService extends Service {
     private RabiChatStore chatStore;
     private RokidCxrController glassController;
     private RabiGlassBridge glassBridge;
+    private com.rabi.link.modules.rokid.RabiDirectVideoSender directVideo;
+    private final android.content.SharedPreferences.OnSharedPreferenceChangeListener videoSettingsListener = (preferences, key) -> {
+        if (!RabiConversationSettings.KEY_DIRECT_VIDEO.equals(key)) return;
+        if (RabiConversationSettings.directVideoEnabled(this)) startDirectVideo();
+        else if (directVideo != null) directVideo.stop("视频已关闭");
+    };
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private boolean shutdownComplete;
@@ -185,6 +191,7 @@ public final class RabiConversationService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        RabiConversationSettings.videoPreferences(this).registerOnSharedPreferenceChangeListener(videoSettingsListener);
         createChannel();
         chatStore = new RabiChatStore(this);
         phoneAudioCapture = new RabiPhoneAudioCapture(this, new RabiPhoneAudioCapture.Listener() {
@@ -312,9 +319,11 @@ public final class RabiConversationService extends Service {
         cancelNetworkEventFallbackCheck();
         RabiGlassPcBackend target = backend;
         if (target != null) target.onNetworkAvailable();
+        startDirectVideo();
     }
 
     private void markNetworkUnavailable() {
+        if (directVideo != null) directVideo.stop("网络已断开，视频停止");
         networkKnownOffline = true;
         RabiGlassPcBackend target = backend;
         if (target != null) target.onNetworkUnavailable();
@@ -476,6 +485,11 @@ public final class RabiConversationService extends Service {
             return;
         }
         if (settings.inputMode == RabiConversationSettings.InputMode.GLASSES) {
+            if (glassController != null && inputMode == RabiConversationSettings.InputMode.GLASSES) {
+                if (RabiConversationSettings.directVideoEnabled(this)) startDirectVideo();
+                else if (directVideo != null) directVideo.stop("视频已关闭");
+                return;
+            }
             phoneAudioCapture.pause();
             backend.pauseAudioStream();
             setInputMode(RabiConversationSettings.InputMode.PAUSED);
@@ -541,6 +555,11 @@ public final class RabiConversationService extends Service {
                 }
             }
             @Override public void onGlassReviewRequested() { backend.requestConversationReview(RabiGlassPcBackend.SOURCE_GLASSES); }
+            @Override public void onGlassVideoH264(byte[] bytes) {
+                com.rabi.link.modules.rokid.RabiDirectVideoSender sender = directVideo;
+                if (sender != null) sender.sendH264(bytes);
+            }
+            @Override public void onGlassVideoState(String state) { updateRuntime("video", state); }
         }, values.getString("native_voice_access_key", ""), values.getString("native_voice_secret_key", ""));
         if (glassBridge != null) {
             glassBridge.start();
@@ -559,9 +578,11 @@ public final class RabiConversationService extends Service {
                 if (connected) {
                     backend.beginAudioStream(RabiGlassPcBackend.SOURCE_GLASSES);
                     setInputMode(RabiConversationSettings.InputMode.GLASSES);
+                    startDirectVideo();
                     updateRuntime("glasses", "眼镜已连接，可使用麦克风、HUD 和扬声器");
                     updateStatus("眼镜蓝牙已连接 · 眼镜模式持续聆听");
                 } else {
+                    if (directVideo != null) directVideo.stop("眼镜已断开，视频停止");
                     backend.pauseAudioStream();
                     setInputMode(RabiConversationSettings.InputMode.PAUSED);
                     updateRuntime("glasses", "眼镜模式不可用：蓝牙音频通道未连接；可切回手机模式");
@@ -597,6 +618,10 @@ public final class RabiConversationService extends Service {
     }
 
     private void stopGlassesBackend() {
+        if (directVideo != null) {
+            directVideo.dispose();
+            directVideo = null;
+        }
         if (glassController != null) {
             glassController.disconnect();
             glassController = null;
@@ -613,6 +638,33 @@ public final class RabiConversationService extends Service {
         backend.configure(relay.getBaseUrl(), relay.getToken(), RabiMobileDeviceIdentity.load(this));
         backend.reloadSettings();
         return true;
+    }
+
+    private void startDirectVideo() {
+        if (!BuildConfig.ROKID_VIDEO || shutdownComplete || networkKnownOffline || glassBridge == null || backend == null
+                || inputMode != RabiConversationSettings.InputMode.GLASSES
+                || !RabiConversationSettings.directVideoEnabled(this)) return;
+        if (directVideo == null) {
+            directVideo = new com.rabi.link.modules.rokid.RabiDirectVideoSender(this,
+                    new com.rabi.link.modules.rokid.RabiDirectVideoSender.Listener() {
+                        @Override public org.json.JSONObject exchangeOffer(String sdp) {
+                            try { return backend.exchangeVideoOffer(sdp); }
+                            catch (Exception error) { throw new IllegalStateException("Video signalling failed", error); }
+                        }
+                        @Override public void onReady() {
+                            if (glassBridge != null && inputMode == RabiConversationSettings.InputMode.GLASSES
+                                    && RabiConversationSettings.directVideoEnabled(RabiConversationService.this)) {
+                                updateRuntime("video", "手机与电脑已直连，正在启动眼镜视频");
+                                glassBridge.startVideoStream(15, 2_000_000);
+                            }
+                        }
+                        @Override public void onStopped(String reason) {
+                            if (glassBridge != null) glassBridge.stopVideoStream();
+                            updateRuntime("video", reason);
+                        }
+                    });
+        }
+        directVideo.start();
     }
 
     private void enqueueMedia(Uri uri, String contentType, String routeProfileId, String clientMessageId) {
@@ -956,6 +1008,10 @@ public final class RabiConversationService extends Service {
         if (explicitStop) stopSelf();
     }
 
-    @Override public void onDestroy() { shutdown(false); super.onDestroy(); }
+    @Override public void onDestroy() {
+        RabiConversationSettings.videoPreferences(this).unregisterOnSharedPreferenceChangeListener(videoSettingsListener);
+        shutdown(false);
+        super.onDestroy();
+    }
     @Override public IBinder onBind(Intent intent) { return null; }
 }

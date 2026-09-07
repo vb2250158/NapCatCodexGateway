@@ -168,7 +168,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `codexCwd`：目标 Desktop 任务的项目目录。它用于校验已保存 ID、同名任务消歧和新建位置；选择已有任务时自动采用任务自己的目录。
 - `codexMemoryConsolidationAgentEnabled`：是否把自动到点或手动发起的记忆沉淀交给独立 Codex Desktop 任务。默认关闭。关闭时仍按 72 小时自动触发，但由主人格处理；开启后任务名固定由主人格任务名派生为“`<主人格任务名> 记忆整理`”，主人格不再收到同一请求。独立任务投递失败时明确失败，不回退给主人格或备用 Runtime。
 - `codexMemoryConsolidationAgentModel`：独立记忆整理 Agent 的模型，默认 `gpt-5.6-terra`。只影响该独立任务的新轮次，不改变主人格、消息处理 Agent、计划秘书或计划执行 Agent。
-- `codexPlanAssistantEnabled`：是否启用当前 Route 的持久计划秘书。默认关闭；旧配置已经保存 `codexPlanAssistantSessions` 时按开启兼容读取。关闭后不再向人格提供秘书槽，也不再为这些任务自动套用秘书模型；已绑定任务仍保留，重新开启后继续复用。
+- `codexPlanAssistantEnabled`：是否启用当前 Route 的持久计划秘书。默认关闭；旧配置已经保存 `codexPlanAssistantSessions` 时按开启兼容读取。关闭后不再向人格提供秘书槽，也不再为这些任务自动套用秘书模型；已绑定任务仍保留，重新开启后继续复用。WebGUI 保存 Route 会等待 Manager 的路由目录事务完成并保留同一幂等键；短暂不可用时可安全重试同一项修改。
 - `codexPlanAssistantModel`：Manager 为当前 Route 的全部计划秘书统一选择的模型，默认 `gpt-5.6-terra`。WebGUI 只编辑这一处；秘书任务数组不再分别保存模型。旧配置若只在秘书条目里保存模型，读取时迁移为统一值，之后按统一配置运行和保存。调用方明确指定某一轮模型时仍尊重该选择。
 - `codexPlanAssistantSessions`：当前 Route 精确绑定的持久计划管理秘书列表，只保存完整任务 ID、可见名称、workspace、槽位序号和初始化时间。该列表与启用开关、统一模型分开保存，关闭秘书或修改模型都不会删除绑定。1 个时命名为“`<主会话显示 Name> 协助处理计划`”；多个时命名为“`<主会话显示 Name> 协助处理计划1`”“…计划2”。从 1 个扩容时会把原任务改名为“…计划1”；创建或改名时从 Desktop 侧栏显示的 `Name` 取前缀，不使用状态库中的原始 `name`；缩容只从 Route 解绑多余任务，不删除 Desktop 任务。Manager 在计划的独立 `secretaryBinding` 中保存当前负责秘书；业务 `taskBinding` 始终只指向执行任务。秘书负责计划/记忆、业务任务查重与续投，禁止执行调查、实现、测试或修改业务文件。该多任务能力尚未完成真实 Desktop 纵向验收，当前按实验能力展示。
 - `codexHooks.sessionContextEnabled`：默认 `true`。控制 `SessionStart` / `UserPromptSubmit`；打开、恢复、清空或压缩 Codex 任务，以及用户提交新消息时触发。

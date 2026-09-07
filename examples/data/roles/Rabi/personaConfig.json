@@ -1,6 +1,6 @@
 {
   "planWorkflow": {
-    "schemaVersion": 3,
+    "schemaVersion": 4,
     "archiveAfterHours": 72,
     "statuses": [
       {
@@ -26,8 +26,8 @@
         "state": "enabled",
         "label": "待补充信息",
         "labelEn": "Awaiting information",
-        "description": "分析已完成，但目标、范围、验收标准或实施依据仍不足，正在等待补充信息。",
-        "descriptionEn": "Analysis is complete, but the goal, scope, acceptance criteria, or implementation evidence is still insufficient and requires more information.",
+        "description": "分析已完成，但无法根据现有信息形成可审批的具体方案。",
+        "descriptionEn": "Analysis is complete, but the available information is insufficient to form a concrete proposal for approval.",
         "order": 1,
         "palette": { "accent": "#ea580c", "background": "#fff7ed", "foreground": "#c2410c" },
         "views": ["current", "plans"],

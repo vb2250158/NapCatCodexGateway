@@ -152,13 +152,12 @@ test("Outbox imports the shared FenneNote output implementation", () => {
 
 test("NapCat plugin shutdown uses only launch-owned child processes and recorded PIDs", () => {
   const plugin = source("plugins/builtin/io.rabiroute.manager.napcat-control/1.0.0/manager.mjs");
-  assert.match(plugin, /rememberLaunchPids/);
   assert.match(plugin, /const activeOperations = new Set/);
-  assert.match(plugin, /napcatManagerCtx\(rememberLaunch, rememberLaunchPids, assertAccepting\)/);
+  assert.match(plugin, /napcatManagerCtx\(assertAccepting\)/);
   assert.match(plugin, /accepting = false;[\s\S]*requestTracker\.stop\(\)[\s\S]*drainOperations\(\)/);
-  assert.match(plugin, /if \(result\.ok === true\)\s+releaseOwnership\(body\)/);
-  assert.match(plugin, /runWindowsTaskkill\(numericPid\)/);
-  assert.doesNotMatch(plugin, /stopNapcatInstanceEndpoint\(controlContext/);
+  assert.match(plugin, /runtime\.removeManagedNapcatInstance\(body\)/);
+  // Persisted NapcatLifecycleOwner owns process identity across Manager handovers.
+  assert.doesNotMatch(plugin, /rememberLaunchPids|ownedInstances|releaseOwnership|runWindowsTaskkill|process\.kill|stopNapcatInstanceEndpoint\(controlContext/);
 });
 
 test("Remote Agent rejects WebSocket work before HTTP request drain", () => {

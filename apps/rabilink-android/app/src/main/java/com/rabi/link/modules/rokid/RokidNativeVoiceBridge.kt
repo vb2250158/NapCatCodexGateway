@@ -65,6 +65,12 @@ final class RokidNativeVoiceBridge(
     private var pendingGlassPlaybackState = ""
     private var pendingGlassPlaybackLatch: CountDownLatch? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile private var videoStreamActive = false
+    private var videoRequestPending = false
+    private var videoFps = 15
+    private var videoBitrate = 2_000_000
+    private var videoStreamGeneration = 0
+    private var lastVideoAt = 0L
     @Volatile private var phoneDeviceAudioHandshakeGeneration = 0
     @Volatile private var phoneDeviceVideoAudioHandshakeGeneration = 0
     @Volatile private var phoneDeviceVideoAudioHandshakeActive = false
@@ -252,6 +258,17 @@ final class RokidNativeVoiceBridge(
 
         override fun onVideoH264Stream(buffer: ByteBuffer) {
             super.onVideoH264Stream(buffer)
+            if (videoStreamActive && buffer.hasRemaining()) {
+                val copy = buffer.duplicate()
+                if (copy.remaining() > 1024 * 1024) {
+                    mainHandler.post { stopVideoStream(); listener.onGlassVideoState("视频帧超出传输上限") }
+                } else {
+                    val bytes = ByteArray(copy.remaining())
+                    copy.get(bytes)
+                    lastVideoAt = android.os.SystemClock.elapsedRealtime()
+                    listener.onGlassVideoH264(bytes)
+                }
+            }
             handlePhoneDeviceVideoAudioVideo("onVideoH264Stream", buffer.remaining(), "h264")
         }
 
@@ -319,6 +336,7 @@ final class RokidNativeVoiceBridge(
         override fun onConnectionInfoAvailable(info: WifiP2pInfo) {
             log("Phone SDK P2P connection info groupFormed=${info.groupFormed} isGroupOwner=${info.isGroupOwner} ownerAddress=${info.groupOwnerAddress?.hostAddress.orEmpty()}")
             probePhoneP2p(logResult = true)
+            if (info.groupFormed) mainHandler.post { requestPendingVideo() }
         }
 
         override fun onSelfDeviceAvailable(device: WifiP2pDevice) {
@@ -346,6 +364,7 @@ final class RokidNativeVoiceBridge(
     }
 
     override fun stop() {
+        stopVideoStream()
         synchronized(glassPlaybackLock) {
             if (pendingGlassPlaybackId.isNotEmpty() && pendingGlassPlaybackState.isEmpty()) {
                 pendingGlassPlaybackState = "playback_failed"
@@ -855,7 +874,95 @@ final class RokidNativeVoiceBridge(
         }.isSuccess
     }
 
+    override fun startVideoStream(fps: Int, bitrate: Int) {
+        if (videoStreamActive) return
+        if (phoneDeviceVideoAudioHandshakeActive) {
+            listener.onGlassVideoState("视频诊断正在占用摄像头")
+            return
+        }
+        start()
+        val service = PSecuritySDK.getAbsDeviceInfoService()
+        if (service == null) { listener.onGlassVideoState("眼镜视频服务不可用"); return }
+        val current = ++videoStreamGeneration
+        videoStreamActive = true
+        videoRequestPending = true
+        videoFps = fps.coerceIn(1, 30)
+        videoBitrate = bitrate.coerceIn(128_000, 8_000_000)
+        lastVideoAt = android.os.SystemClock.elapsedRealtime()
+        try {
+            val wifi = PSecuritySDK.getWifiP2PClientService()
+            requireNotNull(wifi) { "P2P service unavailable" }
+            if (!phoneP2pListenerRegistered) {
+                wifi.addWifiP2PClientListener(phoneP2pListener)
+                phoneP2pListenerRegistered = true
+            }
+            wifi.isConnect { connected ->
+                mainHandler.post {
+                    if (current != videoStreamGeneration) return@post
+                    if (connected) requestPendingVideo()
+                    else if (PSecuritySDK.getClassicBlueToothClientService()?.isConnected() == true) probePhoneP2pConnection()
+                    else {
+                        val candidates = BluetoothAdapter.getDefaultAdapter()?.bondedDevices.orEmpty().filter { isLikelyRokidGlassDevice(it) }
+                        if (candidates.size != 1 || !connectPhoneBtBondedGlass(autoStartP2p = true)) {
+                            stopVideoStream()
+                            listener.onGlassVideoState("无法确定唯一已配对眼镜，请检查 Rokid 连接")
+                        }
+                    }
+                }
+            }
+            mainHandler.postDelayed(object : Runnable {
+                override fun run() {
+                    if (current != videoStreamGeneration || !videoStreamActive) return
+                    if (android.os.SystemClock.elapsedRealtime() - lastVideoAt >= (if (videoRequestPending) 30_000 else 10_000)) {
+                        stopVideoStream()
+                        listener.onGlassVideoState("眼镜视频超时，未收到连续画面")
+                    } else mainHandler.postDelayed(this, 10_000)
+                }
+            }, 10_000)
+        } catch (error: Exception) {
+            stopVideoStream()
+            log("Video start failed: ${error.javaClass.simpleName}")
+            listener.onGlassVideoState("眼镜视频启动失败")
+        }
+    }
+
+    override fun stopVideoStream() {
+        videoStreamGeneration++
+        if (!videoStreamActive) return
+        videoStreamActive = false
+        videoRequestPending = false
+        try {
+            PSecuritySDK.getAbsDeviceInfoService()?.stopVideoStream("RabiDirectVideo") { success ->
+                log("Video stop acknowledged=$success")
+            }
+        } catch (error: Exception) { log("Video stop failed: ${error.javaClass.simpleName}") }
+    }
+
+    private fun requestPendingVideo() {
+        if (!videoStreamActive || !videoRequestPending) return
+        videoRequestPending = false
+        lastVideoAt = android.os.SystemClock.elapsedRealtime()
+        val current = videoStreamGeneration
+        try {
+            PSecuritySDK.getAbsDeviceInfoService()?.requestVideoStream("RabiDirectVideo", GlassVideoStreamParam().apply {
+                fps = videoFps
+                bitrate = videoBitrate
+            }) { success ->
+                mainHandler.post {
+                    if (current != videoStreamGeneration) return@post
+                    if (!success) { stopVideoStream(); listener.onGlassVideoState("眼镜拒绝启动视频") }
+                    else listener.onGlassVideoState("已请求眼镜视频，等待画面")
+                }
+            }
+        } catch (error: Exception) {
+            stopVideoStream()
+            log("Video capture request failed: ${error.javaClass.simpleName}")
+            listener.onGlassVideoState("眼镜视频启动失败")
+        }
+    }
+
     fun requestPhoneDeviceVideoAudioHandshake(): Boolean {
+        if (videoStreamActive) { log("Video probe unavailable while direct video is running"); return false }
         initPhoneSdk()
         registerMessageListener()
         val service = runCatching { PSecuritySDK.getAbsDeviceInfoService() }

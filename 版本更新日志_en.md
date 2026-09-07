@@ -8,6 +8,21 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+### 0.2.4 source update
+
+- NapCat lifecycle operations now follow route bindings, with one QQ account per route. Unbinding blocks new operations before verifying process identity and stopping owned instances. Login controls share binding, login and stop-failure states.
+- Persona pages add paginated Agent final-reply history. Hook switches and completion-delivery rules are stored in persona configuration, with project, plan and session filters and deduplicated delivery through existing QQ or speech endpoints.
+- Agent pages can install or update packaged Codex and DSH context hooks. Codex checks task model settings before delivery and avoids automatic resends when a receipt is uncertain, retaining the original task and diagnostics.
+- Message envelopes include their send time. Speech synthesis receipts retain delivery tracing, and work-cycle recovery recognizes completed failure receipts instead of treating them as pending sends.
+- A Windows source-build launcher reuses the installed Host and data, verifies the new generation and WebGUI content, and allows a short recovery window during final Host startup checks.
+- RabiLink adds experimental direct WebRTC video. Relay carries signalling only; the PC stores bounded H.264 streams. Glass camera capture, sustained decoding and public mobile networks still require acceptance; see [direct video](docs/rabilink-direct-video_en.md). This records a source version; installer delivery is verified separately.
+- Submission validation: the initial backend run had 1,870 passes, 24 failures and 3 skips out of 1,897 tests. After updating stale message-time and NapCat lifecycle assertions, all 24 failed cases passed with one test process at a time. WebGUI (262), DSH hooks (3), dynamic-address and mutation-audit checks (6), Windows Host tests, the full build, Android unit tests and acceptance APK compilation passed.
+- The script run had 160 passes, 2 installation-preparation timeouts and 36 TODO cases. Both timeouts passed when rerun separately; TODO cases remain pending.
+
+### Directory-watch degradation diagnostics
+
+- Configuration and plugin-directory watchers now write degradation, changed failures, and recovery to the shared Manager log, retaining the watcher, attempt, child PID, duration, timeout, restart count, and redacted error stack. Ordinary status refreshes do not repeat records; earlier failures remain available after recovery.
+
 ### Source submission review and delivery limits (0.2.3, Unreleased)
 
 - This submission publishes source only, not a Windows runtime package or installation update. Home Assistant help links reject URLs containing a username or password so credentials do not enter browser links.
@@ -46,6 +61,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 ### Message adapter entries
 
 - Removed the Xiaomi speaker / XiaoAI add menu, quick setup choice, rule category, built-in runtime registration, and discovery entry; Xiaomi Home remains available. Legacy `xiaoai` configuration fields and message-source identifiers remain readable, but no dedicated speaker receiver is registered. Remove the adapter from old Routes and use Xiaomi Home where appropriate. Historical bridge material is no longer current integration guidance.
+
+### Plan status semantics
+
+- The stock information-needed state is now reserved for completed analysis that still cannot form a concrete approvable proposal. A current reproduction gap, suspected historical fix, missing target package, pending QA, or pending closure decision no longer uses this state; each remains in analysis or moves to the package, QA, or closed role as appropriate.
+- `planWorkflow.schemaVersion` is now 4. Migration changes only untouched stock Chinese and English descriptions in v2/v3 configurations, preserving persona customizations and Agent-retired states. The orchestration Skill and Agent context no longer refer to a nonexistent Rabi acceptance-pending status.
 
 ### Data-mutation logging
 

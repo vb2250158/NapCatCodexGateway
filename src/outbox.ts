@@ -881,7 +881,9 @@ export async function inspectAgentReplyDelivery(
     if (entry.event === "send_requested") requestSeen = true;
     const status = String(data.status ?? "");
     if (["sent", "failed", "blocked", "draft"].includes(status)) {
-      if (status === "sent" && !String(data.sentMessageId ?? data.sentFileId ?? "").trim()) {
+      const speechSynthesisReceipt = entry.event === "rabispeech_tts_sent"
+        && data.targetType === "voice_transcript" && Boolean(outboxData(data.speech));
+      if (status === "sent" && !String(data.sentMessageId ?? data.sentFileId ?? "").trim() && !speechSynthesisReceipt) {
         requestSeen = true;
         continue;
       }
@@ -1676,7 +1678,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         targetType: "voice_transcript",
         sentMessageId: speech.playbackJob
       };
-      appendOutboxLog(options, route, "info", "rabispeech_tts_sent", text.slice(0, 500), withConversation({ ...result, speech }));
+      appendOutboxLog(options, route, "info", "rabispeech_tts_sent", text.slice(0, 500), withDeliveryTrace(withConversation({ ...result, speech })));
       return result;
     } catch (error) {
       const result: AgentReplyResult = {
@@ -1688,7 +1690,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         targetType: "voice_transcript",
         draft: { text, targetType: "voice_transcript" }
       };
-      appendOutboxLog(options, route, "error", "rabispeech_tts_failed", result.reason ?? "failed", result);
+      appendOutboxLog(options, route, "error", "rabispeech_tts_failed", result.reason ?? "failed", withDeliveryTrace({ ...result }));
       return result;
     }
   }

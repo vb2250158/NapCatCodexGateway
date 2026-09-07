@@ -7,6 +7,19 @@ import android.content.SharedPreferences;
 public final class RabiConversationSettings {
     private static final String PREFS = "rabi_conversation_settings";
     private static final String KEY_INPUT_MODE = "inputMode";
+    static final String KEY_DIRECT_VIDEO = "directVideoEnabled";
+
+    static SharedPreferences videoPreferences(Context context) {
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    public static boolean directVideoEnabled(Context context) {
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_DIRECT_VIDEO, false);
+    }
+
+    public static void setDirectVideoEnabled(Context context, boolean enabled) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_DIRECT_VIDEO, enabled).apply();
+    }
     private static final String KEY_PROACTIVITY_PREFERENCE = "proactivityPreference";
     private static final String KEY_AUTO_START_VOICE_SERVICE = "autoStartVoiceService";
     private static final String KEY_AUDIO_RETENTION_HOURS = "audioRetentionHours";

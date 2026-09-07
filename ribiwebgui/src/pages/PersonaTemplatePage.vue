@@ -5,6 +5,8 @@ import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import PersonaDesktopPetPanel from "../components/PersonaDesktopPetPanel.vue";
 import PersonaIdentityRelationsCard from "../components/PersonaIdentityRelationsCard.vue";
+import PersonaChatHistory from "../components/PersonaChatHistory.vue";
+import AgentCompletionDeliveryRules from "../components/AgentCompletionDeliveryRules.vue";
 import { managerEventSource } from "../managerApi";
 import { useI18n } from "../i18n";
 import { pluginCatalogStore } from "../pluginCatalogStore";
@@ -28,13 +30,15 @@ import {
 } from "../persona/personaVoiceConfirmation";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { useSpeechStore } from "../stores/speechStore";
-import type { NotificationRule, NotificationScheduleDefinition, PersonaAutomationRuleDefinition } from "../types";
+import type { CodexHookSettings, NotificationRule, NotificationScheduleDefinition, PersonaAutomationRuleDefinition } from "../types";
 import {
   DEFAULT_RECENT_MESSAGE_LIMIT,
   MAX_RECENT_MESSAGE_LIMIT,
   RECENT_MESSAGE_ENDPOINTS,
   normalizeRecentMessageLimit,
   normalizeSpeechTriggerKeywords,
+  normalizeCodexHookSettings,
+  type AgentCompletionDeliveryRule,
   type RecentMessageEndpoint
 } from "@shared/gatewayConfigModel";
 import { isSpeechRouteVariableKey } from "@shared/speechControlContract";
@@ -66,9 +70,11 @@ const router = useRouter();
 const { t } = useI18n();
 const ruleDialog = ref(false);
 const automationDialog = ref(false);
-const automationWorkspaceTab = ref<"messages" | "schedule">("messages");
-type PersonaPageTab = "profile" | "expression" | "avatar" | "identity" | "context" | "automation";
+const automationWorkspaceTab = ref<"messages" | "schedule" | "hooks">("messages");
+const templateVariablesDialog = ref(false);
+type PersonaPageTab = "profile" | "expression" | "avatar" | "identity" | "context" | "automation" | "chat-history";
 const activePersonaPageTab = ref<PersonaPageTab>("profile");
+const chatHistoryVersion = ref(0);
 const activeAutomationId = ref("");
 const activeRuleIndex = ref(0);
 const ruleMatchParamsOpen = ref(true);
@@ -553,6 +559,36 @@ function setLanguageStyleSkillUrl(value: unknown): void {
   store.touch();
 }
 
+function codexHookEnabled(key: Exclude<keyof CodexHookSettings, "completionDeliveries">): boolean {
+  return gateway.value?.codexHooks?.[key] !== false;
+}
+
+function setCodexHookSetting(key: Exclude<keyof CodexHookSettings, "completionDeliveries">, enabled: boolean | null): void {
+  if (!gateway.value) return;
+  gateway.value.codexHooks = {
+    ...gateway.value.codexHooks,
+    sessionContextEnabled: gateway.value.codexHooks?.sessionContextEnabled !== false,
+    reasoningContextEnabled: gateway.value.codexHooks?.reasoningContextEnabled !== false,
+    planTaskCompletionEnabled: gateway.value.codexHooks?.planTaskCompletionEnabled !== false,
+    agentCommunicationEnforcementEnabled: gateway.value.codexHooks?.agentCommunicationEnforcementEnabled !== false,
+    onlyPrimaryPersonaCanSendMessages: gateway.value.codexHooks?.onlyPrimaryPersonaCanSendMessages === true,
+    [key]: enabled === true
+  };
+  for (const other of store.gateways) {
+    if (other.agentRoleId === gateway.value.agentRoleId) other.codexHooks = { ...gateway.value.codexHooks };
+  }
+  store.touch();
+}
+
+function setCompletionDeliveries(rules: AgentCompletionDeliveryRule[]): void {
+  if (!gateway.value) return;
+  const hooks = { ...normalizeCodexHookSettings(gateway.value.codexHooks), completionDeliveries: rules };
+  for (const other of store.gateways) {
+    if (other.agentRoleId === gateway.value.agentRoleId) other.codexHooks = { ...hooks };
+  }
+  store.touch();
+}
+
 function recentMessageLimitFor(endpoint: RecentMessageEndpoint): number {
   return normalizeRecentMessageLimit(gateway.value?.recentMessageLimits?.[endpoint]);
 }
@@ -837,6 +873,7 @@ function startPersonaEvents(): void {
   if (managerEvents) return;
   managerEvents = managerEventSource("/api/events");
   managerEvents.addEventListener("ready", () => {
+    chatHistoryVersion.value += 1;
     if (managerEventsReady) {
       if (voiceIdentityLoaded.value) void refreshVoiceIdentityReview();
     }
@@ -845,6 +882,9 @@ function startPersonaEvents(): void {
   managerEvents.addEventListener("persona_voice_identity_changed", (raw) => {
     if (voiceIdentityLoaded.value && relevantPersonaSyncEvent(raw)) void refreshVoiceIdentityReview();
   });
+  managerEvents.addEventListener("persona_chat_history_changed", (raw) => {
+    if (personaSyncEventData(raw)?.roleId === gateway.value?.agentRoleId) chatHistoryVersion.value += 1;
+  });
   managerEvents.addEventListener("identity_relation_changed", (raw) => {
     if (relevantPersonaSyncEvent(raw)) identityRelationsVersion.value += 1;
   });
@@ -852,6 +892,7 @@ function startPersonaEvents(): void {
     const data = personaSyncEventData(raw);
     const roleId = gateway.value?.agentRoleId || "";
     if (roleId && (!data?.roleId || data.roleId === roleId)) identityRelationsVersion.value += 1;
+    if (roleId && (!data?.roleId || data.roleId === roleId)) chatHistoryVersion.value += 1;
     if (voiceIdentityLoaded.value && relevantPersonaSyncEvent(raw)) void refreshVoiceIdentityReview();
   });
 }
@@ -879,7 +920,7 @@ watch(() => gateway.value?.agentRoleId, (roleId) => {
 }, { immediate: true });
 
 watch(hasPersona, (enabled) => {
-  if (!enabled && ["expression", "avatar", "identity"].includes(activePersonaPageTab.value)) {
+  if (!enabled && ["expression", "avatar", "identity", "chat-history"].includes(activePersonaPageTab.value)) {
     activePersonaPageTab.value = "profile";
   }
 });
@@ -976,10 +1017,16 @@ watch(() => store.selectedGatewayId, (id) => {
           <v-tab value="identity" prepend-icon="mdi-account-group-outline" :disabled="!hasPersona">身份关系</v-tab>
           <v-tab value="context" prepend-icon="mdi-message-text-clock-outline">消息上下文</v-tab>
           <v-tab value="automation" prepend-icon="mdi-robot-outline">自动化</v-tab>
+          <v-tab value="chat-history" prepend-icon="mdi-message-text-outline" :disabled="!hasPersona">聊天记录</v-tab>
         </v-tabs>
       </v-card>
 
       <v-window v-model="activePersonaPageTab" class="persona-page-window" :touch="false">
+        <v-window-item value="chat-history">
+          <div class="persona-tab-panel">
+            <PersonaChatHistory v-if="hasPersona && activePersonaPageTab === 'chat-history'" :role-id="gateway.agentRoleId || ''" :version="chatHistoryVersion" />
+          </div>
+        </v-window-item>
         <v-window-item value="profile">
           <div class="persona-tab-panel">
 
@@ -1440,8 +1487,9 @@ watch(() => store.selectedGatewayId, (id) => {
         </div>
 
         <v-tabs v-model="automationWorkspaceTab" class="automation-tabs" color="secondary" grow>
-          <v-tab value="messages" prepend-icon="mdi-message-processing-outline">收到消息时</v-tab>
-          <v-tab value="schedule" prepend-icon="mdi-calendar-clock-outline">定时任务</v-tab>
+          <v-tab value="messages" prepend-icon="mdi-message-processing-outline">接收消息</v-tab>
+          <v-tab value="schedule" prepend-icon="mdi-calendar-clock-outline">定制任务</v-tab>
+          <v-tab value="hooks" prepend-icon="mdi-hook">Agent Hook</v-tab>
         </v-tabs>
 
         <v-window v-model="automationWorkspaceTab" class="automation-window">
@@ -1569,28 +1617,105 @@ watch(() => store.selectedGatewayId, (id) => {
               </button>
             </div>
           </v-window-item>
+          <v-window-item value="hooks">
+                  <div class="dependency-panel mt-3">
+                    <div class="section-title-row compact-row">
+                      <div>
+                        <div class="section-title small-title">Agent Hook</div>
+                        <div class="section-note">统一管理当前人格的 Hook。首次使用时，在 Agent 端点击“更新 Hook 到 Agent”安装事件埋点。</div>
+                      </div>
+                    </div>
+                    <div class="catalog-param-grid mt-2">
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="codexHookEnabled('sessionContextEnabled')"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          label="会话入口上下文"
+                          @update:model-value="value => setCodexHookSetting('sessionContextEnabled', value)"
+                        />
+                        <div class="section-note">打开、恢复、清空或压缩 Agent 会话，以及用户提交新消息时触发。Hook：<code>SessionStart</code> / <code>UserPromptSubmit</code>。</div>
+                      </div>
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="codexHookEnabled('reasoningContextEnabled')"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          label="推理期上下文刷新"
+                          @update:model-value="value => setCodexHookSetting('reasoningContextEnabled', value)"
+                        />
+                        <div class="section-note">Agent 调用工具前后触发，只注入本轮新命中的计划、记忆或技能上下文。Hook：<code>PreToolUse</code> / <code>PostToolUse</code>。</div>
+                      </div>
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="codexHookEnabled('planTaskCompletionEnabled')"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          label="计划任务会话完成通知"
+                          @update:model-value="value => setCodexHookSetting('planTaskCompletionEnabled', value)"
+                        />
+                        <div class="section-note">绑定计划的执行任务输出本轮最终回答后触发，经 Rabi 投递到该人格 Route 绑定的会话。Hook：<code>Stop</code>；默认开启。</div>
+                      </div>
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="codexHookEnabled('agentCommunicationEnforcementEnabled')"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          label="强制使用 RabiAgent 消息投递接口"
+                          @update:model-value="value => setCodexHookSetting('agentCommunicationEnforcementEnabled', value)"
+                        />
+                        <div class="section-note">开启后，本 Route 的主人格、计划 Agent、计划秘书和消息处理 Agent 不能绕过 Rabi 直接操作其它持久 Agent 会话。通过 Rabi 投递时，发送方必须明确是否要求回复；要求回复后，目标 Agent 每轮结束仍未正式回复，Manager 会在五分钟后提醒。Hook：<code>PreToolUse</code> / <code>Stop</code>；默认开启。</div>
+                      </div>
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="gateway.codexHooks?.onlyPrimaryPersonaCanSendMessages === true"
+                          color="warning"
+                          density="compact"
+                          hide-details
+                          label="仅允许主人格发送消息"
+                          @update:model-value="value => setCodexHookSetting('onlyPrimaryPersonaCanSendMessages', value)"
+                        />
+                        <div class="section-note">默认关闭。开启后只有当前绑定的 主人格会话可发送；计划 Agent、计划秘书和消息处理 Agent 会被拒绝。</div>
+                      </div>
+                    </div>
+                  </div>
+            <AgentCompletionDeliveryRules :model-value="gateway.codexHooks?.completionDeliveries ?? []"
+              :gateways="store.gateways" @update:model-value="setCompletionDeliveries" />
+          </v-window-item>
         </v-window>
       </v-card>
 
-      <v-card class="app-card glass-card section-card">
-        <div class="section-title-row">
-          <div>
-            <div class="section-title">可用模板变量</div>
-            <div class="section-note">模板中用 `{变量名}` 引用。</div>
-          </div>
-        </div>
-        <div class="template-vars">
-          <div v-for="item in templateVars" :key="item.name" class="template-var">
-            <code>{ {{ item.name }} }</code>
-            <span>{{ item.description }}</span>
-          </div>
-        </div>
-      </v-card>
+      <div>
+        <v-btn variant="text" prepend-icon="mdi-code-braces" @click="templateVariablesDialog = true">可用模板变量</v-btn>
+      </div>
 
           </div>
         </v-window-item>
       </v-window>
     </template>
+
+    <v-dialog v-model="templateVariablesDialog" max-width="760" scrollable aria-labelledby="template-variables-title">
+      <v-card>
+        <v-card-title id="template-variables-title">可用模板变量</v-card-title>
+        <v-card-text>
+          <div class="section-note mb-4">模板中用 `{变量名}` 引用。</div>
+          <div class="template-vars">
+            <div v-for="item in templateVars" :key="item.name" class="template-var">
+              <code>{ {{ item.name }} }</code>
+              <span>{{ item.description }}</span>
+            </div>
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="templateVariablesDialog = false">关闭</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <v-dialog v-model="automationDialog" max-width="1040" class="editor-dialog">
       <v-card v-if="activeAutomation && gateway" class="app-card editor-dialog-card automation-editor">

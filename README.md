@@ -17,7 +17,7 @@ English | <a href="./README_zh.md">简体中文</a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="Current version: 0.2.3" src="https://img.shields.io/badge/version-0.2.3-3178c6">
+  <img alt="Current version: 0.2.4" src="https://img.shields.io/badge/version-0.2.4-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -47,7 +47,9 @@ A portable ZIP and `SHA256SUMS.txt` are also published. The ZIP uses the `RabiRo
 
 ### Run from source
 
-Requires Node.js 20 or newer and npm.
+For a full Windows source build, double-click `Start-RabiRoute-FromSource.bat`. It builds and starts Host, Manager, WebGUI, and the tray while retaining installed data. Requires an existing RabiRoute installation, Node.js/npm, and the .NET 9 SDK; see [source startup](docs/getting-started_en.md).
+
+The commands below run only the backend and require Node.js 20 or newer and npm.
 
 ```bash
 git clone https://github.com/vb2250158/RabiRoute.git
@@ -70,7 +72,7 @@ The manual trigger performs a real delivery. See [Complete the first Route](docs
 
 ## Current capabilities
 
-The repository version is `0.2.3`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+The repository version is `0.2.4`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
 
 | Area | Status | What it provides |
 | --- | --- | --- |
@@ -90,7 +92,7 @@ See [Current capabilities and maturity](docs/current-capabilities_en.md) for com
 
 ## Recent changes
 
-### 0.2.3: durable Manager state and client recovery
+### 0.2.4: durable Manager state and client recovery
 
 - Plan, memory, feedback, and route-catalog mutations now use revision checks, stable idempotency keys, generation fences, worker ownership, and recoverable receipts instead of direct parent-process writes.
 - Plan startup recovery publishes a complete canonical package before retiring legacy files. Storage leases and durable-delivery ownership stay alive during long work and fail closed if ownership changes.

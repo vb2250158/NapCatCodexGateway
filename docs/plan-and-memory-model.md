@@ -74,9 +74,9 @@ data/roles/<RoleId>/identity-relations/events.jsonl
 关闭
 ```
 
-业务代码通过 `planWorkflow.roles` 查找分析、待补充信息、审批、执行、打包、QA、讨论、暂停、完成和关闭对应的 key。默认配置下，仍在调查和分析时使用“分析中”；分析已经完成，但目标、范围、验收标准或实施依据仍不足时使用“待补充信息”；完整审批合同正式等待回执时使用“待审批”；批准或用户直接授权后使用“执行中”。Manager 将 `plan.status` 的 key 与配置中的 label、description、palette、order 和 views 一起返回；客户端不解释 key，也不从步骤、`waitingFor` 或审批资料派生第二套状态。
+业务代码通过 `planWorkflow.roles` 查找分析、待补充信息、审批、执行、打包、QA、讨论、暂停、完成和关闭对应的 key。默认配置下，仍在调查和分析时使用“分析中”；只有分析已经完成，但现有信息仍无法形成可审批的具体方案，且缺失信息会影响原因、改法、实施范围或验收合同时，才使用“待补充信息”；完整审批合同正式等待回执时使用“待审批”；批准或用户直接授权后使用“执行中”。暂未复现、疑似历史已修复、等待目标包、等待 QA 或等待是否关闭都不属于“待补充信息”。开发侧完成但缺目标包或纳入证明时使用“等待打包”，目标包确认但缺 QA 结论时使用“等待 QA”，确认问题无效或历史已修复且无需验收时凭证据使用“关闭”。Manager 将 `plan.status` 的 key 与配置中的 label、description、palette、order 和 views 一起返回；客户端不解释 key，也不从步骤、`waitingFor` 或审批资料派生第二套状态。
 
-`planWorkflow.schemaVersion=3` 取消步骤状态字段。现有 v1/v2 人格配置第一次读取时会保留自定义状态和相对顺序；v1 还会在分析状态后加入默认“待补充信息”定义，随后写回 v3。完成迁移后不会再次补回被 Agent 通过状态接口移除的定义。
+`planWorkflow.schemaVersion=4` 保留 v3 取消步骤状态字段的结构，并收窄默认“待补充信息”说明。现有 v1/v2/v3 人格配置第一次读取时会保留自定义状态和相对顺序；v1 还会在分析状态后加入默认“待补充信息”定义。v2/v3 只替换仍使用旧默认 key、label 和说明的中英文说明，不覆盖人格自定义说明，也不会补回或重新启用被 Agent 移除的状态。
 
 状态目录通过 `GET /api/roles/:roleId/plan-statuses` 读取；Agent 可使用同一路径的 `POST` 新增状态、`PATCH /:statusKey` 修改展示和行为、`DELETE /:statusKey` 移除状态。写请求必须携带 `If-Match` 与 `Idempotency-Key`。状态 key 不允许原地改名。移除时必须提供 `replacementKey`：Manager 先迁移仍在使用该状态的未归档计划，再把旧定义保留为 `retired`，使已归档计划和追加式历史仍可解析。只有历史引用也不存在时，后续维护才可物理删除定义。
 
@@ -223,9 +223,9 @@ WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles
 
 `steps` 是计划的有序执行路径，不保存独立状态。顶层 `currentStepId` 指向当前步骤，`completedAt` 记录已经完成的步骤；后续步骤不需要“未开始”字段。计划阶段只写入 `plan.status`，状态名称和说明统一从 `personaConfig.json.planWorkflow.statuses` 读取。`detail`、`waitingFor`、`blockedBy`、`approvalRequest` 和步骤 ID 只提供执行、等待与审批证据。Manager 维护步骤的 `startedAt` 与 `completedAt`。
 
-分析后确认实施所需信息不足时写入 `planWorkflow.roles.informationNeeded` 指向的 key，并在 `waitingFor` 中列出缺少的具体信息和提供者。信息补齐后恢复为 `roles.analysis`。明确等待讨论时写入 `roles.discussion` 指向的 key；普通暂停使用 `roles.paused`。恢复时按实际阶段选择 analysis 或 execution role 指向的 key。
+分析完成后，如果现有信息仍无法形成可审批的具体方案，且缺失信息会影响原因、改法、范围或验收合同，写入 `planWorkflow.roles.informationNeeded` 指向的 key，并在 `waitingFor` 中列出缺少的具体信息和提供者。信息补齐后恢复为 `roles.analysis`。不能因为暂未复现、疑似历史已修复、缺目标包、等待 QA 或等待是否关闭而使用该状态。明确等待讨论时写入 `roles.discussion` 指向的 key；普通暂停使用 `roles.paused`。恢复时按实际阶段选择 analysis 或 execution role 指向的 key。
 
-需要审批的当前步骤应带完整 `approvalRequest`。`approver`、`request`、`recommendation`、`alternatives` 和 `reason` 说明审批人、决定、推荐、备选与原因；`files` 逐项写路径、`create/modify/delete/move` 和具体改动；`commands` 写完整命令、用途和预期影响；`changes` 写配置、数据库、云环境或外部系统目标；`validation`、`rollback`、`outOfScope` 分别声明验收、回退和明确排除范围；`requestedAt`、`sourceMessageId / feedbackId`、`responseStatus` 记录请求来源与回执。`files / commands / changes` 至少一类非空。缺必要栏目的审批步骤由 Manager 标为 `presentation.approval.state=incomplete`、`enabled=false`。仍可继续独立分析时使用 analysis role；分析后确认关键资料不足时使用 informationNeeded role。合同完整且 `responseStatus=pending` 后，Agent 把 `plan.status` 写为 approval role 指向的 key；Manager 同时返回 `presentation.approval.state=ready` 和 `enabled=true`，但不会替 Agent 改写状态。
+需要审批的当前步骤应带完整 `approvalRequest`。`approver`、`request`、`recommendation`、`alternatives` 和 `reason` 说明审批人、决定、推荐、备选与原因；`files` 逐项写路径、`create/modify/delete/move` 和具体改动；`commands` 写完整命令、用途和预期影响；`changes` 写配置、数据库、云环境或外部系统目标；`validation`、`rollback`、`outOfScope` 分别声明验收、回退和明确排除范围；`requestedAt`、`sourceMessageId / feedbackId`、`responseStatus` 记录请求来源与回执。`files / commands / changes` 至少一类非空。缺必要栏目的审批步骤由 Manager 标为 `presentation.approval.state=incomplete`、`enabled=false`。仍可继续独立分析时使用 analysis role；只有分析已结束但无法形成可审批具体方案时使用 informationNeeded role。合同完整且 `responseStatus=pending` 后，Agent 把 `plan.status` 写为 approval role 指向的 key；Manager 同时返回 `presentation.approval.state=ready` 和 `enabled=true`，但不会替 Agent 改写状态。
 
 Manager 在读取边界兼容旧计划：旧 `未开始` 读为 `暂停`；旧 `进行中` 按完整待审批合同、旧步骤执行标记依次映射为 `待审批 / 执行中 / 分析中`；旧 `已完成` 读为 `完成`；旧 `已归档` 读为 `status=关闭, archiveStatus=已归档`。旧 `workPhase`、`discussionState` 和手写 `isBlocked` 只参与一次兼容读取，并在下一次规范 POST/PATCH 时清理。系统不会猜测审批人、来源、推荐方案、备选或请求时间。
 

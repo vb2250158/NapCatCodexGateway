@@ -25,7 +25,7 @@ test("Gateway mutations retain a stable operation id and fence with the loaded r
   assert.match(store, /value\?\.routeConfigHash/);
   assert.match(store, /applyRouteCatalogVersion\(body\.routeCatalog\)/);
   assert.match(store, /committedRouteCatalogRevision\(body, pendingMutation\)/);
-  assert.equal(GATEWAY_MUTATION_TIMEOUT_MS, 12_000);
+  assert.equal(GATEWAY_MUTATION_TIMEOUT_MS, 35_000);
   assert.match(store, /boundedRouteCatalogMutationFetch\(`\$\{apiBase\}\/gateways`/);
 });
 

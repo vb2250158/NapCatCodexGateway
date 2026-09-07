@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.2.3" src="https://img.shields.io/badge/version-0.2.3-3178c6">
+  <img alt="当前版本：0.2.4" src="https://img.shields.io/badge/version-0.2.4-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -47,7 +47,9 @@ Agent 负责回答、写代码、调用工具和执行任务。RabiRoute 负责�
 
 ### 从源码运行
 
-需要 Node.js 20 或更高版本，以及 npm。
+Windows 完整源码构建启动：双击根目录 `Start-RabiRoute-FromSource.bat`，构建并启动 Host、Manager、WebGUI 和托盘，沿用现有安装版的数据。需要已安装 RabiRoute、Node.js/npm 和 .NET 9 SDK；详见[源码启动说明](docs/getting-started.md)。
+
+以下命令只启动后端，需要 Node.js 20 或更高版本，以及 npm。
 
 ```bash
 git clone https://github.com/vb2250158/RabiRoute.git
@@ -70,7 +72,7 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 
 ## 当前能力
 
-仓库当前版本为 `0.2.3`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.2.4`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
@@ -90,7 +92,7 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 
 ## 近期变化
 
-### 0.2.3：Manager 状态耐久性与客户端恢复
+### 0.2.4：Manager 状态耐久性与客户端恢复
 
 - 计划、记忆、反馈和 Route 目录 mutation 统一使用 revision、稳定幂等键、generation fence、worker ownership 与可恢复回执，不再由 Manager 父进程直接写入。
 - 计划启动迁移先发布完整 canonical package，再退休 legacy 文件；存储 lease 与 durable-delivery ownership 在长任务中持续续租，ownership 改变时失败关闭。

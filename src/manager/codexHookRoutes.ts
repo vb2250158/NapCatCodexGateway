@@ -44,6 +44,7 @@ function managerBaseUrl(request: http.IncomingMessage): string {
 
 function hookContextRequest(body: Record<string, unknown>, request: http.IncomingMessage) {
   return {
+    agentType: typeof body.agentType === "string" ? body.agentType : "codex",
     sessionId: String(body.session_id || body.sessionId || ""),
     eventName: String(body.hook_event_name || body.eventName || "") as CodexHookEventName,
     prompt: typeof body.prompt === "string" ? body.prompt : undefined,

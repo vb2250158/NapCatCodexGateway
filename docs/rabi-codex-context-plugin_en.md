@@ -10,6 +10,12 @@ English | <a href="./rabi-codex-context-plugin.md">简体中文</a>
 
 The plugin registers and executes only hooks under its own `PLUGIN_ROOT`. Installation, upgrades, and runtime do not rewrite another plugin's `hooks.json`, marketplace entry, or enabled state, so an independent language-style hook can load alongside it.
 
+## Persona chat history
+
+When `Stop` supplies a nonempty `last_assistant_message` (or `lastAssistantMessage`) and `turn_id` (or `turnId`), Manager appends the full reply to `chat-history/final-replies.jsonl` under its unique owning persona. Ownership reuses explicit Hook bindings and Route, plan, secretary, and message-processing task bindings. Missing or conflicting ownership produces no record. Codex and DSH replies reported through the same Hook API use this entry point; desktop chat databases and historical messages are not imported.
+
+`GET /api/roles/:roleId/chat-history?limit=50&cursor=<byte-offset>` returns `entries` and `nextCursor` in reverse append order. Omitting the cursor starts at the newest position; `nextCursor=null` means the beginning was reached. Reply bodies are not truncated. Pages allow up to 100 records and return early with a cursor after approximately 1 MiB. A digest of `sessionId + turnId + body` deduplicates replayed callbacks. A successful append publishes `persona_chat_history_changed`; WebGUI reads only while the chat-history tab is active and supports reconnect refresh and manual pagination. Recording is independent of the plan-completion notification switch and retains the existing startup recovery gate.
+
 ## Single ownership boundary
 
 Rabi PC / RabiRoute Manager is the sole owner of persona configuration, Codex session bindings, plans, recent and consolidated memory, role skills, recall scoring, `viewedAt`, plan archival, memory edit windows, and consolidation.

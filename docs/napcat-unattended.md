@@ -14,7 +14,7 @@ RabiRoute 负责接收 NapCat / OneBot 事件、记录消息、路由和投递�
 
 - NapCat：启动 QQNT、维护 QQ 登录态，并在本机提供登录、WebSocket Client 和 HTTP Server 接口。
 - RabiRoute：监听 WebSocket、调用 OneBot HTTP、展示连接状态、记录消息和路由事件；实例启用“启动 Rabi 时自动登录”后，Manager 监听成功即在后台执行启动、quick login 和 OneBot 修复。用户也可以在当前 Route 的 NapCat 卡片点击“启动并管理登录”立即进入同一流程。
-- Windows：负责进程守护，例如开机自启 NapCat 和 RabiRoute manager。
+- Windows Host：启动 RabiRoute；绑定实例的启动与停止由 RabiRoute 管理。
 
 密码登录时，明文只存在于当前浏览器表单和一次 Manager 请求中；Manager 立即计算 MD5 后调用 NapCat，不把明文或 MD5 写入 Route 配置、日志或响应。RabiRoute 不绕过验证码、新设备验证或风控确认：腾讯验证码和手机 QQ 扫码仍由用户亲自完成，确认后卡片继续复查连接。
 
@@ -32,13 +32,33 @@ RabiRoute 负责接收 NapCat / OneBot 事件、记录消息、路由和投递�
 
 前端只调用 `/api/message/napcat-login-panel` 和 `/api/message/napcat-login-action`。WebUI token 与鉴权 Credential 留在 Manager 内部，登录响应使用 `Cache-Control: no-store`；Route 卡片不持有 NapCat 管理会话，也不把 WebUI 当第二个控制面。
 
+Manager 复用短期管理会话，并合并同时发起的认证请求，避免每次刷新状态都重新登录、触发 NapCat 的认证限制。管理凭据失效时重新认证；只有明确的认证拒绝会重试，已受理的 QQ 登录或配置操作不会因普通错误重复提交。
+
 健康检查接口保持只读；登录、启动和配置修复由 manager 的 `napcat-ensure-ready` 动作编排。启动时自动登录在 Manager 开始监听后异步执行，Manager 不等待 NapCat 检查或登录完成。
 
 同一绑定 QQ 的启动、重启和停止动作会按账号串行执行。即使用户双击按钮、两个入口同时触发，或映射盘路径与 UNC 路径同时指向同一套 NapCat，也只允许一条生命周期操作进入；真正启动前还会再次读取 OneBot 登录状态，已就绪时直接复用，不创建第二棵 QQNT/NapCat 进程。该防重只保护进程生命周期，不会绕过扫码、验证码、设备确认或其他 QQ 安全验证。
 
 页面把四层状态分开显示：NapCat 管理接口是否可达、QQ 登录身份、OneBot HTTP 是否在线，以及 RabiRoute WebSocket 是否已连接。管理接口可达不等于 QQ 已登录，QQ 已登录也不等于消息已经进入 RabiRoute。
 
-“采用在线实例”只把当前 QQ 卡片的 HTTP、WebUI 和工作目录改为已确认在线的实例，不会退出 QQ、停止旧进程或自动迁移登录。若在线实例尚未指向当前网关，页面会继续要求修复 OneBot WebSocket 路由。
+QQ 卡片进入页面后读取同一次后端检查得到的账号与连接状态，并每三秒复查。保存的绑定账号用于核对目标；端点返回另一个 QQ 时，卡片显示实际账号和绑定账号，提示“账号不匹配”。OneBot 返回离线时不会显示就绪。登录成功后隐藏快速、密码和扫码表单；管理服务不可达时显示启动提示，保留可读取的 OneBot 账号信息。账号日志排除明确属于其他 QQ 的记录。
+
+登录面板与健康检查使用 `src/shared/napcatStateContract.ts` 中的共享状态定义。登录状态与 OneBot 就绪状态分别返回；管理接口不可用不会把已登录账号变成未登录。卡片的登录状态、账号不匹配和扫码提示支持中英文切换，账号昵称和地址保持原值。
+
+Windows Host 在托盘启动后的最终健康检查中最多等待 30 秒，避免后台启动期间的一次超时导致反复重启。只有当前 Manager 身份和就绪状态通过检查，才发布可用地址；超过期限或进程退出仍判定启动失败。
+
+“采用在线实例”把当前 QQ 卡片的 HTTP、WebUI 和工作目录改为已确认在线且未被其他路由占用的实例。替换工作目录时先停止当前绑定的旧实例，再接管选中的在线实例；不会迁移登录凭据。若在线实例尚未指向当前网关，页面会继续要求修复 OneBot WebSocket 路由。
+
+## 路由绑定与进程清理
+
+路由配置是绑定关系的唯一来源。每条路由最多配置一个 QQ；保存多个实例会被拒绝。界面只展示该路由配置中的实例，不把扫描结果追加为 QQ 卡片，也不自动创建空实例。首次扫码可以在已绑定路由的实例中完成；绑定已有 QQ 后，快捷登录和密码登录不能提交另一个账号。
+
+启动、自动登录、重启和连接修复都要求路由及 NapCat 消息端启用。开机自动登录等待路由加载及绑定清理完成后触发，避免提前读取空配置而漏掉账号。删除实例、删除路由、禁用路由或 NapCat 消息端时，后台先拒绝新的启动请求，等待正在执行的操作结束，再核对进程身份并停止实例。停止失败会保留记录并阻止重新启动，重试清理成功前不会报告解绑成功。关闭“启动 Rabi 时自动登录”只改变开机行为，不等于解绑。
+
+Windows 下，Manager 启动和绑定关系变化时会核对 NapCat 进程。没有有效绑定的 NapCat 启动器及其子进程会被停止；独立运行的普通 QQ 客户端不作为清理目标。Rabi 不阻止用户在软件外手工启动程序；这类 NapCat 会在下一次上述核对时处理。完整 Shell 包优先使用包内 QQ 启动；缺少包内 QQ 的旧 Shell 才沿用其内层启动器。
+
+进程记录保存在本机 `data/.runtime/napcat-process-ownership.json`，包含路由、实例、目录、PID、进程创建时间及程序路径。每次停止前重新核对身份，避免误杀占用了旧 PID 的其他程序。新实例使用全局唯一 ID 和独立目录；Manager 重启后接续管理仍有绑定的实例。HTTP 或 WebUI 地址修正不会重启已登录 QQ，已知绑定账号改为另一个 QQ 时才停止旧实例。解绑不删除 NapCat 安装文件或登录缓存。
+
+接口通过共享状态定义返回 `unbound`、`stop-failed` 和 `account-mismatch`；对应提示维护中文和英文版本。
 
 ## 无值守登录思路
 
@@ -84,11 +104,7 @@ setx NAPCAT_QUICK_PASSWORD "<qq-password>"
 
 RabiRoute manager 会守护自己启动的路由子进程，并在 `data/route/*/adapterConfig.json` 或 `data/roles/*/personaConfig.json` 改动后自动重载受影响路由。NapCat 的启动时自动登录只运行一次；运行期间退出、掉线或登录失效后，仍由健康状态提示和用户操作处理。
 
-NapCat 本体建议用以下方式之一守护：
-
-- Windows 任务计划程序：登录时启动 NapCat Shell。
-- NSSM / WinSW：把 NapCat Shell 包装成 Windows 服务。
-- 手工启动 NapCat Shell，并保持 QQNT / NapCat 窗口运行。
+由 Windows Host 启动 Rabi，再由路由中“启动 Rabi 时自动登录”启动绑定的 NapCat。不要再为同一实例配置任务计划或服务反复拉起，否则解绑后的外部守护程序仍可能启动它。
 
 如果 NapCat 自动退出、QQ 被挤下线或 quick login 失败，先在对应 Route 点击“启动并管理登录”。自动恢复失败时，再展开详情查看 NapCat 日志、WebSocket 状态、HTTP `get_login_info` 和最近错误。
 

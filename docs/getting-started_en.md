@@ -18,7 +18,9 @@ English | <a href="./getting-started.md">简体中文</a>
 
 The Windows installer launches RabiRoute Host from the Start menu. Host creates same-generation Manager and tray children and passes the operating-system-assigned Manager URL to the tray; open RibiWebGUI from the tray. Repeated launch activates the existing Host.
 
-To run the backend from source:
+For a full Windows source build, double-click `Start-RabiRoute-FromSource.bat` in the repository root. Requires an existing Windows RabiRoute installation, Node.js/npm, and the .NET 9 SDK. It builds Manager, WebGUI, plugins, Host, and the tray, then activates the source build through Host while retaining installed settings and data. The first build downloads Python/Qt dependencies. Closing the command window does not stop Host; quit from the tray. Failure logs are in `logs/source-start/`. If the dependency lock differs from the installed package, update the full installation first.
+
+To run only the backend from source (without the tray):
 
 Windows PowerShell:
 

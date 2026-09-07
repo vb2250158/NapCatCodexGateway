@@ -4,6 +4,7 @@ plugins {
 }
 
 def mobileSlim = project.hasProperty("mobileSlim")
+def rokidVideo = project.hasProperty("rokidVideo") || project.hasProperty("videoAcceptance")
 
 android {
     namespace "com.rabi.link"
@@ -28,13 +29,16 @@ android {
 
     defaultConfig {
         applicationId "com.rabi.link"
+        if (project.hasProperty("videoAcceptance")) applicationIdSuffix ".videoacceptance"
         minSdk 31
         targetSdk 34
+        testInstrumentationRunner "com.rabi.link.test.DirectVideoInstrumentation"
         // The thin-phone package must always be an installable upgrade over
         // the prior diagnostic build.  Keep the normal build metadata intact.
-        versionCode mobileSlim ? 20 : 4
-        versionName mobileSlim ? "0.3.17" : "0.3.1"
+        versionCode mobileSlim ? 23 : 4
+        versionName mobileSlim ? "0.3.20" : "0.3.1"
         buildConfigField "boolean", "MOBILE_SLIM", mobileSlim ? "true" : "false"
+        buildConfigField "boolean", "ROKID_VIDEO", (!mobileSlim || rokidVideo) ? "true" : "false"
         buildConfigField "String", "BUILD_TIME", "\"${new Date().format("yyyy-MM-dd HH:mm:ss Z")}\""
     }
 
@@ -108,17 +112,23 @@ if (!project.hasProperty("mobileSlim")) {
 }
 
 dependencies {
+    implementation "io.github.webrtc-sdk:android-prefixed:144.7559.09"
     implementation fileTree(dir: "libs", include: ["*.jar"])
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
     implementation "androidx.activity:activity-ktx:1.7.2"
     implementation "androidx.health.connect:connect-client:1.1.0-alpha07"
     implementation "com.rokid.cxr:client-l:1.1.0"
     if (mobileSlim) {
-        // Phone releases delegate inference to RabiPC.  Keep these APIs only
-        // at compile time so the optional Rokid diagnostics screen remains
-        // buildable without shipping its model runtimes to every phone.
-        compileOnly("com.rokid.security:phone.sdk:2.5.1-P") {
-            exclude group: "org.slf4j"
+        // Camera streaming needs the Phone SDK at runtime. Inference-only
+        // diagnostic libraries below remain compile-only; RabiPC owns ASR/TTS.
+        if (rokidVideo) {
+            implementation("com.rokid.security:phone.sdk:2.5.1-P") {
+                exclude group: "org.slf4j"
+            }
+        } else {
+            compileOnly("com.rokid.security:phone.sdk:2.5.1-P") {
+                exclude group: "org.slf4j"
+            }
         }
         compileOnly(name: "basic-1.4.3", ext: "aar")
         compileOnly(name: "turenso-1.4.3", ext: "aar")

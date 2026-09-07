@@ -59,7 +59,7 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
     });
     const app = (await appResponse.json()).app;
     const token = app.token;
-    await fetch(`${baseUrl}/worker/speech-requests?deviceId=pc-a&deviceGuid=guid-a&deviceName=PC-A&waitMs=0&capabilities=webgui,speech`, {
+    await fetch(`${baseUrl}/worker/speech-requests?deviceId=pc-a&deviceGuid=guid-a&deviceName=PC-A&waitMs=0&capabilities=webgui,speech,video-direct`, {
       headers: { "x-rabilink-token": token }
     });
     const target = await fetch(`${baseUrl}/manage/api/apps/${encodeURIComponent(app.id)}`, {
@@ -68,6 +68,33 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
       body: JSON.stringify({ targetDeviceId: "pc-a" })
     });
     assert.equal(target.status, 200);
+
+    const signalHeaders = { "content-type": "application/json", "x-rabilink-token": token };
+    const signal = { deviceId: "phone-video", sdp: "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n" };
+    assert.equal((await fetch(`${baseUrl}/api/rabilink/video/offer`, {
+      method: "POST", headers: signalHeaders, body: JSON.stringify({ ...signal, bytes: "camera payload" })
+    })).status, 400);
+    assert.equal((await fetch(`${baseUrl}/api/rabilink/video/offer`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(signal)
+    })).status, 401);
+    const pendingVideo = fetch(`${baseUrl}/api/rabilink/video/offer`, {
+      method: "POST", headers: signalHeaders, body: JSON.stringify(signal)
+    });
+    let videoRequest;
+    for (let attempt = 0; attempt < 50 && !videoRequest; attempt++) {
+      const claimed = await fetch(`${baseUrl}/worker/speech-requests?deviceId=pc-a&deviceGuid=guid-a&waitMs=0&capabilities=webgui,speech,video-direct`, { headers: signalHeaders });
+      videoRequest = (await claimed.json()).requests?.[0];
+      if (!videoRequest) await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(videoRequest.path, "/api/rabilink/video/offer");
+    assert.deepEqual(JSON.parse(Buffer.from(videoRequest.bodyBase64, "base64").toString()), signal);
+    await fetch(`${baseUrl}/worker/speech-requests/${videoRequest.id}/response`, {
+      method: "POST", headers: signalHeaders,
+      body: JSON.stringify({ deviceId: "pc-a", deviceGuid: "guid-a", ok: true, statusCode: 200,
+        headers: { "content-type": "application/json" },
+        bodyBase64: Buffer.from(JSON.stringify({ type: "answer", sdp: "v=0", relay: false })).toString("base64") })
+    });
+    assert.equal((await (await pendingVideo).json()).relay, false);
 
     const pendingPreview = fetch(`${baseUrl}/api/rabilink/speech/v1/records?kind=asr&source_device_id=phone-a&since=123&limit=1000`, {
       headers: { "x-rabilink-token": token }

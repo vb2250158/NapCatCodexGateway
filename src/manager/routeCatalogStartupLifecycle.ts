@@ -64,7 +64,7 @@ type RouteCatalogInput = Omit<
 
 export type RouteCatalogStartupLifecycleOptions = Readonly<{
   input?: () => RouteCatalogInput;
-  apply(snapshot: RouteCatalogSnapshot): void;
+  apply(snapshot: RouteCatalogSnapshot): void | Promise<void>;
   attemptTimeoutMs?: number;
   retryBaseMs?: number;
   retryMaxMs?: number;
@@ -347,6 +347,7 @@ export function createRouteCatalogStartupAttempt(
 }
 
 export class RouteCatalogStartupLifecycle {
+  private applicationFlight: Promise<void> | undefined;
   private readonly attemptTimeoutMs: number;
   private readonly retryBaseMs: number;
   private readonly retryMaxMs: number;
@@ -622,14 +623,17 @@ export class RouteCatalogStartupLifecycle {
       );
     }, this.attemptTimeoutMs);
     token.timeout.unref();
-    void attempt.result.then(snapshot => {
+    void attempt.result.then(async snapshot => {
       if (token.settled || this.currentAttempt !== token || this.stopped) return;
       token.settled = true;
       if (token.timeout) clearTimeout(token.timeout);
       this.currentAttempt = undefined;
       try {
         const validated = validateSnapshot(snapshot, token.identity);
-        this.options.apply(validated);
+        const application = Promise.resolve(this.options.apply(validated));
+        this.applicationFlight = application;
+        try { await application; } finally { if (this.applicationFlight === application) this.applicationFlight = undefined; }
+        if (this.stopped) return;
         this.latestCatalog = cloneSnapshot(validated);
         this.completeEntry(entry, validated);
       } catch (error) {
@@ -833,6 +837,7 @@ export class RouteCatalogStartupLifecycle {
         if (!cleanupError && this.currentAttempt === token) this.currentAttempt = undefined;
       }
     }
+    await this.applicationFlight?.catch(() => undefined);
     this.readyListeners.clear();
     if (cleanupError) {
       this.transition({

@@ -18,6 +18,34 @@ function writeJson(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
 }
 
+test("persona Hook migration preserves settings across Agent changes and removes adapter copies", () => {
+  const rootDir = makeTempRoot();
+  try {
+    const adapterPath = path.join(rootDir, "data", "route", "main", "adapterConfig.json");
+    const personaPath = path.join(rootDir, "data", "roles", "Rabi", "personaConfig.json");
+    writeJson(adapterPath, { gatewayPort: 8789, agentRoleId: "Rabi", agentAdapters: ["codex"], codexHooks: { sessionContextEnabled: false, onlyPrimaryPersonaCanSendMessages: true } });
+    const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
+    repo.migrateLegacyConfigs();
+    assert.equal(JSON.parse(fs.readFileSync(adapterPath, "utf8")).codexHooks, undefined);
+    assert.equal(JSON.parse(fs.readFileSync(personaPath, "utf8")).codexHooks.sessionContextEnabled, false);
+    const config = repo.readConfig();
+    const completionRule = { id: "completion-test", enabled: true, event: "task_completed",
+      conditions: [{ type: "project", path: "C:/example/project" }, { type: "bound_plan" },
+        { type: "include_sessions", sessions: [{ id: "session-a", name: "Task A" }] },
+        { type: "exclude_sessions", sessions: [{ id: "session-b", name: "Task B" }] }],
+      destination: { channel: "napcat", gatewayId: "main", params: { target: "group", instanceId: "qq", targetId: "12345" } } };
+    config.gateways[0].codexHooks!.completionDeliveries = [completionRule];
+    config.gateways[0].agentAdapters = ["copilotCli"];
+    repo.writeConfig(config);
+    const saved = repo.readConfig().gateways[0];
+    assert.equal(saved.codexHooks?.sessionContextEnabled, false);
+    assert.equal(saved.codexHooks?.onlyPrimaryPersonaCanSendMessages, true);
+    assert.deepEqual(saved.codexHooks?.completionDeliveries, [completionRule]);
+    assert.deepEqual(JSON.parse(fs.readFileSync(personaPath, "utf8")).codexHooks.completionDeliveries, [completionRule]);
+    assert.equal(JSON.parse(fs.readFileSync(adapterPath, "utf8")).codexHooks, undefined);
+  } finally { fs.rmSync(rootDir, { recursive: true, force: true }); }
+});
+
 test("repository reads route config and falls back to personaConfig rules", () => {
   const rootDir = makeTempRoot();
   writeJson(path.join(rootDir, "data", "route", "main", "adapterConfig.json"), {

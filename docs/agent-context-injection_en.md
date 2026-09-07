@@ -115,6 +115,7 @@ Legacy `[投递源]` wrappers, nested envelopes, and old Agent response wrappers
 [消息源]
 消息源类型：<消息端 | Agent | 计划 | 系统>
 <type-specific name, complete ID, session, plan, or Route fields>
+消息包发送时间：<time of this delivery>
 
 [消息内容]
 <message>

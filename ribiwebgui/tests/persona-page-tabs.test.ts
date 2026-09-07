@@ -26,7 +26,8 @@ test("persona configuration splits dense content into accessible page tabs", () 
   assert.match(source, /<v-tab value="identity"[^>]*:disabled="!hasPersona"[^>]*>身份关系<\/v-tab>/);
   assert.match(source, /<v-tab value="context"[^>]*>消息上下文<\/v-tab>/);
   assert.match(source, /<v-tab value="automation"[^>]*>自动化<\/v-tab>/);
-  assert.match(source, /watch\(hasPersona,[\s\S]*\["expression", "avatar", "identity"\][\s\S]*activePersonaPageTab\.value = "profile"/);
+  assert.match(source, /<v-tab value="chat-history"[^>]*:disabled="!hasPersona"[^>]*>聊天记录<\/v-tab>/);
+  assert.match(source, /watch\(hasPersona,[\s\S]*\["expression", "avatar", "identity", "chat-history"\][\s\S]*activePersonaPageTab\.value = "profile"/);
 });
 
 test("each persona page tab owns one coherent group of existing cards", () => {

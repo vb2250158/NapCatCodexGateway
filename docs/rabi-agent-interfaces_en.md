@@ -774,6 +774,8 @@ When the current Route enables **Require the RabiAgent message delivery API**, C
 `关闭`    closed
 ```
 
+The stock information-needed status means that analysis is complete but the available information still cannot support a concrete approvable proposal, and the missing fact affects the cause, fix, implementation scope, or acceptance contract. It is not used for a current reproduction gap, a suspected historical fix, a missing target package, pending QA, or a pending closure decision; those cases remain in analysis or move, with evidence, to the package, QA, or closed role.
+
 ```http
 GET   /api/roles/:roleId/plans
 GET   /api/roles/:roleId/plans/:planId
@@ -831,7 +833,7 @@ Status mutations require both `If-Match` and `Idempotency-Key`. Keys are immutab
 
 New plans must provide ordered `steps`. `plan.status` accepts only an enabled key from the persona's current status catalog. `archiveStatus` is independent and accepts only `未归档` or `已归档`. Steps store no separate status; `currentStepId` identifies the current step and `completedAt` records completion. Manager returns the key with configured label, description, palette, order, and views; WebGUI and the tray consume those fields.
 
-Ongoing analysis, analysis that has established missing information, a complete pending approval, and approved execution use the keys referenced by `planWorkflow.roles.analysis`, `roles.informationNeeded`, `roles.approval`, and `roles.execution`. Package, QA, discussion, and pause use their configured role keys and are never derived from step text or waiting details.
+Ongoing analysis, completed analysis that still cannot form a concrete approvable proposal, a complete pending approval, and approved execution use the keys referenced by `planWorkflow.roles.analysis`, `roles.informationNeeded`, `roles.approval`, and `roles.execution`. Package, QA, discussion, and pause use their configured role keys and are never derived from step text or waiting details.
 
 Only plans that change project content, such as code, prefabs, assets, or configuration, should follow `implementation/development validation/applicable sync and commit → Awaiting package → Awaiting QA → complete on QA pass; return to implementation on failure`. QA sending and its `sentMessageId` are actions and evidence inside the purple QA stage: missing receipt means `send_qa_request`, while a receipt with only the verdict outstanding means `wait_for_qa_result`. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance follow their real steps. Agents and batch jobs must not manufacture package or QA steps for those plans, and Manager does not infer the lifecycle from a title, description, or `kind`.
 

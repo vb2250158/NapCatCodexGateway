@@ -5,11 +5,12 @@ import { useGatewayStore } from "../stores/gatewayStore";
 import { useSpeechStore } from "../stores/speechStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import TrustedWebRendererHost from "../components/TrustedWebRendererHost.vue";
+import { NapcatState, type NapcatLoginPanelData, type NapcatHealthSnapshot } from "@shared/napcatStateContract";
 import { managerEventSource } from "../managerApi";
 import { pluginCatalogStore } from "../pluginCatalogStore";
 import { webRenderersAt } from "../pluginRenderers";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
-import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentDeliveryTestResult, AgentMaturity, AgentScanResult, AgentScanSession, CodexHookSettings, MessageAdapterScanResult, NapCatInstance } from "../types";
+import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentDeliveryTestResult, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult, NapCatInstance } from "../types";
 import { codexModelPickerItems, dshModelPickerItems, dshModelValue, parseDshModelValue, reasoningEffortPickerItems } from "../agentModelPicker";
 import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, messageAdapterPolicyFor, setGatewayAdapters, setMessageAdapterPolicy, toggleAdapterDisabled } from "../utils/gatewayHelpers";
 import { initializeAgentSessionForRoute } from "@shared/codexSessionInitialization";
@@ -172,26 +173,6 @@ type NapCatAccountRow = {
 };
 
 type NapcatLoginMode = "quick" | "password" | "qrcode";
-
-type NapcatLoginPanelData = {
-  ok?: boolean;
-  state?: "logged-in" | "offline" | "account-mismatch" | "login-required";
-  loggedIn?: boolean;
-  offline?: boolean;
-  expectedUserId?: string;
-  currentAccount?: { userId?: string; nickname?: string; online?: boolean; avatarUrl?: string } | null;
-  quickAccounts?: Array<{
-    userId: string;
-    nickname?: string;
-    avatarUrl?: string;
-    savedLogin?: boolean;
-    quickLoginAvailable?: boolean;
-  }>;
-  qrCodeDataUrl?: string;
-  loginError?: string;
-  warnings?: string[];
-  message?: string;
-};
 
 type NapcatLoginUiState = {
   visible: boolean;
@@ -619,44 +600,19 @@ const launchingNapcatInstance = ref<Record<string, boolean>>({});
 const restartingNapcatInstance = ref<Record<string, boolean>>({});
 const managingNapcatLogin = ref<Record<string, boolean>>({});
 const napcatLoginPanels = ref<Record<string, NapcatLoginUiState>>({});
+let napcatPanelPollTimer = 0;
+let napcatPanelDisposed = false;
+onBeforeUnmount(() => {
+  napcatPanelDisposed = true;
+  window.clearTimeout(napcatPanelPollTimer);
+});
 const napcatNewDevicePollTimers = new Map<string, number>();
 const adoptingNapcatOwner = ref<Record<string, boolean>>({});
 const fixingNapcatPorts = ref(false);
 const napcatPortFixResult = ref<Record<string, { ok: boolean; message: string }>>({});
 const configuringNapcatOneBot = ref<Record<string, boolean>>({});
 const napcatOneBotFixResult = ref<Record<string, { ok: boolean; message: string }>>({});
-const napcatHealthResult = ref<{
-  ok?: boolean;
-  loginState?: "ready" | "account-online-elsewhere" | "account-mismatch" | "quick-login-available" | "quick-login-invalid" | "qr-login-required" | "login-conflict" | "manual-login" | "start-failed";
-  accountOwner?: {
-    userId?: string;
-    nickname?: string;
-    httpUrl?: string;
-    webuiUrl?: string;
-    workingDir?: string;
-    instanceName?: string;
-    routesToGateway?: boolean;
-  };
-  fixAvailable?: boolean;
-  diagnostics?: string[];
-  onebot?: { configPath?: string; currentUserId?: string | number; currentNickname?: string };
-  loginInfo?: { userId?: string | number; nickname?: string; online?: boolean; source?: string };
-  http?: { ok?: boolean; status?: number; message?: string; userId?: string | number; nickname?: string };
-  webui?: {
-    url?: string;
-    reachable?: boolean;
-    found?: boolean;
-    tokenFound?: boolean;
-    tokenLength?: number;
-    configPath?: string;
-    source?: "provided" | "config";
-    message?: string;
-    loginInfo?: { userId?: string | number; nickname?: string; online?: boolean; status?: string; message?: string };
-  };
-  process?: { found?: boolean; candidates?: Array<{ name: string; pid: string }> };
-  wsUrl?: string;
-  message?: string;
-} | null>(null);
+const napcatHealthResult = ref<NapcatHealthSnapshot | null>(null);
 const napcatInstanceHealthResult = ref<Record<string, typeof napcatHealthResult.value>>({});
 const napcatScanHealthByWebui = ref<Record<string, NapCatScanHealthEntry[]>>({});
 const napcatLaunchResult = ref<Record<string, { ok: boolean; message: string }>>({});
@@ -893,28 +849,7 @@ function defaultNapcatWebuiUrl(): string {
 }
 
 function ensureNapcatInstances(): NapCatInstance[] {
-  if (!gateway.value) return [];
-  if (!Array.isArray(gateway.value.napcatInstances) || gateway.value.napcatInstances.length === 0) {
-    gateway.value.napcatInstances = [{
-      id: "default",
-      name: "默认 NapCat",
-      enabled: true,
-      autoLoginOnRabiStart: true,
-      gatewayPort: gateway.value.gatewayPort || 8789,
-      httpUrl: gateway.value.napcatHttpUrl || "http://127.0.0.1:3000",
-      webuiUrl: gateway.value.napcatWebuiUrl || "http://127.0.0.1:6099/webui",
-      accessToken: gateway.value.napcatAccessToken || "",
-      webuiToken: gateway.value.napcatWebuiToken || ""
-    }];
-  } else {
-    const primary = gateway.value.napcatInstances.find(item => item.enabled !== false)
-      ?? gateway.value.napcatInstances[0];
-    primary.enabled = true;
-    if (gateway.value.napcatInstances.length !== 1 || gateway.value.napcatInstances[0] !== primary) {
-      gateway.value.napcatInstances = [primary];
-    }
-  }
-  return gateway.value.napcatInstances;
+  return gateway.value?.napcatInstances ?? [];
 }
 
 function syncPrimaryNapcatFromInstances(): void {
@@ -1339,7 +1274,24 @@ function sourceTitle(type: MessageAdapterType): string {
 }
 
 function messageScanFor(type: MessageAdapterType): MessageAdapterScanResult | undefined {
-  return messageAdapterScan.value.adapters[type];
+  const scan = messageAdapterScan.value.adapters[type];
+  if (type !== "napcat") return scan;
+  const instance = gateway.value?.napcatInstances?.[0];
+  const panel = instance && napcatLoginPanels.value[instance.id]?.panel;
+  if (!panel) return scan;
+  return {
+    ...scan, type, label: "NapCat / OneBot", maturity: scan?.maturity ?? "experimental", installed: true,
+    health: {
+      state: panel.health?.ok === true ? "healthy" : panel.loggedIn ? "degraded" : panel.offline ? "offline" : panel.managementAvailable ? "needs_login" : "unknown",
+      message: panel.message || "正在读取当前 QQ 状态。"
+    },
+    requirements: [
+      { id: "qq-login", label: "当前 QQ 登录", required: true, ok: panel.loggedIn === true && panel.state !== NapcatState.AccountMismatch, detail: panel.message },
+      { id: "onebot-http", label: "当前实例 OneBot HTTP", required: true, ok: panel.health?.ok === true, detail: instance.httpUrl },
+      { id: "webui", label: "当前实例管理服务", required: false, ok: panel.managementAvailable === true, detail: instance.webuiUrl }
+    ],
+    warnings: panel.warnings || []
+  };
 }
 
 const channelCheckItems = computed(() => {
@@ -1735,142 +1687,24 @@ function normalizeNapcatDisplayName(value: unknown): string {
     .trim();
 }
 
-function napcatNamesLookRelated(left: unknown, right: unknown): boolean {
-  const a = normalizeNapcatDisplayName(left);
-  const b = normalizeNapcatDisplayName(right);
-  return Boolean(a && b && (a.includes(b) || b.includes(a)));
-}
-
 function napcatAccountRowKey(instance: NapCatInstance, source: NapCatAccountRow["source"], endpointLabel: string): string {
   const identity = String(instance.webuiUrl || instance.httpUrl || instance.gatewayPort || instance.id || endpointLabel || "unknown");
   return `${source}:${identity}`;
 }
 
-function napcatScanHealthForEndpoint(endpointLabel: string | undefined, webuiUrl: string): NapCatScanHealthEntry | undefined {
-  const candidates = napcatScanHealthByWebui.value[webuiUrl] || [];
-  if (candidates.length <= 1) return candidates[0];
-  return candidates.find(item =>
-    napcatNamesLookRelated(endpointLabel, item.gatewayName)
-    || napcatNamesLookRelated(endpointLabel, item.instanceName)
-    || (item.loginInfo?.source !== "webui" && napcatNamesLookRelated(endpointLabel, item.loginInfo?.nickname))
-  ) || candidates[0];
-}
-
-function napcatScanWebuiRows(): NapCatAccountRow[] {
-  const endpoints = messageScanFor("napcat")?.endpoints ?? [];
-  return endpoints
-    .filter(endpoint => endpoint?.url)
-    .map((endpoint, index) => {
-      const endpointLabel = String(endpoint.label || "");
-      const scanHealth = napcatScanHealthForEndpoint(endpointLabel, endpoint.url);
-      const gatewayMatched = (gateway.value?.napcatInstances ?? [])
-        .find(instance =>
-          String(instance.webuiUrl || "") === endpoint.url
-          && (!endpointLabel || napcatNamesLookRelated(endpointLabel, instance.name || instance.id))
-        );
-      const anyMatched = store.gateways
-        .flatMap(item => item.napcatInstances ?? [])
-        .find(instance =>
-          String(instance.webuiUrl || "") === endpoint.url
-          && (!endpointLabel || napcatNamesLookRelated(endpointLabel, instance.name || instance.id))
-        );
-      const matched = gatewayMatched || anyMatched;
-      const instance = gatewayMatched || {
-        id: `webui-${portFromLocalUrl(endpoint.url) || index + 1}`,
-        name: matched?.name || normalizeNapcatDisplayName(endpointLabel) || `QQ ${index + 1}`,
-        enabled: false,
-        gatewayPort: Number(scanHealth?.gatewayPort || matched?.gatewayPort || nextNapcatPort(Number(gateway.value?.gatewayPort || 8789) + index + 1)),
-        httpUrl: matched?.httpUrl || nextLocalHttpUrl(gateway.value?.napcatHttpUrl || "http://127.0.0.1:3000", 3000 + index),
-        webuiUrl: endpoint.url,
-        accessToken: matched?.accessToken || "",
-        webuiToken: matched?.webuiToken || "",
-        botUserId: matched?.botUserId,
-        botNickname: matched?.botNickname,
-        __discovered: true
-      } as NapCatInstance;
-      const label = endpointLabel || napcatEndpointLabelFromInstance(instance);
-      return {
-        key: napcatAccountRowKey(instance, "scan", label),
-        instance,
-        endpointLabel: label,
-        endpointHealthy: endpoint.healthy,
-        source: "scan"
-      };
-    });
-}
-
 function napcatAccountRows(): NapCatAccountRow[] {
   const configured = ensureNapcatInstances();
-  const scanRows = napcatScanWebuiRows();
   const rows: NapCatAccountRow[] = configured
     .filter(instance => !isIgnoredNapcatInstance(instance))
     .map(instance => {
-      const scanned = scanRows.find(row =>
-        sameNapcatInstance(row.instance as NapCatInstance & Record<string, any>, instance as NapCatInstance & Record<string, any>)
-      );
-      const label = scanned?.endpointLabel || napcatEndpointLabelFromInstance(instance);
+      const label = napcatEndpointLabelFromInstance(instance);
       return {
         key: napcatAccountRowKey(instance, "configured", label),
         instance,
         endpointLabel: label,
-        endpointHealthy: scanned?.endpointHealthy,
         source: "configured"
       };
     });
-  const belongsToOtherGateway = (candidate: NapCatInstance): boolean => {
-    return store.gateways.some(item =>
-      item.id !== gateway.value?.id
-      && (item.napcatInstances ?? []).some(instance =>
-        sameNapcatInstance(instance as NapCatInstance & Record<string, any>, candidate as NapCatInstance & Record<string, any>)
-      )
-    );
-  };
-  const pushIfMissing = (candidate: NapCatInstance, source: NapCatAccountRow["source"], endpointLabel?: string, endpointHealthy?: boolean) => {
-    if (isIgnoredNapcatInstance(candidate)) return;
-    const exists = rows.some(row => sameNapcatInstance(row.instance as NapCatInstance & Record<string, any>, candidate as NapCatInstance & Record<string, any>));
-    if (!exists) {
-      const label = endpointLabel || napcatEndpointLabelFromInstance(candidate);
-      rows.push({
-        key: napcatAccountRowKey(candidate, source, label),
-        instance: candidate,
-        endpointLabel: label,
-        endpointHealthy,
-        source
-      });
-    }
-  };
-  for (const row of scanRows) {
-    if (belongsToOtherGateway(row.instance)) continue;
-    pushIfMissing(row.instance, "scan", row.endpointLabel, row.endpointHealthy);
-  }
-  for (const item of napcatRuntimeInstances()) {
-    if (belongsToOtherGateway(item as NapCatInstance)) continue;
-    const sourceInstanceId = String(item.id || item.instanceId || item.name || item.botUserId || item.userId || item.selfId || "");
-    const port = Number(item.gatewayPort || item.port || item.wsPort || 0);
-    const exists = rows.some(row => sameNapcatInstance(row.instance as NapCatInstance & Record<string, any>, item as Record<string, any>));
-    if (exists) continue;
-    const candidate = {
-      id: scopedRuntimeNapcatId(item, sourceInstanceId, port) || `runtime-${rows.length + 1}`,
-      sourceInstanceId,
-      routeId: item.routeId,
-      configName: item.configName,
-      name: item.name || item.instanceName || "运行中 NapCat",
-      enabled: false,
-      gatewayPort: port || Number(gateway.value?.gatewayPort || 8790),
-      httpUrl: item.httpUrl || item.napcatHttpUrl || gateway.value?.napcatHttpUrl || "http://127.0.0.1:3000",
-      webuiUrl: item.webuiUrl || item.napcatWebuiUrl || gateway.value?.napcatWebuiUrl,
-      accessToken: item.accessToken || "",
-      webuiToken: item.webuiToken || "",
-      botUserId: item.botUserId || item.userId || item.selfId,
-      botNickname: item.botNickname || item.nickname,
-      connected: item.connected
-    };
-    pushIfMissing(candidate as NapCatInstance, "runtime");
-  }
-  for (const instance of napcatDiscoveredInstances()) {
-    if (belongsToOtherGateway(instance)) continue;
-    pushIfMissing(instance, "discovered");
-  }
   return rows;
 }
 
@@ -2194,17 +2028,21 @@ function napcatQuickLoginOptions(instance: NapCatInstance): Array<{ title: strin
 async function loadNapcatLoginPanel(instance: NapCatInstance): Promise<void> {
   const target = resolveConfiguredNapcatInstance(instance);
   const ui = napcatLoginUi(target);
+  const gatewayId = gateway.value?.id;
+  if (ui.loading || napcatPanelDisposed) return;
   ui.loading = true;
   ui.error = "";
   try {
     const response = await fetch("/api/message/napcat-login-panel", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ gatewayId: gateway.value?.id, instanceId: target.id })
+      body: JSON.stringify({ gatewayId, instanceId: target.id })
     });
     const body = await response.json().catch(() => ({})) as NapcatLoginPanelData;
     if (!response.ok || body.ok === false) throw new Error(body.message || "NapCat 登录控制加载失败。");
+    if (gateway.value?.id !== gatewayId || napcatPanelDisposed) return;
     ui.panel = body;
+    if (body.health) napcatInstanceHealthResult.value = { ...napcatInstanceHealthResult.value, [target.id]: body.health };
     ui.message = body.message || "";
     const expected = String(body.expectedUserId || target.botUserId || "");
     const firstQuick = body.quickAccounts?.find(account => account.userId === expected)
@@ -2217,11 +2055,18 @@ async function loadNapcatLoginPanel(instance: NapCatInstance): Promise<void> {
       ui.password = "";
       ui.captcha = null;
       cancelNapcatNewDevice(target);
+      napcatLaunchResult.value = { ...napcatLaunchResult.value, [target.id]: { ok: body.state !== NapcatState.AccountMismatch, message: body.message || "QQ 已登录。" } };
     }
   } catch (error) {
+    if (gateway.value?.id !== gatewayId || napcatPanelDisposed) return;
+    ui.panel = null;
     ui.error = error instanceof Error ? error.message : String(error);
   } finally {
     ui.loading = false;
+    if (!napcatPanelDisposed && gateway.value?.id === gatewayId && ui.visible) {
+      window.clearTimeout(napcatPanelPollTimer);
+      napcatPanelPollTimer = window.setTimeout(() => { void loadNapcatLoginPanel(target); }, 3000);
+    }
   }
 }
 
@@ -2271,6 +2116,10 @@ async function refreshNapcatLoginQr(instance: NapCatInstance): Promise<void> {
   ui.busy = true;
   ui.error = "";
   try {
+    if (ui.panel?.managementAvailable === false || !ui.panel) {
+      await startNapcatAndManage(instance);
+      if (ui.panel?.managementAvailable !== true) throw new Error(ui.panel?.message || "NapCat 尚未启动，请检查启动结果。");
+    }
     const result = await postNapcatLoginAction(instance, { action: "refresh-qr" });
     ui.message = result.message || "已刷新二维码。";
     await sleep(350);
@@ -2536,7 +2385,7 @@ async function startNapcatAndManage(instance: NapCatInstance): Promise<void> {
 }
 
 function napcatLoginState(instance: NapCatInstance): string {
-  return String(napcatHealthFor(instance).loginState || "");
+  return String(napcatLoginPanels.value[instance.id]?.panel?.state || napcatHealthFor(instance).state || napcatHealthFor(instance).loginState || "");
 }
 
 function napcatAccountOwner(instance: NapCatInstance): Record<string, any> | null {
@@ -2849,24 +2698,28 @@ function napcatRuntimeFor(instance: NapCatInstance): Record<string, any> {
 }
 
 function napcatHealthFor(instance: NapCatInstance): Record<string, any> {
+  const panelHealth = napcatLoginPanels.value[instance.id]?.panel?.health;
+  if (panelHealth) return panelHealth;
   const byId = napcatInstanceHealthResult.value[instance.id];
   if (byId) return byId;
   const candidates = napcatScanHealthByWebui.value[String(instance.webuiUrl || "")] || [];
   if (candidates.length === 0) return {};
   const port = Number(instance.gatewayPort || 0);
-  return candidates.find(item => Number(item.gatewayPort || 0) === port)
-    || candidates.find(item => napcatNamesLookRelated(instance.name || instance.id, item.gatewayName) || napcatNamesLookRelated(instance.name || instance.id, item.instanceName))
-    || candidates[0]
+  return candidates.find(item => item.gatewayName === gateway.value?.id && item.instanceName === instance.id && Number(item.gatewayPort || 0) === port)
     || {};
 }
 
 function napcatAccountUserId(instance: NapCatInstance): string {
+  const panel = napcatLoginPanels.value[instance.id]?.panel;
+  if (panel) return String(panel.currentAccount?.userId || panel.expectedUserId || "");
   const runtimeInfo = napcatRuntimeFor(instance);
   const health = napcatHealthFor(instance);
   return String(instance.botUserId || runtimeInfo.botUserId || runtimeInfo.userId || runtimeInfo.selfId || health.http?.userId || (health.loginInfo?.source !== "webui" ? health.loginInfo?.userId : "") || "");
 }
 
 function napcatAccountNickname(instance: NapCatInstance): string {
+  const panel = napcatLoginPanels.value[instance.id]?.panel;
+  if (panel) return String(panel.currentAccount?.nickname || (!panel.currentAccount ? instance.botNickname : "") || "");
   const runtimeInfo = napcatRuntimeFor(instance);
   const health = napcatHealthFor(instance);
   return String(instance.botNickname || runtimeInfo.botNickname || runtimeInfo.nickname || health.http?.nickname || (health.loginInfo?.source !== "webui" ? health.loginInfo?.nickname : "") || "");
@@ -2904,6 +2757,10 @@ function napcatAccountLogTitle(instance: NapCatInstance): string {
 }
 
 function napcatAccountConnected(instance: NapCatInstance): boolean {
+  const panel = napcatLoginPanels.value[instance.id]?.panel;
+  if (panel) return panel.loggedIn === true && panel.state !== NapcatState.AccountMismatch;
+  const checked = napcatInstanceHealthResult.value[instance.id];
+  if (checked) return checked.ok === true;
   if (napcatAccountOffline(instance)) return false;
   const runtimeInfo = napcatRuntimeFor(instance);
   const health = napcatHealthFor(instance);
@@ -2915,6 +2772,10 @@ function napcatAccountConnected(instance: NapCatInstance): boolean {
 }
 
 function napcatAccountOffline(instance: NapCatInstance): boolean {
+  const panel = napcatLoginPanels.value[instance.id]?.panel;
+  if (panel) return panel.offline === true || panel.currentAccount?.online === false;
+  const checked = napcatInstanceHealthResult.value[instance.id];
+  if (checked) return checked.state === "offline";
   const runtimeInfo = napcatRuntimeFor(instance);
   const health = napcatHealthFor(instance);
   return runtimeInfo.online === false
@@ -2936,12 +2797,14 @@ function napcatAccountLoginLabel(instance: NapCatInstance): string {
   const runtimeInfo = napcatRuntimeFor(instance);
   const health = napcatHealthFor(instance);
   if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "正在查询";
-  if (napcatLoginState(instance) === "account-online-elsewhere") return "QQ 在其他实例在线";
-  if (napcatLoginState(instance) === "quick-login-invalid") return "快速登录已过期，需扫码";
-  if (napcatLoginState(instance) === "qr-login-required") return "无快速登录身份，需扫码";
-  if (napcatLoginState(instance) === "login-conflict") return "QQ 登录冲突";
-  if (napcatLoginState(instance) === "account-mismatch") return "WebUI 登录了其他 QQ";
+  if (napcatLoginState(instance) === NapcatState.AccountOnlineElsewhere) return "QQ 在其他实例在线";
+  if (napcatLoginState(instance) === NapcatState.QuickLoginInvalid) return "快速登录已过期，需扫码";
+  if (napcatLoginState(instance) === NapcatState.QrLoginRequired) return "无快速登录身份，需扫码";
+  if (napcatLoginState(instance) === NapcatState.LoginConflict) return "QQ 登录冲突";
+  if (napcatLoginState(instance) === NapcatState.AccountMismatch) return "账号不匹配";
   if (napcatAccountOffline(instance)) return "QQ 已离线";
+  const panel = napcatLoginPanels.value[instance.id]?.panel;
+  if (panel) return panel.health?.ok === true ? "已登录" : panel.loggedIn ? "QQ 已登录，OneBot 待连接" : "等待 QQ 登录";
   if (runtimeInfo.loginInfoError || instance.loginInfoError) return String(runtimeInfo.loginInfoError || instance.loginInfoError);
   if (napcatAccountConnected(instance) || health.http?.ok) return "已登录";
   if (userId) return "已绑定 QQ";
@@ -2950,8 +2813,8 @@ function napcatAccountLoginLabel(instance: NapCatInstance): string {
 }
 
 function napcatAccountLoginClass(instance: NapCatInstance): string {
-  if (napcatLoginState(instance) === "account-online-elsewhere") return "text-warning";
-  if (["quick-login-invalid", "qr-login-required", "login-conflict", "account-mismatch"].includes(napcatLoginState(instance))) return "text-error";
+  if (napcatLoginState(instance) === NapcatState.AccountOnlineElsewhere) return "text-warning";
+  if ([NapcatState.QuickLoginInvalid, NapcatState.QrLoginRequired, NapcatState.LoginConflict, NapcatState.AccountMismatch].some(state => state === napcatLoginState(instance))) return "text-error";
   if (napcatAccountOffline(instance)) return "text-error";
   if (napcatAccountConnected(instance) || napcatHealthFor(instance).http?.ok) return "text-success";
   if (napcatAccountUserId(instance) || napcatWebuiSessionUserId(instance)) return "text-info";
@@ -2974,13 +2837,13 @@ function napcatInstanceStatusLabel(instance: NapCatInstance): string {
   if (restartingNapcatInstance.value[instance.id]) return "正在重启";
   if (instance.enabled === false) return "已停用";
   if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "查询中";
-  if (napcatLoginState(instance) === "account-online-elsewhere") return "账号在别处在线";
-  if (napcatLoginState(instance) === "quick-login-invalid") return "需要扫码";
-  if (napcatLoginState(instance) === "qr-login-required") return "需要扫码";
-  if (napcatLoginState(instance) === "login-conflict") return "登录冲突";
-  if (napcatLoginState(instance) === "account-mismatch") return "账号不匹配";
+  if (napcatLoginState(instance) === NapcatState.AccountOnlineElsewhere) return "账号在别处在线";
+  if (napcatLoginState(instance) === NapcatState.QuickLoginInvalid) return "需要扫码";
+  if (napcatLoginState(instance) === NapcatState.QrLoginRequired) return "需要扫码";
+  if (napcatLoginState(instance) === NapcatState.LoginConflict) return "登录冲突";
+  if (napcatLoginState(instance) === NapcatState.AccountMismatch) return "账号不匹配";
   if (napcatAccountOffline(instance)) return "QQ 已离线";
-  if (napcatAccountConnected(instance)) return "WS 已连接";
+  if (napcatAccountConnected(instance)) return "QQ 已登录";
   if (napcatHealthFor(instance).http?.ok) return "OneBot 已登录";
   if (napcatAccountUserId(instance)) return "已绑定";
   if (napcatHealthFor(instance).webui?.loginInfo?.userId) return "WebUI 有会话";
@@ -2993,8 +2856,8 @@ function napcatInstanceStatusColor(instance: NapCatInstance): string {
   if (managingNapcatLogin.value[instance.id] || launchingNapcatInstance.value[instance.id] || restartingNapcatInstance.value[instance.id]) return "info";
   if (instance.enabled === false) return "secondary";
   if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "info";
-  if (napcatLoginState(instance) === "account-online-elsewhere") return "warning";
-  if (["quick-login-invalid", "qr-login-required", "login-conflict", "account-mismatch"].includes(napcatLoginState(instance))) return "error";
+  if (napcatLoginState(instance) === NapcatState.AccountOnlineElsewhere) return "warning";
+  if ([NapcatState.QuickLoginInvalid, NapcatState.QrLoginRequired, NapcatState.LoginConflict, NapcatState.AccountMismatch].some(state => state === napcatLoginState(instance))) return "error";
   if (napcatAccountOffline(instance)) return "error";
   if (napcatAccountConnected(instance)) return "success";
   if (napcatAccountUserId(instance)) return "secondary";
@@ -3124,11 +2987,14 @@ function napcatSetupHint(): string {
 
 function napcatEntryMatchesInstance(entry: Record<string, any>, instance: NapCatInstance, allowUnscoped: boolean): boolean {
   const instanceIds = [entry.instanceId, entry.napcatInstanceId, entry.adapterInstanceId, entry.raw?.instanceId].filter(Boolean).map(String);
-  const userIds = [entry.botUserId, entry.selfId, entry.RobotQQId, entry.raw?.botUserId, entry.raw?.self_id].filter(Boolean).map(String);
+  const userIds = [entry.botUserId, entry.selfId, entry.RobotQQId, entry.raw?.botUserId, entry.raw?.self_id, entry.event === "login_info" ? entry.data?.userId : undefined].filter(Boolean).map(String);
   const ports = [entry.gatewayPort, entry.port, entry.wsPort, entry.raw?.gatewayPort].filter(Boolean).map(Number);
   const hasScope = instanceIds.length > 0 || userIds.length > 0 || ports.length > 0;
   if (!hasScope) return allowUnscoped;
   const targetUserId = napcatAccountUserId(instance);
+  if (userIds.length && targetUserId && userIds.some(id => id !== targetUserId)) return false;
+  if (instanceIds.length && !instanceIds.includes(String(instance.id))) return false;
+  if (ports.length && !ports.includes(Number(instance.gatewayPort || 0))) return false;
   return instanceIds.includes(String(instance.id)) ||
     (targetUserId ? userIds.includes(targetUserId) : false) ||
     ports.includes(Number(instance.gatewayPort || 0));
@@ -3780,21 +3646,20 @@ function selectCodexSession(value: unknown): void {
   touch();
 }
 
-function codexHookEnabled(key: keyof CodexHookSettings): boolean {
-  return gateway.value?.codexHooks?.[key] !== false;
-}
-
-function setCodexHookSetting(key: keyof CodexHookSettings, enabled: boolean | null): void {
-  if (!gateway.value) return;
-  gateway.value.codexHooks = {
-    sessionContextEnabled: gateway.value.codexHooks?.sessionContextEnabled !== false,
-    reasoningContextEnabled: gateway.value.codexHooks?.reasoningContextEnabled !== false,
-    planTaskCompletionEnabled: gateway.value.codexHooks?.planTaskCompletionEnabled !== false,
-    agentCommunicationEnforcementEnabled: gateway.value.codexHooks?.agentCommunicationEnforcementEnabled !== false,
-    onlyPrimaryPersonaCanSendMessages: gateway.value.codexHooks?.onlyPrimaryPersonaCanSendMessages === true,
-    [key]: enabled === true
-  };
-  touch();
+const hookUpdate = ref({ loading: false, message: "", error: "" });
+async function updateHooksToAgent(type: AgentAdapterType): Promise<void> {
+  if (hookUpdate.value.loading) return;
+  hookUpdate.value = { loading: true, message: "", error: "" };
+  try {
+    const response = await fetch(`/api/agent-adapters/hooks/update?adapter=${encodeURIComponent(type)}`, { method: "POST" });
+    const result = await response.json();
+    if (!response.ok || result.ok !== true) throw new Error(result.message || "Hook 更新失败");
+    hookUpdate.value.message = result.message;
+  } catch (error) {
+    hookUpdate.value.error = error instanceof Error ? error.message : String(error);
+  } finally {
+    hookUpdate.value.loading = false;
+  }
 }
 
 async function lookupCodexThreadBinding(): Promise<void> {
@@ -4111,18 +3976,10 @@ async function refreshVisibleNapcatHealth(): Promise<void> {
   if (instances.length === 0) return;
   autoCheckingNapcat.value = true;
   try {
-    const results = await Promise.all(instances.map(async (instance) => {
-      try {
-        const body = await runNapcatInstanceHealth(instance);
-        return [instance.id, body] as const;
-      } catch (e: unknown) {
-        return [instance.id, { ok: false, message: e instanceof Error ? e.message : String(e) }] as const;
-      }
+    await Promise.all(instances.map(async (instance) => {
+      napcatLoginUi(instance).visible = true;
+      await loadNapcatLoginPanel(instance);
     }));
-    napcatInstanceHealthResult.value = {
-      ...napcatInstanceHealthResult.value,
-      ...Object.fromEntries(results)
-    };
   } finally {
     autoCheckingNapcat.value = false;
   }
@@ -4154,6 +4011,9 @@ watch(() => gateway.value?.configName, (name) => {
 });
 
 watch(() => gateway.value?.id, () => {
+  window.clearTimeout(napcatPanelPollTimer);
+  napcatLoginPanels.value = {};
+  napcatInstanceHealthResult.value = {};
   codexPlanAssistants.value = {
     count: Math.max(1, gateway.value?.codexPlanAssistantSessions?.length || 1),
     loading: false,
@@ -4509,7 +4369,7 @@ watch(
                             <div v-if="napcatWebuiSessionLabel(instance)"><span>NapCat 会话</span><b :class="napcatWebuiSessionMismatch(instance) ? 'text-warning' : 'text-info'">{{ napcatWebuiSessionLabel(instance) }}</b></div>
                           </div>
                           <v-alert
-                            v-if="napcatLoginState(instance) === 'account-online-elsewhere' && napcatAccountOwner(instance)"
+                            v-if="napcatLoginState(instance) === NapcatState.AccountOnlineElsewhere && napcatAccountOwner(instance)"
                             type="warning"
                             variant="tonal"
                             density="compact"
@@ -4534,13 +4394,13 @@ watch(
                             </div>
                           </v-alert>
                           <v-alert
-                            v-else-if="['quick-login-invalid', 'qr-login-required'].includes(napcatLoginState(instance))"
+                            v-else-if="[NapcatState.QuickLoginInvalid, NapcatState.QrLoginRequired].some(state => state === napcatLoginState(instance))"
                             type="error"
                             variant="tonal"
                             density="compact"
                             class="mt-2"
                           >
-                            {{ napcatLoginState(instance) === "qr-login-required" ? "这个 QQ 没有可用的快速登录身份，或当前二维码已经过期。" : "NapCat 保存的快速登录身份已经过期。" }}
+                            {{ napcatLoginState(instance) === NapcatState.QrLoginRequired ? "这个 QQ 没有可用的快速登录身份，或当前二维码已经过期。" : "NapCat 保存的快速登录身份已经过期。" }}
                             请在下方登录控制中刷新二维码后扫码；扫码完成前 Rabi 不会误用其他 QQ，也不会反复重试旧身份。
                           </v-alert>
                           <div class="agent-action-bar mt-2">
@@ -4593,7 +4453,7 @@ watch(
                             </div>
                             <v-alert
                               v-if="napcatLoginUi(instance).panel?.loggedIn"
-                              :type="napcatLoginUi(instance).panel?.state === 'account-mismatch' ? 'warning' : 'success'"
+                              :type="napcatLoginUi(instance).panel?.state === NapcatState.AccountMismatch ? 'warning' : 'success'"
                               variant="tonal"
                               density="compact"
                               class="mb-3"
@@ -4618,12 +4478,22 @@ watch(
                             >
                               {{ napcatLoginUi(instance).message }}
                             </v-alert>
-                            <v-tabs v-model="napcatLoginUi(instance).mode" density="compact" color="primary" grow>
+                            <div v-if="napcatLoginUi(instance).panel?.currentAccount" class="mb-3">
+                              当前账号：QQ {{ napcatLoginUi(instance).panel?.currentAccount?.userId }}
+                              {{ napcatLoginUi(instance).panel?.currentAccount?.nickname || "" }}
+                              <div v-if="napcatLoginUi(instance).panel?.state === NapcatState.AccountMismatch" class="text-warning">
+                                此 Route 绑定：QQ {{ instance.botUserId }} {{ instance.botNickname || "" }}
+                              </div>
+                            </div>
+                            <v-alert v-if="napcatLoginUi(instance).panel?.managementAvailable === false" type="warning" variant="tonal" density="compact" class="mb-3">
+                              NapCat 管理服务未响应，登录操作暂不可用。请点击“启动并管理登录”查看启动结果。
+                            </v-alert>
+                            <v-tabs v-if="!napcatLoginUi(instance).panel?.loggedIn && napcatLoginUi(instance).panel?.managementAvailable" v-model="napcatLoginUi(instance).mode" density="compact" color="primary" grow>
                               <v-tab value="quick">快速登录</v-tab>
                               <v-tab value="password">密码登录</v-tab>
                               <v-tab value="qrcode">扫码登录</v-tab>
                             </v-tabs>
-                            <v-window v-model="napcatLoginUi(instance).mode" class="napcat-login-window">
+                            <v-window v-if="!napcatLoginUi(instance).panel?.loggedIn && napcatLoginUi(instance).panel?.managementAvailable" v-model="napcatLoginUi(instance).mode" class="napcat-login-window">
                               <v-window-item value="quick">
                                 <div class="napcat-login-pane">
                                   <v-select
@@ -4939,7 +4809,7 @@ watch(
                     </div>
                   </div>
                   <template v-if="choice.type === 'napcat' && runtime.running !== undefined">
-                    <v-alert v-if="adapterErrors('napcat').length" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
+                    <v-alert v-if="!gateway.napcatInstances?.some(instance => napcatLoginPanels[instance.id]?.panel) && adapterErrors('napcat').length" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
                       <div v-for="reason in adapterErrors('napcat')" :key="reason" class="text-body-2">{{ reason }}</div>
                     </v-alert>
                     <div class="status-row"><span>运行状态</span><b :class="messageAdapterInactive ? 'route-config-muted-text' : ''">{{ gateway.enabled === false || runtime.enabled === false ? "已关闭" : runtime.running ? "运行中" : "已停止" }}</b></div>
@@ -4947,7 +4817,7 @@ watch(
                     <div class="status-row"><span>远端地址</span><b>{{ napcatState.remoteAddress || "-" }}</b></div>
                     <div class="status-row"><span>最后连接</span><b>{{ napcatState.lastConnectedAt || "-" }}</b></div>
                     <div class="status-row"><span>最后断开</span><b>{{ napcatState.lastDisconnectedAt || "-" }}</b></div>
-                    <div class="status-row"><span>登录资料</span><b :class="napcatState.loginInfoError ? 'text-error' : ''">{{ napcatState.loginInfoError || napcatState.lastLoginInfoAt || "-" }}</b></div>
+                    <div v-if="!gateway.napcatInstances?.some(instance => napcatLoginPanels[instance.id]?.panel)" class="status-row"><span>登录资料</span><b :class="napcatState.loginInfoError ? 'text-error' : ''">{{ napcatState.loginInfoError || napcatState.lastLoginInfoAt || "-" }}</b></div>
                   </template>
                   <div v-else-if="choice.type === 'speech'" class="catalog-param-grid">
                     <v-alert v-if="speechAdapterActionError" class="full-span" type="error" variant="tonal" density="compact">
@@ -5622,6 +5492,12 @@ watch(
                       <span>{{ endpoint.label }}</span>
                       <b :class="endpoint.healthy ? 'text-success' : 'text-warning'">{{ endpoint.url }} · {{ endpoint.healthy ? "可访问" : "未响应" }}</b>
                     </div>
+                  </div>
+                  <div v-if="supportsManagedTaskFeature(agent.type, 'hooks')" class="mt-3">
+                    <v-btn variant="tonal" prepend-icon="mdi-update" :loading="hookUpdate.loading" @click="updateHooksToAgent(agent.type)">更新 Hook 到 Agent</v-btn>
+                    <div class="section-note mt-2">首次配置或更新时安装事件埋点。日常开关在“人格 → 自动化 → Agent Hook”管理。</div>
+                    <v-alert v-if="hookUpdate.error" type="error" variant="tonal" density="compact">{{ hookUpdate.error }}</v-alert>
+                    <v-alert v-else-if="hookUpdate.message" type="success" variant="tonal" density="compact">{{ hookUpdate.message }}</v-alert>
                   </div>
                   <div v-if="agentScanFor(agent.type)?.installCandidates?.length" class="dependency-actions mt-2">
                     <v-btn
@@ -6325,71 +6201,7 @@ watch(
                       {{ codexPlanAssistants.message }}
                     </v-alert>
                   </div>
-                  <div v-if="primaryAgentType === agent.type && supportsManagedTaskFeature(agent.type, 'hooks')" class="dependency-panel mt-3">
-                    <div class="section-title-row compact-row">
-                      <div>
-                        <div class="section-title small-title">Hook 管理</div>
-                        <div class="section-note">关闭开关只让 Manager 忽略对应 Hook；目标 Agent 端的插件注册保持不变。</div>
-                      </div>
-                    </div>
-                    <div class="catalog-param-grid mt-2">
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="codexHookEnabled('sessionContextEnabled')"
-                          color="primary"
-                          density="compact"
-                          hide-details
-                          label="会话入口上下文"
-                          @update:model-value="value => setCodexHookSetting('sessionContextEnabled', value)"
-                        />
-                        <div class="section-note">打开、恢复、清空或压缩 Agent 会话，以及用户提交新消息时触发。Hook：<code>SessionStart</code> / <code>UserPromptSubmit</code>。</div>
-                      </div>
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="codexHookEnabled('reasoningContextEnabled')"
-                          color="primary"
-                          density="compact"
-                          hide-details
-                          label="推理期上下文刷新"
-                          @update:model-value="value => setCodexHookSetting('reasoningContextEnabled', value)"
-                        />
-                        <div class="section-note">Agent 调用工具前后触发，只注入本轮新命中的计划、记忆或技能上下文。Hook：<code>PreToolUse</code> / <code>PostToolUse</code>。</div>
-                      </div>
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="codexHookEnabled('planTaskCompletionEnabled')"
-                          color="primary"
-                          density="compact"
-                          hide-details
-                          label="计划任务会话完成通知"
-                          @update:model-value="value => setCodexHookSetting('planTaskCompletionEnabled', value)"
-                        />
-                        <div class="section-note">绑定计划的执行任务输出本轮最终回答后触发，经 Rabi 投递到该人格 Route 绑定的会话。Hook：<code>Stop</code>；默认开启。</div>
-                      </div>
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="codexHookEnabled('agentCommunicationEnforcementEnabled')"
-                          color="primary"
-                          density="compact"
-                          hide-details
-                          label="强制使用 RabiAgent 消息投递接口"
-                          @update:model-value="value => setCodexHookSetting('agentCommunicationEnforcementEnabled', value)"
-                        />
-                        <div class="section-note">开启后，本 Route 的主人格、计划 Agent、计划秘书和消息处理 Agent 不能绕过 Rabi 直接操作其它持久 Agent 会话。通过 Rabi 投递时，发送方必须明确是否要求回复；要求回复后，目标 Agent 每轮结束仍未正式回复，Manager 会在五分钟后提醒。Hook：<code>PreToolUse</code> / <code>Stop</code>；默认开启。</div>
-                      </div>
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="gateway.codexHooks?.onlyPrimaryPersonaCanSendMessages === true"
-                          color="warning"
-                          density="compact"
-                          hide-details
-                          label="仅允许主人格发送消息"
-                          @update:model-value="value => setCodexHookSetting('onlyPrimaryPersonaCanSendMessages', value)"
-                        />
-                        <div class="section-note">默认关闭。开启后只有当前绑定的 {{ managedAgentLabel(agent.type) }} 主人格会话可发送；计划 Agent、计划秘书和消息处理 Agent 会被拒绝。</div>
-                      </div>
-                    </div>
-                  </div>
+
               </div>
             </v-expand-transition>
           </div>

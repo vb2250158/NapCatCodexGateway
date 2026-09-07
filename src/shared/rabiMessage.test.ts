@@ -22,7 +22,7 @@ test("message adapter source renders the endpoint, conversation, sender, and mes
     routeId: "route-main"
   };
 
-  assert.equal(renderRabiMessage(source, "  请处理这条消息。  "), [
+  assert.equal(renderRabiMessage(source, "  请处理这条消息。  ", "2026/9/7 12:34:56"), [
     "[消息源]",
     "消息源类型：消息端",
     "消息端：napcat",
@@ -35,6 +35,7 @@ test("message adapter source renders the endpoint, conversation, sender, and mes
     "消息组 ID：batch-400",
     "消息路线：主消息路线",
     "消息路线 ID：route-main",
+    "消息包发送时间：2026/9/7 12:34:56",
     "",
     "[消息内容]",
     "请处理这条消息。"
@@ -49,12 +50,12 @@ test("Agent source renders the actual Agent endpoint and complete session identi
     sessionName: "发布计划秘书",
     sessionId: "session-00000000-0000-4000-8000-000000000001",
     workspace: "C:/Data/Project"
-  }, "同步计划结果");
+  }, "同步计划结果", "2026/9/7 12:34:56");
 
   assert.match(message, /^\[消息源\]\n消息源类型：Agent\nAgent 端：dsh/);
   assert.match(message, /Agent 类型：计划秘书 Agent/);
   assert.match(message, /会话名称：发布计划秘书\n会话 ID：session-00000000-0000-4000-8000-000000000001/);
-  assert.match(message, /工作目录：C:\/Data\/Project\n\n\[消息内容\]\n同步计划结果$/);
+  assert.match(message, /工作目录：C:\/Data\/Project\n消息包发送时间：2026\/9\/7 12:34:56\n\n\[消息内容\]\n同步计划结果$/);
 });
 
 test("plan source renders plan identity and its originating Agent session", () => {
@@ -69,7 +70,7 @@ test("plan source renders plan identity and its originating Agent session", () =
       sessionId: "019f0000-0000-7000-8000-000000000010",
       workspace: "C:/Data/RabiRoute"
     }
-  });
+  }, "2026/9/7 12:34:56");
 
   assert.deepEqual(lines, [
     "[消息源]",
@@ -80,7 +81,8 @@ test("plan source renders plan identity and its originating Agent session", () =
     "Agent 类型：计划执行 Agent",
     "会话名称：消息源统一任务",
     "会话 ID：019f0000-0000-7000-8000-000000000010",
-    "工作目录：C:/Data/RabiRoute"
+    "工作目录：C:/Data/RabiRoute",
+    "消息包发送时间：2026/9/7 12:34:56"
   ]);
 });
 
@@ -92,7 +94,7 @@ test("system source renders the event and route identity", () => {
     eventId: "heartbeat-20260820",
     routeName: "项目心跳",
     routeId: "route-heartbeat"
-  }, "检查待处理事项"), [
+  }, "检查待处理事项", "2026/9/7 12:34:56"), [
     "[消息源]",
     "消息源类型：系统",
     "事件类型：heartbeat",
@@ -100,6 +102,7 @@ test("system source renders the event and route identity", () => {
     "事件 ID：heartbeat-20260820",
     "消息路线：项目心跳",
     "消息路线 ID：route-heartbeat",
+    "消息包发送时间：2026/9/7 12:34:56",
     "",
     "[消息内容]",
     "检查待处理事项"
@@ -117,6 +120,19 @@ test("message source normalization rejects omitted or incomplete source identity
     planId: "plan-1",
     sourceAgent: { agentAdapter: "unknown", sessionName: "来源", sessionId: "source-1" }
   }), /Invalid messageSource\.sourceAgent\.agentAdapter/);
+});
+
+test("delivery renders the packet send time inside the message source", () => {
+  assert.match(renderRabiDelivery({
+    messageSource: {
+      type: "system",
+      eventType: "test",
+      eventName: "测试",
+      eventId: "send-time"
+    },
+    messageContent: "正文",
+    sentAt: "2026-09-07 12:34:56"
+  }), /事件 ID：send-time\n消息包发送时间：2026-09-07 12:34:56\n\n\[消息内容\]/);
 });
 
 test("renderer removes a leading legacy source wrapper and quotes reserved headings in message content", () => {

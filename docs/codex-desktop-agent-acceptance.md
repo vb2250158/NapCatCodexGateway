@@ -67,7 +67,7 @@ flowchart TD
 - 列表必须支持全部任务或可靠分页，不能只展示前 20/100 条却声称是全部。
 - 同名且同 workspace 的多个任务必须按可解析的 `updatedAt` 自动取唯一最新者，不能依赖数据库返回顺序；最大时间并列或都无有效时间时才要求选择。
 - 创建成功、首投失败属于“已创建、待重试投递”，不是“不存在会话”。
-- 投递状态必须区分：内部过渡态 `accepted` 只表示 RabiRoute 已开始走 Desktop 主链；每次真实 Desktop 投递都附带 UUID `deliveryId`，只有该编号已写入目标任务 rollout 才能记为 `delivered`。`start/steer` 的 IPC 成功但 rollout 没有编号时，`steer` 必须改走一次 `start`；仍无编号则记为 `failed`。不得把 Route 受理、IPC 成功或仅选中任务冒充 Desktop 已接收。
+- 投递状态必须区分：内部过渡态 `accepted` 只表示 RabiRoute 已开始走 Desktop 主链；每次真实 Desktop 投递都附带 UUID `deliveryId`，只有该编号已写入目标任务 rollout 才能记为 `delivered`。IPC 已受理但编号暂未出现，或请求超时且未确认记录时，返回 `CodexDesktopDeliveryUnconfirmedError`，明确说明结果待确认，不标记已投递，也不自动重发。只有明确返回无活跃轮次时，才从 `steer` 转为 `start`。重试前必须回读原任务，不能把记录延迟当作未接收。不得把 Route 受理、IPC 成功或仅选中任务冒充 Desktop 已接收。
 - 已匹配的普通消息端事件应直接投递：先尝试 `steer` 当前活跃 turn，只在 turn 已结束/不存在时 `start`。Heartbeat 可由专用忙碌跳过开关例外；语音可由专用热/关键词策略例外。
 - 任务是否仍在运行不能只看 Desktop IPC 内存集合。Manager 按时间合并连接内活跃标记与 rollout 最近生命周期事件：较新的完成/中止/失败事件覆盖旧活跃标记，新一轮 IPC 活跃时间晚于旧 terminal 时仍保持运行；连接断开立即清空该连接的活跃标记。
 
@@ -108,7 +108,7 @@ flowchart TD
 | 保存 ID 指向已归档任务且没有同名有效任务 | 新建任务、更新绑定并投递 |
 | ID 非法或已删除，名称唯一存在 | 自动重绑；任务数不变 |
 | 已绑定 ID 在投递后确认已删除 | 创建替代任务、更新原计划 `taskBinding`、投递并返回警告 |
-| IPC 返回成功但目标 rollout 没有本次 `deliveryId` | 闲置任务从 `steer` 回退到 `start`；仍无编号则失败，不标记已投递 |
+| IPC 返回成功但目标 rollout 没有本次 `deliveryId` | 结果待确认，返回明确错误并保留原编号；不再发送 `start` |
 | 名称不存在 | 创建一个、保存 ID、投递到该任务 |
 | 创建后 Desktop 索引延迟 | 有限等待同一 ID；不创建第二个 |
 | 并发两次首次投递 | single-flight；只创建一个任务 |
@@ -141,3 +141,13 @@ flowchart TD
 提醒不自动 PATCH 计划，不创建任务，也不替换 `taskBinding`。只读工具、失败或无变化的写入、工作区外路径和没有匹配绑定计划的任务均不提醒。Manager 不可用时保持任务非阻断，并显示未送达诊断。
 
 配套实现规范见[标准 Agent 端接入需求](agent-adapter-standard-requirements.md)，历史失误与原因见[Agent 端接入：历史问题、正确边界与验证手册](agent-adapter-integration-lessons.md)。
+
+## 投递诊断日志
+
+闲置任务启动新一轮前，未显式指定模型的投递会通过 Desktop IPC 临时订阅当前 owner 的快照，检查实际生效的模型（协作模式中的模型优先），随后取消订阅；不读取旧聊天记录来自动选模型。模型为空或最多 3 秒内没有收到快照时，不发送 start，也不自动重试。请在 Codex 目标任务重新选择模型后重试；`The '' model is not supported` 表示模型设置错误，继续等待不会恢复。正在运行的任务仍使用 steer，不改变该轮模型。
+
+`queue_released.elapsedMs` 表示同一任务队列的等待时间；`model_checked` 记录模型和来源 `request` / `desktop-owner`，`model_rejected` 记录未发送的原因。显式配置的模型仍具有优先权，不自动替换为其他模型。
+
+运行期数据目录下的 `codex-adapter.log.jsonl` 记录 `desktop_delivery_*` 阶段。按 `data.deliveryMarker` 和 `data.threadId` 串联投递，按 `data.requestId` 配对 IPC 请求与响应。日志包含请求方法、协议版本、耗时 `elapsedMs`、记录确认等待上限 `receiptWaitMs` 和结果 `outcome`，不新增 prompt、附件正文或凭据日志。
+
+`steer_accepted` / `start_accepted` 只说明 IPC 已受理；`delivery_receipt_confirmed` 说明编号已进入任务记录；`delivery_unconfirmed` 表示需要核对原任务，不应自动重发。这些记录均不证明模型已经执行完毕，结束仍以任务最终回复和完成事件为准。

@@ -7,18 +7,57 @@
   "priority": "high",
   "kind": "architecture",
   "currentStepId": "validate-codex-plugin",
-  "currentStep": "AgentPacket、Codex Hook 与 Manager 现在共用聚焦知识生命周期；普通消息先展示最近消息再展示本轮消息，消息处理需求必须核对当前来源、递归引用链和附件。发送前的 send-context 审核绑定上下文版本、发送会话、目标和正文，引用图片还需逐张提交内容与含义说明。Codex Desktop 仍是唯一真实消息 owner，线程创建 reservation 防止并发或索引延迟造成重复任务。正式项目 workspace 的 Stop Hook 只对有效进展发起工作群通知，并要求 Outbox 发送标识与平台引用回读；缺少任一证据时完成通知失败关闭。",
-  "nextAction": "在真实 Codex Desktop 中验证本机图片随消息进入正确任务、同一完整 ID 连续续投、并发创建只产生一个任务、上下文变化后旧发送审核被拒绝、完成或暂停后的消息处理槽位释放，以及正式项目进展通知的真实平台回读；再补无副作用 packet preview。",
+  "currentStep": "AgentPacket、Codex Hook 与 Manager 现在共用聚焦知识生命周期；普通消息先展示最近消息再展示本轮消息，消息处理需求必须核对当前来源、递归引用链和附件。发送前的 send-context 审核绑定上下文版本、发送会话、目标和正文，引用图片还需逐张提交内容与含义说明。Codex Desktop 仍是唯一真实消息 owner，线程创建 reservation 防止并发或索引延迟造成重复任务。正式项目 workspace 的 Stop Hook 只对有效进展发起工作群通知，并要求 Outbox 发送标识与平台引用回读；缺少任一证据时完成通知失败关闭。 0.2.4 源码增加人格最终回复聊天记录、人格级 Hook 与完成回传规则，以及 Codex/DSH Hook 安装入口。Codex 回执不确定时停止自动重发；RabiLink 视频直连仍是实验接入。",
+  "nextAction": "在真实 Codex Desktop 中验证本机图片随消息进入正确任务、同一完整 ID 连续续投、并发创建只产生一个任务、上下文变化后旧发送审核被拒绝、完成或暂停后的消息处理槽位释放，以及正式项目进展通知的真实平台回读；再补无副作用 packet preview。 补充新 Hook 安装、最终回复历史与完成回传的实际使用验收；不以源码提交关闭进行中的计划。",
   "steps": [
-    { "id": "inject-agent-packet", "title": "注入事件、角色路径、计划、记忆、技能和接口索引", "status": "已完成" },
-    { "id": "add-required-read", "title": "增加处理前高相关必读项和按 ID 读取协议", "status": "已完成" },
-    { "id": "prototype-codex-plugin", "title": "实现真实 session ID 显式绑定的 Codex Hook 插件", "status": "已完成" },
-    { "id": "unify-context-manager", "title": "让 Codex Hook 与消息投递共用 Manager 上下文和知识生命周期", "status": "已完成" },
-    { "id": "focus-context-injection", "title": "默认只注入当前会话窗口、高相关知识摘要和精简人格工作集", "status": "已完成", "completedAt": "2026-07-25T00:00:00+08:00" },
-    { "id": "hydrate-napcat-replies", "title": "通过 OneBot get_msg 补齐并解析缺失的 QQ 引用链", "status": "已完成" },
-    { "id": "require-source-evidence-review", "title": "让消息处理需求核对来源链、附件和发送时上下文", "status": "已完成", "completedAt": "2026-08-12T00:00:00+08:00" },
-    { "id": "validate-codex-plugin", "title": "在真实 Codex 安装中验证插件生命周期", "status": "进行中", "blockedBy": "仍缺一次安装后的真实会话 Hook 验收" },
-    { "id": "add-packet-preview", "title": "为人格路由工作台增加无副作用 packet preview", "status": "未开始" }
+    {
+      "id": "inject-agent-packet",
+      "title": "注入事件、角色路径、计划、记忆、技能和接口索引",
+      "status": "已完成"
+    },
+    {
+      "id": "add-required-read",
+      "title": "增加处理前高相关必读项和按 ID 读取协议",
+      "status": "已完成"
+    },
+    {
+      "id": "prototype-codex-plugin",
+      "title": "实现真实 session ID 显式绑定的 Codex Hook 插件",
+      "status": "已完成"
+    },
+    {
+      "id": "unify-context-manager",
+      "title": "让 Codex Hook 与消息投递共用 Manager 上下文和知识生命周期",
+      "status": "已完成"
+    },
+    {
+      "id": "focus-context-injection",
+      "title": "默认只注入当前会话窗口、高相关知识摘要和精简人格工作集",
+      "status": "已完成",
+      "completedAt": "2026-07-25T00:00:00+08:00"
+    },
+    {
+      "id": "hydrate-napcat-replies",
+      "title": "通过 OneBot get_msg 补齐并解析缺失的 QQ 引用链",
+      "status": "已完成"
+    },
+    {
+      "id": "require-source-evidence-review",
+      "title": "让消息处理需求核对来源链、附件和发送时上下文",
+      "status": "已完成",
+      "completedAt": "2026-08-12T00:00:00+08:00"
+    },
+    {
+      "id": "validate-codex-plugin",
+      "title": "在真实 Codex 安装中验证插件生命周期",
+      "status": "进行中",
+      "blockedBy": "仍缺一次安装后的真实会话 Hook 验收"
+    },
+    {
+      "id": "add-packet-preview",
+      "title": "为人格路由工作台增加无副作用 packet preview",
+      "status": "未开始"
+    }
   ],
   "waitingFor": "可安装 Codex 插件的真实会话验收",
   "project": {
@@ -33,6 +72,38 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-08-24T00:00:00+08:00",
-  "keywords": ["AgentPacket", "上下文注入", "contextInjection", "focused", "CQ reply", "CQ at", "引用链", "OneBot get_msg", "Gateway 历史", "Outbox", "Codex 插件", "session ID", "Hook", "RabiContextManager", "PreToolUse", "PostToolUse", "人格绑定", "packet preview", "sourceThreadId", "sourceAgentType", "responsePolicy", "required response", "消息处理 Agent", "sourceEvidenceReview", "send-context", "localImage", "replyImageDescriptions", "thread reservation", "taskBinding", "secretaryBinding", "任务交接回执"]
+  "updatedAt": "2026-09-07T00:00:00+08:00",
+  "keywords": [
+    "AgentPacket",
+    "上下文注入",
+    "contextInjection",
+    "focused",
+    "CQ reply",
+    "CQ at",
+    "引用链",
+    "OneBot get_msg",
+    "Gateway 历史",
+    "Outbox",
+    "Codex 插件",
+    "session ID",
+    "Hook",
+    "RabiContextManager",
+    "PreToolUse",
+    "PostToolUse",
+    "人格绑定",
+    "packet preview",
+    "sourceThreadId",
+    "sourceAgentType",
+    "responsePolicy",
+    "required response",
+    "消息处理 Agent",
+    "sourceEvidenceReview",
+    "send-context",
+    "localImage",
+    "replyImageDescriptions",
+    "thread reservation",
+    "taskBinding",
+    "secretaryBinding",
+    "任务交接回执"
+  ]
 }

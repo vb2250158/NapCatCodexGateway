@@ -24,11 +24,19 @@ public interface RabiGlassBridge {
         void onGlassAudioPcm(byte[] pcm);
 
         void onGlassReviewRequested();
+
+        default void onGlassVideoH264(byte[] bytes) {}
+
+        default void onGlassVideoState(String state) {}
     }
 
     void start();
 
     void stop();
+
+    void startVideoStream(int fps, int bitrate);
+
+    void stopVideoStream();
 
     boolean sendAudioPcmToGlass(String messageId, byte[] pcm);
 

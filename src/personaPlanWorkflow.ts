@@ -48,7 +48,7 @@ export type PersonaPlanWorkflowStatus = {
 export type PersonaPlanStatusDefinition = PersonaPlanWorkflowStatus;
 
 export type PersonaPlanWorkflow = {
-  schemaVersion: 3;
+  schemaVersion: 4;
   archiveAfterHours: number;
   statuses: PersonaPlanWorkflowStatus[];
   roles: Record<PersonaPlanWorkflowRole, string>;
@@ -99,6 +99,8 @@ const DEFAULT_WORKFLOW_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../assets/default-persona-plan-workflow.json"
 );
+const LEGACY_INFORMATION_NEEDED_DESCRIPTION = "分析已完成，但目标、范围、验收标准或实施依据仍不足，正在等待补充信息。";
+const LEGACY_INFORMATION_NEEDED_DESCRIPTION_EN = "Analysis is complete, but the goal, scope, acceptance criteria, or implementation evidence is still insufficient and requires more information.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -234,8 +236,8 @@ function stableJson(value: unknown): string {
 export function validatePersonaPlanWorkflow(value: unknown): PersonaPlanWorkflow {
   if (!isRecord(value)) throw new Error("planWorkflow must be an object.");
   assertOnlyKeys(value, ["schemaVersion", "archiveAfterHours", "statuses", "roles"], "planWorkflow");
-  if (value.schemaVersion !== 1 && value.schemaVersion !== 2 && value.schemaVersion !== 3) {
-    throw new Error("planWorkflow.schemaVersion must be 1, 2, or 3.");
+  if (value.schemaVersion !== 1 && value.schemaVersion !== 2 && value.schemaVersion !== 3 && value.schemaVersion !== 4) {
+    throw new Error("planWorkflow.schemaVersion must be 1, 2, 3, or 4.");
   }
   const archiveAfterHours = Number(value.archiveAfterHours);
   if (!Number.isInteger(archiveAfterHours) || archiveAfterHours < 1 || archiveAfterHours > 87_600) {
@@ -282,7 +284,10 @@ export function validatePersonaPlanWorkflow(value: unknown): PersonaPlanWorkflow
       roles
     });
   }
-  const roleStatus = (role: PersonaPlanWorkflowRole) => statuses.find((status) => status.key === roles[role])!;
+  const migratedStatuses = value.schemaVersion < 4
+    ? migrateLegacyInformationNeededDescription(statuses, roles)
+    : statuses;
+  const roleStatus = (role: PersonaPlanWorkflowRole) => migratedStatuses.find((status) => status.key === roles[role])!;
   if (!roleStatus("approval").requiresApproval) throw new Error("planWorkflow.roles.approval must require approval.");
   for (const role of ["initial", "analysis", "informationNeeded", "approval", "execution", "waitingPackage", "waitingQa", "discussion"] as const) {
     if (roleStatus(role).currentStep !== "required") {
@@ -308,7 +313,36 @@ export function validatePersonaPlanWorkflow(value: unknown): PersonaPlanWorkflow
   for (const role of ["initial", "analysis", "informationNeeded", "approval", "execution", "waitingPackage", "waitingQa", "discussion", "paused"] as const) {
     if (roleStatus(role).terminal) throw new Error(`planWorkflow.roles.${role} must not be terminal.`);
   }
-  return { schemaVersion: 3, archiveAfterHours, statuses, roles };
+  return { schemaVersion: 4, archiveAfterHours, statuses: migratedStatuses, roles };
+}
+
+function migrateLegacyInformationNeededDescription(
+  statuses: PersonaPlanWorkflowStatus[],
+  roles: Partial<Record<PersonaPlanWorkflowRole, string>>
+): PersonaPlanWorkflowStatus[] {
+  const defaultWorkflow = loadDefaultPersonaPlanWorkflow();
+  const defaultStatus = defaultWorkflow.statuses.find(
+    (status) => status.key === defaultWorkflow.roles.informationNeeded
+  );
+  if (!defaultStatus || roles.informationNeeded !== defaultStatus.key) return statuses;
+  return statuses.map((status) => {
+    if (
+      status.key !== defaultStatus.key
+      || status.label !== defaultStatus.label
+      || status.labelEn.toLocaleLowerCase("en-US") !== defaultStatus.labelEn.toLocaleLowerCase("en-US")
+    ) {
+      return status;
+    }
+    const description = status.description === LEGACY_INFORMATION_NEEDED_DESCRIPTION
+      ? defaultStatus.description
+      : status.description;
+    const descriptionEn = status.descriptionEn === LEGACY_INFORMATION_NEEDED_DESCRIPTION_EN
+      ? defaultStatus.descriptionEn
+      : status.descriptionEn;
+    return description === status.description && descriptionEn === status.descriptionEn
+      ? status
+      : { ...status, description, descriptionEn };
+  });
 }
 
 type PersonaPlanWorkflowV1 = {
@@ -346,7 +380,7 @@ function migratePersonaPlanWorkflowV1(workflow: PersonaPlanWorkflowV1): PersonaP
   statusesWithoutInformationNeeded.splice(analysisIndex + 1, 0, informationNeeded);
   const statuses = statusesWithoutInformationNeeded.map((status, order) => ({ ...status, order }));
   return validatePersonaPlanWorkflow({
-    schemaVersion: 3,
+    schemaVersion: 4,
     archiveAfterHours: workflow.archiveAfterHours,
     statuses,
     roles: {
@@ -564,7 +598,7 @@ export function ensurePersonaPlanWorkflow(roleDir: string): PersonaPlanWorkflowR
   const existing = readPersonaPlanWorkflow(roleDir);
   if (existing) {
     const rawSchemaVersion = readPersonaConfig(personaConfigPath(roleDir))?.planWorkflow;
-    if (isRecord(rawSchemaVersion) && rawSchemaVersion.schemaVersion === 3) return existing;
+    if (isRecord(rawSchemaVersion) && rawSchemaVersion.schemaVersion === 4) return existing;
     return writePersonaPlanWorkflow(roleDir, existing.workflow, { expectedRevision: existing.revision });
   }
   return writePersonaPlanWorkflow(roleDir, loadDefaultPersonaPlanWorkflow(), "");

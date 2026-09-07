@@ -68,6 +68,7 @@ class MainActivity : Activity() {
     private lateinit var inputMode: Spinner
     private lateinit var proactivityPreference: Spinner
     private lateinit var autoStartVoiceService: Switch
+    private lateinit var directVideo: Switch
     private lateinit var autoPlayAgentVoice: Switch
     private lateinit var ttsModel: EditText
     private lateinit var ttsVoice: EditText
@@ -936,6 +937,13 @@ class MainActivity : Activity() {
         addView(label("当前交互模式")); addView(inputMode, full(0, 0, 0, 6))
         addView(note("眼镜模式只有在眼镜真实连接后才开始采集；连接前或断线后保持暂停，不会同时上传手机和眼镜麦克风。"))
         addView(autoStartVoiceService)
+        directVideo = RabiMobileUi.styleSwitch(this@MainActivity, Switch(this@MainActivity).apply {
+            text = "眼镜模式自动直传视频到电脑"
+            isEnabled = BuildConfig.ROKID_VIDEO
+        })
+        addView(directVideo)
+        addView(note("视频保存到所选电脑，不经过转接服务器。局域网或公网直连失败时停止视频，不切换服务器中继。"))
+        if (!BuildConfig.ROKID_VIDEO) addView(note("当前手机包未包含乐奇视频 SDK；此能力仍在真机验收中。"))
         addView(note("开启后，每次打开 Rabi 都会按当前交互模式启动语音服务。关闭后只保持消息连接，不会自动使用手机或眼镜麦克风。"))
         addView(label("明确主动性偏好")); addView(proactivityPreference, full(0, 0, 0, 6))
         addView(note("这是交给 PC / Route / Agent 的明确偏好，不是 App 本地决策规则。Agent 仍可根据情景、权限和动作安全门选择不打扰、准备、提示、建议、请求确认或行动。"))
@@ -978,6 +986,7 @@ class MainActivity : Activity() {
             else -> 0
         })
         autoStartVoiceService.isChecked = value.autoStartVoiceService
+        directVideo.isChecked = RabiConversationSettings.directVideoEnabled(this)
         autoPlayAgentVoice.isChecked = value.autoPlayAgentVoice
         ttsModel.setText(value.ttsModel)
         ttsVoice.setText(value.ttsVoice)
@@ -1009,6 +1018,7 @@ class MainActivity : Activity() {
             audioReserveFreeMb.text.toString().toIntOrNull() ?: 1024
         )
         next.save(this)
+        RabiConversationSettings.setDirectVideoEnabled(this, directVideo.isChecked)
         if (previous.proactivityPreference != next.proactivityPreference) {
             RabiConversationService.updateProactivityPreference(this, next.proactivityPreference.wireValue)
         }

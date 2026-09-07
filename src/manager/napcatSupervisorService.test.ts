@@ -2,6 +2,34 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { NapcatSupervisorService } from "./napcatSupervisorService.js";
 
+test("startup plugin waits for bound Route readiness before consuming its one automatic login run", async () => {
+  const pluginUrl = new URL("../../plugins/builtin/io.rabiroute.manager.napcat-supervisor/1.0.0/manager.mjs", import.meta.url).href;
+  const plugin = await import(pluginUrl);
+  let runs = 0;
+  const runtime = {
+    NapcatSupervisorService, managerReadOnly: false, managerShouldAutostart: true,
+    managerListenerReady: true, routeCatalogReady: false, activeNapcatControlContext: {},
+    startActiveNapcatSupervisor: () => {}, stopActiveNapcatSupervisor: async () => {},
+    autoLoginNapcatInstancesOnRabiStart: async () => { runs++; }
+  };
+  const starters: Array<() => Promise<() => Promise<void>>> = [];
+  await plugin.activate({ identity: { instanceId: "supervisor-test" },
+    services: { require: () => runtime, provide: () => {} },
+    contributions: { register: () => {} }, effects: { add: (start: typeof starters[number]) => { starters.push(start); } }
+  });
+  const dispose = await starters[0]!();
+  try {
+    runtime.startActiveNapcatSupervisor();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(runs, 0);
+    runtime.routeCatalogReady = true;
+    runtime.startActiveNapcatSupervisor();
+    runtime.startActiveNapcatSupervisor();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(runs, 1);
+  } finally { await dispose(); }
+});
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;

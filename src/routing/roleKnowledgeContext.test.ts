@@ -20,7 +20,12 @@ test("AgentPacket plan hints explain shared guidance and approval feedback workf
   assert.match(hints, /approver/);
   assert.match(hints, /recommendation/);
   assert.match(hints, /sourceMessageId/);
-  assert.match(hints, /仍在分析时使用 roles\.analysis，分析后确认关键资料不足时使用 roles\.informationNeeded/);
+  assert.match(hints, /现有信息无法形成可审批的具体方案/);
+  assert.match(hints, /缺失信息影响原因、改法、范围或验收合同/);
+  assert.match(hints, /暂未复现、疑似历史已修复、缺目标包、等待 QA 或等待是否关闭都不是 roles\.informationNeeded/);
+  assert.match(hints, /roles\.waitingPackage/);
+  assert.match(hints, /roles\.waitingQa/);
+  assert.match(hints, /roles\.closed/);
   assert.match(hints, /roles\.paused/);
   assert.match(hints, /plan\.status 只保存/);
   assert.match(hints, /planWorkflow\.roles/);
@@ -59,7 +64,11 @@ test("focused AgentPacket hints keep plan attachment discovery available", () =>
     assert.match(hints, /计划 attachments/);
     assert.match(hints, /图片、视频预览/);
     assert.match(hints, /plan\.status 只保存/);
+    assert.match(hints, /无法形成可审批具体方案/);
     assert.match(hints, /roles\.analysis、roles\.informationNeeded、roles\.approval、roles\.execution/);
+    assert.match(hints, /roles\.waitingPackage/);
+    assert.match(hints, /roles\.waitingQa/);
+    assert.match(hints, /roles\.closed/);
     assert.match(hints, /POST \/api\/personas\/\{personaId\}\/messages/);
     assert.match(hints, /Idempotency-Key/);
     assert.match(hints, /有界超时/);

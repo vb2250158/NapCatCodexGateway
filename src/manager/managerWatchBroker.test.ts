@@ -10,6 +10,7 @@ import {
   publicManagerWatchBrokerStatus,
   spawnConfigWatchSnapshotAttempt,
   type ConfigWatchSnapshotAttempt,
+  type ManagerWatchDiagnostic,
   type ConfigWatchSnapshotResult
 } from "./managerWatchBroker.js";
 
@@ -104,6 +105,7 @@ test("a ten-second UNC snapshot hang is killed, retried, and never blocks a real
   let secondStartedAt = 0;
   const terminationSignals: string[] = [];
   const lifecycleStates: string[] = [];
+  const diagnostics: ManagerWatchDiagnostic[] = [];
   const createAttempt = (): ConfigWatchSnapshotAttempt => {
     attempts += 1;
     if (attempts === 2) secondStartedAt = performance.now();
@@ -168,7 +170,8 @@ test("a ten-second UNC snapshot hang is killed, retried, and never blocks a real
       return { close() {} };
     },
     onSnapshot: async () => {},
-    onStatus: status => lifecycleStates.push(status.state)
+    onStatus: status => lifecycleStates.push(status.state),
+    onDiagnostic: diagnostic => diagnostics.push(diagnostic)
   });
   t.after(() => broker.close());
 
@@ -204,6 +207,14 @@ test("a ten-second UNC snapshot hang is killed, retried, and never blocks a real
   assert.ok(secondStartedAt >= firstClosedAt, "replacement starts only after the killed child closes");
   assert.ok(terminated >= 2, "both the timed-out and completed one-shot workers are reaped");
   assert.ok(lifecycleStates.includes("degraded"));
+  assert.deepEqual(diagnostics.map(item => item.event), ["manager_watch_degraded", "manager_watch_recovered"]);
+  assert.equal(diagnostics[0]!.status.activeWorkerPid, 41_001);
+  assert.equal(diagnostics[0]!.timeoutMs, 40);
+  assert.ok(diagnostics[0]!.durationMs >= 35);
+  assert.match(diagnostics[0]!.error!.stack!, /Manager watch snapshot worker exceeded/);
+  assert.equal(diagnostics[1]!.status.activeWorkerPid, 41_002);
+  assert.equal(diagnostics[1]!.status.restarts, 1);
+  assert.equal(diagnostics[1]!.error, undefined);
   assert.ok(Math.max(...durations) < 250, `health response exceeded budget: ${Math.max(...durations)}ms`);
 });
 
@@ -212,6 +223,7 @@ test("an unconfirmed hard kill stays degraded without stacking another worker", 
   const neverClosed = deferred<void>();
   const terminationSignals: string[] = [];
   let attempts = 0;
+  const diagnostics: ManagerWatchDiagnostic[] = [];
   const broker = new ManagerWatchBroker({
     request: {
       routeRoot: "G:\\ExampleApp\\data\\route",
@@ -232,7 +244,11 @@ test("an unconfirmed hard kill stays degraded without stacking another worker", 
         }
       };
     },
-    onSnapshot: async () => {}
+    onSnapshot: async () => {},
+    onDiagnostic: diagnostic => {
+      diagnostics.push(diagnostic);
+      throw new Error("diagnostic sink unavailable");
+    }
   });
   t.after(() => broker.close());
 
@@ -245,6 +261,9 @@ test("an unconfirmed hard kill stays degraded without stacking another worker", 
   assert.equal(broker.status().activeWorkerPid, 41_006);
   assert.equal(attempts, 1, "an unconfirmed child must not overlap a replacement");
   assert.deepEqual(terminationSignals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(diagnostics.length, 2, "timeout and unconfirmed termination are separate incidents");
+  assert.match(diagnostics[1]!.error!.message, /termination_failed:/);
+  assert.equal(diagnostics[1]!.status.activeWorkerPid, 41_006);
 
   const closeStartedAt = performance.now();
   broker.close();

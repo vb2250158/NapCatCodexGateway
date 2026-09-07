@@ -28,7 +28,6 @@ export const activate = definePlugin({
             });
             try {
         const requestTracker = new runtime.ManagerPluginRequestTracker();
-        const ownedInstances = new Map();
         let accepting = true;
         const activeOperations = new Set();
         const assertAccepting = () => {
@@ -49,41 +48,8 @@ export const activate = definePlugin({
                 await Promise.allSettled([...activeOperations]);
             }
         };
-        const rememberLaunch = (request, child) => {
-            assertAccepting();
-            const gatewayId = request.gatewayId?.trim();
-            const instanceId = request.instanceId?.trim();
-            if (gatewayId && instanceId) {
-                const key = `${gatewayId}:${instanceId}`;
-                const current = ownedInstances.get(key);
-                ownedInstances.set(key, {
-                    request: { gatewayId, instanceId },
-                    child,
-                    pids: current?.pids ?? new Set()
-                });
-            }
-        };
-        const rememberLaunchPids = (request, pids) => {
-            const gatewayId = request.gatewayId?.trim();
-            const instanceId = request.instanceId?.trim();
-            if (!gatewayId || !instanceId)
-                return;
-            const key = `${gatewayId}:${instanceId}`;
-            const current = ownedInstances.get(key);
-            if (!current)
-                return;
-            for (const pid of pids)
-                if (/^\d+$/.test(pid))
-                    current.pids.add(pid);
-        };
-        const controlContext = runtime.napcatManagerCtx(rememberLaunch, rememberLaunchPids, assertAccepting);
+        const controlContext = runtime.napcatManagerCtx(assertAccepting);
         runtime.activeNapcatControlContext = controlContext;
-        const releaseOwnership = (request) => {
-            const gatewayId = request.gatewayId?.trim();
-            const instanceId = request.instanceId?.trim();
-            if (gatewayId && instanceId)
-                ownedInstances.delete(`${gatewayId}:${instanceId}`);
-        };
         ctx.effect(() => {
             const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:napcat-control", "manager.napcat-control.api", [
                 requestTracker.wrap((request, requestUrl, response) => runtime.handleNapcatControlApi(request, requestUrl, response, {
@@ -100,8 +66,6 @@ export const activate = definePlugin({
                     restart: body => runOperation(() => runtime.restartNapcatInstanceEndpoint(controlContext, body)),
                     remove: body => runOperation(async () => {
                         const result = await runtime.removeManagedNapcatInstance(body);
-                        if (result.ok === true)
-                            releaseOwnership(body);
                         return result;
                     })
                 }))
@@ -127,28 +91,8 @@ export const activate = definePlugin({
                     runtime.stopActiveNapcatSupervisor()
                 ]);
                 await drainOperations();
-                const owned = [...ownedInstances.values()];
-                ownedInstances.clear();
-                await Promise.allSettled(owned.flatMap(({ child, pids }) => {
-                    const stops = [];
-                    if (child && child.exitCode === null) {
-                        stops.push(runtime.stopChildProcessTree(child).catch(() => { child.kill(); }));
-                    }
-                    for (const pid of pids) {
-                        const numericPid = Number(pid);
-                        if (!Number.isInteger(numericPid) || numericPid <= 0 || numericPid === child?.pid)
-                            continue;
-                        stops.push(process.platform === "win32"
-                            ? runtime.runWindowsTaskkill(numericPid).catch(() => undefined)
-                            : Promise.resolve().then(() => {
-                                try {
-                                    process.kill(numericPid, "SIGTERM");
-                                }
-                                catch { }
-                            }));
-                    }
-                    return stops;
-                }));
+                // Bound processes survive Manager handover; the persisted owner reconciles
+                // them with the next committed Route snapshot before admitting commands.
                 if (runtime.activeNapcatControlContext === controlContext)
                     runtime.activeNapcatControlContext = undefined;
             };

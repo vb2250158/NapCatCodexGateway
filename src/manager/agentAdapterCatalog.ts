@@ -1,4 +1,6 @@
 import type http from "node:http";
+import { fileURLToPath } from "node:url";
+import { updateAgentHooks } from "../agentAdapters/hookInstallation.js";
 import { listRegisteredAgentAdapterManifests } from "../agentAdapters/agentAdapter.js";
 import type {
   AgentScanOptions,
@@ -142,6 +144,11 @@ export class AgentAdapterCatalogService {
     this.recordOperation = options.recordOperation ?? recordPerformanceOperation;
   }
 
+  async updateHooks(adapter: string): Promise<{ message: string }> {
+    this.assertAccepting();
+    return updateAgentHooks(fileURLToPath(new URL("../../", import.meta.url)), adapter);
+  }
+
   async catalog(): Promise<AgentAdapterCatalogSnapshot> {
     this.assertAccepting();
     const manifests = await this.track(this.listManifests());
@@ -282,6 +289,12 @@ export function handleAgentAdapterCatalogApi(
   response: http.ServerResponse,
   context: AgentAdapterCatalogRoutesContext
 ): boolean {
+  if (request.method === "POST" && requestUrl.pathname === "/api/agent-adapters/hooks/update") {
+    void context.service.updateHooks(requestUrl.searchParams.get("adapter") || "")
+      .then(data => context.jsonResponse(response, 200, { ok: true, ...data }))
+      .catch(error => context.jsonResponse(response, 500, { ok: false, message: errorMessage(error) }));
+    return true;
+  }
   if (request.method === "GET" && requestUrl.pathname === "/api/agent-adapters/catalog") {
     void context.service.catalog()
       .then(data => context.jsonResponse(response, 200, { code: 0, data }))

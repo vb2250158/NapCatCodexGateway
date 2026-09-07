@@ -455,11 +455,20 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
             }
             using (var finalAdmission = new ManagerLifecycleClient())
             {
-                var finalProbe = await finalAdmission.ProbeAsync(ready, generationId, cancellationToken);
-                if (finalProbe.State is not (ManagerProbeState.Healthy or ManagerProbeState.Degraded) ||
+                var admissionDeadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
+                ManagerProbeResult? finalProbe = null;
+                do
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (manager.HasExited || tray.HasExited) break;
+                    finalProbe = await finalAdmission.ProbeAsync(ready, generationId, cancellationToken);
+                    if (finalProbe.State is ManagerProbeState.Healthy or ManagerProbeState.Degraded) break;
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
+                } while (DateTimeOffset.UtcNow < admissionDeadline);
+                if (finalProbe?.State is not (ManagerProbeState.Healthy or ManagerProbeState.Degraded) ||
                     manager.HasExited || tray.HasExited)
                 {
-                    throw new InvalidOperationException($"Manager failed final generation admission: {finalProbe.Message}");
+                    throw new InvalidOperationException($"Manager failed final generation admission: {finalProbe?.Message ?? "process exited"}");
                 }
             }
             ManagerPortPreference.SaveSuccessfulEndpoint(stateRoot, ready.BaseUrl, log);

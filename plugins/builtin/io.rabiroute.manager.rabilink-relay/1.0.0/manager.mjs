@@ -29,7 +29,15 @@ export const activate = definePlugin({
             try {
         const sync = async () => runtime.syncRabiLinkRelayRuntime(() => runtime.syncActiveRabiLinkRelay === sync ? sync() : undefined);
         runtime.syncActiveRabiLinkRelay = sync;
+        const video = runtime.createDirectVideoReceiver();
+        const videoRequests = new runtime.ManagerPluginRequestTracker();
+        const unregisterVideo = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes,
+            "manager:rabilink-relay", "manager.rabilink.video", [videoRequests.wrap(runtime.createDirectVideoRoutes(video))],
+            [{ routeId: "rabilink-video", kind: "prefix", pathPrefix: "/api/rabilink/video/" }]);
         ctx.effect(() => async () => {
+            unregisterVideo();
+            await video.stop();
+            await videoRequests.stop();
             if (runtime.syncActiveRabiLinkRelay === sync) {
                 runtime.syncActiveRabiLinkRelay = async () => { };
             }

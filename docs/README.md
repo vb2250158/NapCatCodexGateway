@@ -83,6 +83,7 @@
 - [RabiLink 眼镜端三条路线对比](rabilink-glasses-route-comparison.md) — 原生灵珠智能体、AIUI 与原生 App 的宿主、生命周期、设备能力、发布成本和当前建议。
 - [Rabi 移动设备消息端](mobile-message-endpoint.md) — **实验集成**。手机独立聊天、可选眼镜、可靠队列、通知、附件、配置助手和真机验收边界。
 - [RabiLink 手机边缘枢纽](rabilink-phone-edge-hub.md) — 手机/穿戴设备契约和 Android SDK。
+- [手机与电脑视频直连](rabilink-direct-video.md) — **实验接入**。直连视频的带宽边界、SDK 条件、构建方式和真机验证结果。
 - [RabiLink 智能手表 / 手环健康消息端](rabilink-wearable-health.md) — **实验集成**。手机配置、结构化健康时间线、Agent 查询 API、阈值告警和小米 ADB 过渡桥。
 - [AIUI 到手机 / 原生眼镜方案的功能等价清单](rabilink-aiui-native-parity.md) — 按代码、自动化与真机证据逐项记录迁移完成度。
 - [RabiLink AIUI 常驻边界](rabilink-aiui-residency-plan.md) — 已实现链路与常驻能力限制混合文档，阅读时区分代码事实和计划。

@@ -90,7 +90,18 @@ type ManagerWatchBrokerOptions = {
   ensureLocalDirectory?: (directory: string) => void;
   onSnapshot: (result: ManagerWatchSnapshotResult, reason: string) => void | Promise<void>;
   onStatus?: (status: ManagerWatchBrokerStatus) => void;
+  onDiagnostic?: (diagnostic: ManagerWatchDiagnostic) => void;
 };
+
+export type ManagerWatchDiagnostic = Readonly<{
+  event: "manager_watch_degraded" | "manager_watch_recovered";
+  status: ManagerWatchBrokerStatus;
+  previousState: ManagerWatchBrokerStatus["state"];
+  reason: string;
+  durationMs: number;
+  timeoutMs: number;
+  error?: Error;
+}>;
 
 type ArmedWatcher = {
   handle: WatchHandle;
@@ -232,6 +243,8 @@ export class ManagerWatchBroker {
   >> & ManagerWatchBrokerOptions;
   private readonly watchers = new Map<string, ArmedWatcher>();
   private currentStatus = initialStatus();
+  private attemptStartedAt = 0;
+  private attemptReason = "startup";
   private activeAttempt?: ConfigWatchSnapshotAttempt;
   private pollTimer?: NodeJS.Timeout;
   private debounceTimer?: NodeJS.Timeout;
@@ -337,6 +350,8 @@ export class ManagerWatchBroker {
 
   private async refresh(reason: string): Promise<void> {
     const request = this.currentRequest();
+    this.attemptStartedAt = Date.now();
+    this.attemptReason = reason;
     let attempt: ConfigWatchSnapshotAttempt | undefined;
     let resultReceived = false;
     let timer: NodeJS.Timeout | undefined;
@@ -382,7 +397,7 @@ export class ManagerWatchBroker {
         partial: true,
         errors: [error instanceof Error ? error.message : String(error)],
         timeouts: this.currentStatus.timeouts + (timedOut ? 1 : 0)
-      });
+      }, error instanceof Error ? error : new Error(String(error)));
     } finally {
       if (timer) clearTimeout(timer);
       if (attempt) {
@@ -481,13 +496,32 @@ export class ManagerWatchBroker {
     this.debounceTimer.unref?.();
   }
 
-  private publish(patch: Partial<ManagerWatchBrokerStatus>): void {
+  private publish(patch: Partial<ManagerWatchBrokerStatus>, error?: Error): void {
+    const previous = this.currentStatus;
     this.currentStatus = Object.freeze({
       ...this.currentStatus,
       ...patch,
       errors: Object.freeze([...(patch.errors ?? this.currentStatus.errors)])
     });
     this.options.onStatus?.(this.currentStatus);
+    const status = this.currentStatus;
+    const degraded = patch.state === "degraded" && (
+      previous.state !== "degraded" || previous.timeouts !== status.timeouts
+      || JSON.stringify(previous.errors) !== JSON.stringify(status.errors)
+    );
+    const recovered = previous.state === "degraded" && status.state === "ready";
+    if (degraded || recovered) {
+      // Diagnostic sinks must not change watcher recovery or termination behavior.
+      try {
+        this.options.onDiagnostic?.({
+          event: degraded ? "manager_watch_degraded" : "manager_watch_recovered",
+          status, previousState: previous.state, reason: this.attemptReason,
+          durationMs: this.attemptStartedAt ? Date.now() - this.attemptStartedAt : 0,
+          timeoutMs: this.options.attemptTimeoutMs,
+          error: degraded ? error ?? new Error(status.errors.join("\n") || "Partial watch snapshot") : undefined
+        });
+      } catch { /* Diagnostics are observational; the log sink owns write failures. */ }
+    }
   }
 
   private handleTerminationFailure(attempt: ConfigWatchSnapshotAttempt): void {

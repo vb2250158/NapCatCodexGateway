@@ -20,7 +20,9 @@
 
 Windows 安装包直接从开始菜单运行 RabiRoute Host。Host 创建同一代 Manager 与托盘，并把操作系统分配的 Manager URL 交给托盘；从托盘打开 RibiWebGUI 即可。重复启动只激活现有 Host。
 
-从源码运行后端：
+Windows 完整源码构建启动：双击仓库根目录的 `Start-RabiRoute-FromSource.bat`。需要已安装 Windows RabiRoute、Node.js/npm 和 .NET 9 SDK。脚本构建 Manager、WebGUI、插件、Host 与托盘，通过 Host 切换到源码构建版，沿用安装版配置和数据；首次构建会下载 Python/Qt 依赖。关闭命令窗口不会退出已启动的 Host，退出应用请使用托盘。失败日志在 `logs/source-start/`。依赖锁文件与安装版不一致时，需要先更新完整安装包。
+
+只运行源码后端（不含托盘）：
 
 Windows PowerShell：
 

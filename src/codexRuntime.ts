@@ -106,9 +106,9 @@ type CodexState = {
 };
 
 function logCodexDesktopDeliveryEvent(event: CodexDesktopDeliveryEvent): void {
-  const level = event.stage === "start_rejected"
+  const level = event.stage === "start_rejected" || event.stage === "model_rejected"
     ? "error"
-    : event.stage === "steer_rejected" || event.stage === "owner_load_retry"
+    : event.stage === "steer_rejected" || event.stage === "owner_load_retry" || event.stage === "delivery_unconfirmed" || event.stage === "delivery_receipt_missing"
       ? "warning"
       : "info";
   appendAdapterLog("codex", {

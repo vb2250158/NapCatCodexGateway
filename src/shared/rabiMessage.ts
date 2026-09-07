@@ -58,6 +58,8 @@ export type RabiDeliveryEnvelope = {
   contextBlocks?: readonly string[];
   controlBlocks?: readonly string[];
   escapeMessageContentHeaders?: boolean;
+  /** The time this envelope is rendered for delivery. Tests and replays may provide a stable value. */
+  sentAt?: string;
 };
 
 function optionalLine(label: string, value: unknown): string | undefined {
@@ -75,7 +77,12 @@ function agentSourceLines(source: Omit<RabiAgentMessageSource, "type">): Array<s
   ];
 }
 
-export function rabiMessageSourceLines(source: RabiMessageSource): string[] {
+function deliverySentAt(value: unknown): string {
+  return optionalSourceText(value, "delivery.sentAt", 100)
+    ?? new Date().toLocaleString("zh-CN", { hour12: false });
+}
+
+export function rabiMessageSourceLines(source: RabiMessageSource, sentAt?: string): string[] {
   const lines: Array<string | undefined> = [RABI_MESSAGE_SOURCE_HEADER];
   if (source.type === "agent") {
     lines.push("消息源类型：Agent", ...agentSourceLines(source));
@@ -113,6 +120,7 @@ export function rabiMessageSourceLines(source: RabiMessageSource): string[] {
       optionalLine("消息路线 ID", source.routeId)
     );
   }
+  lines.push(`消息包发送时间：${deliverySentAt(sentAt)}`);
   return lines.filter((line): line is string => Boolean(line));
 }
 
@@ -168,6 +176,7 @@ export function normalizeRabiMessageContent(value: unknown, escapeReservedHeader
 
 export function renderRabiDelivery(envelope: RabiDeliveryEnvelope): string {
   const messageSource = normalizeRabiMessageSource(envelope.messageSource);
+  const sentAt = deliverySentAt(envelope.sentAt);
   const messageContent = normalizeRabiMessageContent(
     envelope.messageContent,
     envelope.escapeMessageContentHeaders !== false
@@ -179,7 +188,7 @@ export function renderRabiDelivery(envelope: RabiDeliveryEnvelope): string {
     .map((block, index) => normalizeRabiDeliveryBlock(block, `controlBlocks[${index}]`))
     .filter(Boolean);
   return [
-    ...rabiMessageSourceLines(messageSource),
+    ...rabiMessageSourceLines(messageSource, sentAt),
     "",
     RABI_MESSAGE_CONTENT_HEADER,
     messageContent,
@@ -188,11 +197,12 @@ export function renderRabiDelivery(envelope: RabiDeliveryEnvelope): string {
   ].join("\n").trimEnd();
 }
 
-export function renderRabiMessage(source: RabiMessageSource, content: string): string {
+export function renderRabiMessage(source: RabiMessageSource, content: string, sentAt?: string): string {
   return renderRabiDelivery({
     messageSource: source,
     messageContent: content,
-    escapeMessageContentHeaders: false
+    escapeMessageContentHeaders: false,
+    sentAt
   });
 }
 

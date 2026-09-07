@@ -6,6 +6,8 @@
 
 # RabiRoute 代码架构
 
+实验视频直连由 `RabiDirectVideoSender.kt` 与 `src/manager/rabiDirectVideo.ts` 承担两端传输。RabiLink Manager 插件拥有接收器生命周期和本机文件；`rabiDirectVideoRoutes.ts` 仅接收有界 SDP，Relay 不接收视频字节。SDK 取流留在眼镜适配器。见 [能力与验收限制](rabilink-direct-video.md)。
+
 > 状态：当前代码地图。28 个内置 Manager 插件迁移完成，定义与生命周期 hook 一一对应。
 
 这份文档面向需要改代码的人。它不重复解释 RabiRoute 的产品定位；产品边界见 [架构说明](architecture.md)。这里主要说明代码里的 Module 怎么分工、一条消息怎么流动、改某类功能应该先看哪里。
@@ -404,7 +406,7 @@ unregister routes
 → await resource exit
 ```
 
-`ManagerPluginRequestTracker` 拒绝新工作，并同时等待 HTTP response 与 `trackOperation()` 登记的实际业务 Promise。拥有外部资源的插件先移除路由批次，再等待已接收的发送、任务、配置写入、扫描和回调，最后在同一个 disposer 中停止资源。Remote Agent 回调使用插件级 `AbortSignal` 并等待真正结束；NapCat 启动后和健康检查后各收集一次 PID；FenneNote 等待转发任务退出。RabiLink 保存活动运行 Promise，停止时 abort 并等待运行结束；停止期间排队的配置会在 stop 完成后重启，但第二次 `stop()` 会先清除目标 signature，从而取消该排队重启。人格同步 LAN Server 关闭 listener 和活动 Socket；本地 WebGUI、Speech、SSE 与 Relay 回写都绑定停止信号。配置 watcher 的 `afterReload` 和 Rabi 身份配置 PATCH 都等待异步 Relay 同步。`GenerationRuntime` 按依赖组件生成候选并发布不可变快照，发布成功后逆序释放旧 effect scope；候选失败时释放候选资源并继续使用旧 revision。
+`ManagerPluginRequestTracker` 拒绝新工作，并同时等待 HTTP response 与 `trackOperation()` 登记的实际业务 Promise。拥有外部资源的插件先移除路由批次，再等待已接收的发送、任务、配置写入、扫描和回调，最后在同一个 disposer 中停止资源。Remote Agent 回调使用插件级 `AbortSignal` 并等待真正结束；NapCat 由 `napcatLifecycleOwner.ts` 按路由绑定维护持久进程记录，停止前核对 PID、创建时间和程序路径；删除、停用及启动恢复都使用同一入口，普通 QQ 不作为发现目标；FenneNote 等待转发任务退出。RabiLink 保存活动运行 Promise，停止时 abort 并等待运行结束；停止期间排队的配置会在 stop 完成后重启，但第二次 `stop()` 会先清除目标 signature，从而取消该排队重启。人格同步 LAN Server 关闭 listener 和活动 Socket；本地 WebGUI、Speech、SSE 与 Relay 回写都绑定停止信号。配置 watcher 的 `afterReload` 和 Rabi 身份配置 PATCH 都等待异步 Relay 同步。`GenerationRuntime` 按依赖组件生成候选并发布不可变快照，发布成功后逆序释放旧 effect scope；候选失败时释放候选资源并继续使用旧 revision。
 
 Manager 端点、身份、完整必需插件集与 handler READY 不等待计划存储的 NAS 恢复；READY 后父进程主线程不得触碰远端文件系统。`managerWatchBroker.ts` 只对本地根目录使用原生 watcher；UNC 配置与插件根由可终止子进程执行有界 `readdir/stat`，超时后必须确认旧 child 退出再重建。`gatewayDiagnosticsSnapshot.ts` 把人格、状态和日志诊断交给 `managerReadWorker`，`/gateways` 与 `/api/gateways` 只读取带单调 revision 的深冻结内存快照；刷新失败保留上一份快照并显式标为 stale/degraded。人格 manifest 也遵循同一边界：GET 只读父进程发布的不可变快照，扫描、哈希和计划锁全部在 one-shot child 中完成。后台 watcher 或快照降级进入 `/health` 诊断，但不能阻塞回环控制面。
 
@@ -502,6 +504,7 @@ Gateway 配置的事实源 Module。
 `src/messageEndpoints/` 放消息端的管理和扫描能力。
 
 - `napcatManager.ts`：NapCat Shell 准备、WebUI token、OneBot 配置、健康检查、启动/停止、扫描。
+- `napcatWebuiSession.ts`：仅在 Manager 内复用短期管理凭据，合并并发认证，认证明确失效后重新获取；不拥有 QQ 登录状态。
 - `napcatHealthScan.ts`：按 runtime/instance 并行执行纯只读 NapCat 健康观察，在共享截止时间内返回部分结果。
 - `manager/scanController.ts`：为独立消息端探针提供并发起跑、共享截止时间、超时/错误诊断和 fallback 结果。
 - `manager/messageAdapterHealth.ts`：把 QQ、个人微信、RabiLink、语音等入口汇总为彼此独立的 operational health；不把单入口故障提升成全局离线。
@@ -522,7 +525,7 @@ Gateway 配置的事实源 Module。
 - role skills
 - Agent 上下文快照
 
-`src/personaPlanWorkflow.ts` 读取并校验每个人格 `personaConfig.json.planWorkflow`，它是状态 key、名称、说明、颜色、顺序、视图和生命周期规则的唯一真源。`src/roleKnowledge.ts` 只把 `plan.status` 当作配置 key，并通过 workflow role 与状态属性校验分析、信息不足、审批、执行、完成和归档，不包含十态枚举。v1 配置第一次读取时由同一模块一次性迁移为 v2：保留自定义状态及相对顺序，在分析状态后加入 `roles.informationNeeded` 指向的定义；v2 之后不再恢复 Agent 已移除的状态。`archiveStatus=未归档 | 已归档` 是独立归档变量；只有配置为 `terminal` 且 `archiveEligible` 的状态可以在 `archiveAfterHours` 后归档，归档时保留原 key。`src/roleKnowledgePresentation.ts` 返回配置中的 label、description、palette、order 与 views；`src/roleKnowledgePagination.ts` 动态生成状态筛选和 `byStatus` 计数。状态配置 revision 参与展示缓存。已归档计划在普通列表和关键词召回前被排除，只能通过明确计划 ID 或归档视图读取。状态移除采用 `enabled → retiring → retired`，当前计划先迁移，旧定义继续解释归档计划和追加式历史。
+`src/personaPlanWorkflow.ts` 读取并校验每个人格 `personaConfig.json.planWorkflow`，它是状态 key、名称、说明、颜色、顺序、视图和生命周期规则的唯一真源。`src/roleKnowledge.ts` 只把 `plan.status` 当作配置 key，并通过 workflow role 与状态属性校验分析、信息不足、审批、执行、完成和归档，不包含十态枚举。v1/v2/v3 配置第一次读取时由同一模块一次性迁移为 v4：保留自定义状态及相对顺序；v1 在分析状态后加入 `roles.informationNeeded` 指向的默认定义；v2/v3 只更新仍保持旧默认 key、label 和说明的中英文说明。迁移不覆盖自定义说明，也不恢复或重新启用 Agent 已移除的状态。`archiveStatus=未归档 | 已归档` 是独立归档变量；只有配置为 `terminal` 且 `archiveEligible` 的状态可以在 `archiveAfterHours` 后归档，归档时保留原 key。`src/roleKnowledgePresentation.ts` 返回配置中的 label、description、palette、order 与 views；`src/roleKnowledgePagination.ts` 动态生成状态筛选和 `byStatus` 计数。状态配置 revision 参与展示缓存。已归档计划在普通列表和关键词召回前被排除，只能通过明确计划 ID 或归档视图读取。状态移除采用 `enabled → retiring → retired`，当前计划先迁移，旧定义继续解释归档计划和追加式历史。
 
 计划目录的物理写入只有一个边界：`src/planStorageRepository.ts`。它拥有跨进程 lease、完整终态快照、publish/receipt 恢复、active/archive 迁移和旧布局冲突隔离；`src/roleKnowledge.ts` 只组装业务终态并调用 Repository，不直接创建、改写或移动计划目录。Manager 在可终止的 one-shot child 中依次执行 lifecycle recovery、旧布局迁移、feedback WAL recovery 和 Persona package recovery，以建立计划存储的读取/变更资格。该资格生命周期不阻塞 Manager READY；`running` 或 `degraded` 时计划变更失败关闭，降级进入 `/health`，Host 与 Tray 保持当前 application generation。`src/planAttachments.ts` 只负责附件数量/大小限制、本机路径或 Base64 读取、图片/视频签名校验、哈希及待提交字节准备，不能自行落盘；附件和 `plan.json` 必须随同一次 Repository transaction 原子发布。`src/manager/planAttachmentRoutes.ts` 只按 `roleId + planId + attachmentId` 提供受控读取，在响应前同时校验词法路径和 realpath 都没有离开该计划目录；图片/视频以内联响应返回，视频支持单段字节范围读取，公开计划 DTO 去掉本机 `path`。WebGUI 只消费该 HTTP 边界来绘制固定宽度的 16:9 图片、视频和 Markdown 简短预览卡片、普通文件卡片及页内完整预览；Markdown 卡片只流式读取正文开头并转成截断纯文本，不在卡片中执行 Markdown HTML、链接或图片。局域网资源统一通过 `managerResourceUrl` 附加当前会话认证；WebGUI 不拥有计划编辑器或任意路径读取能力。
 
@@ -602,7 +605,7 @@ locale 只允许作为浏览器侧 UI 偏好缓存，键为 `rabiroute:webgui:lo
 
 ## Windows 应用生命周期
 
-`RabiRouteHost.exe` 是 Windows 正式运行态唯一的生命周期所有者和稳定入口。每次启动创建新的 `applicationGenerationId`，在同一个 Windows Job Object 中直接启动 Manager 与 Tray；任一必需子进程死亡、身份不匹配或健康失效时，Host 先回收整代，再按有界退避创建新代。Host 退出时 Job Object 清理其全部受管子进程；浏览器、NapCat 和其他外部应用不进入这个 Job。
+`RabiRouteHost.exe` 是 Windows 正式运行态唯一的生命周期所有者和稳定入口。每次启动创建新的 `applicationGenerationId`，在同一个 Windows Job Object 中直接启动 Manager 与 Tray；任一必需子进程死亡、身份不匹配或健康失效时，Host 先回收整代，再按有界退避创建新代。Host 退出时 Job Object 清理其全部受管子进程；Manager 启动的 NapCat 子进程随该代回收，并在下一代绑定检查完成后按配置自动恢复；独立启动的普通 QQ、浏览器和其他外部应用不进入这个 Job。
 
 Manager 默认绑定 `127.0.0.1:0`，由操作系统分配空闲端口。Manager READY 后把 `applicationGenerationId`、`managerInstanceId`、PID 与完整 `managerBaseUrl` 发布给 Host；Host 核验 `/meta` 后才把本代端点交给 Tray。端口不是身份，Tray 不缓存旧 URL、不扫描 `8790..8799`、不启动或停止 Manager，也不能脱离 Host 独立运行。用户退出只经 Host 的带代际 fencing 控制管道停止整棵树，不使用 Manager shutdown API。
 
@@ -793,3 +796,13 @@ src/messageEndpoints/
 - 不混淆 OpenAI provider、Codex agent、Desktop IPC transport、Desktop task owner 和具体 model。
 - 不为 Codex 实际消息增加独立 app-server、共享 4510 或其他备用投递路径。
 - Codex 模型留空时由目标 Desktop 任务决定；Route 明确配置时只在 Desktop IPC 新轮次请求中传入。DSH 模型留空时由绑定会话决定；Route 明确配置时在主人格投递前通过 owner 的 `session.selectModel` 应用。
+
+### 人格 Hook 配置与 Agent 埋点
+
+`shared/agentHookAutomation.ts` 拥有事件、条件和消息端的定义与校验。规则结构为 `event`、AND 语义的 `conditions[]` 和 `destination.channel/gatewayId/params`；未知条件、事件和消息端失败关闭。当前事件为 `task_completed`，条件为 `project`、`bound_plan`、`include_sessions`、`exclude_sessions`（`sessions[]` 保存完整 ID 与显示名，按 ID 匹配，排除优先），消息端为 NapCat 群／私聊和语音。后续能力需在此合同与执行入口同时注册。
+
+完成通知读取 Codex 当前任务标题，回退到计划 `taskBinding.sessionTitle`，不输出项目路径或 sessionId。`bound_plan` 条件按当前人格已发布的计划目录核对 Codex `taskBinding.sessionId`。原 `projectPath/requireBoundPlan/groupId` 等平铺字段仅在配置边界迁移，保存后删除，不保留旧执行分支；保留集合字段 `codexHooks.completionDeliveries` 作为现有配置的稳定入口。NapCat 群迁移保持原 deliveryId，语音成功和失败也写入 Outbox 的投递身份，避免重放。
+
+`codexHooks.completionDeliveries` 由人格持有项目完成消息规则。`agentCompletionDelivery.ts` 在 Stop 完成门禁通过后按项目匹配所有会话：Git 项目使用 common directory 归并工作树，普通目录使用真实绝对路径。发送复用 `agentSend` / Outbox 的持久回执和稳定 deliveryId；并发事件 single-flight，结果不确定时停止重发。DSH 事件显式携带 agentType，不触发 Codex 项目规则。
+
+人格页自动化分为接收消息、定制任务、Agent Hook。`configRepository` 将 `codexHooks` 保存到人格 `personaConfig.json`；该字段沿用既有序列化名称，Codex 和 DSH 共用。旧 Route 字段在保存或显式迁移时移除。`agentAdapters/hookInstallation.ts` 通过 Agent 官方插件管理器安装埋点；`plugins/rabi-codex-context` 与 `plugins/rabi-dsh-context` 随构建进入 `dist/agent-hooks`，不在各 Agent 端维护人格业务规则。

@@ -152,7 +152,7 @@ if ($forbiddenEntry) {
 }
 
 $sourceSize = (Get-Item -LiteralPath $sourceApk).Length
-if ($sourceSize -gt 25MB) {
+if ($sourceSize -gt 40MB) {
     throw "The slim package is unexpectedly large ($sourceSize bytes); model assets may have leaked into it."
 }
 

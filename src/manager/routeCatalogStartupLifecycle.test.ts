@@ -66,6 +66,21 @@ function catalog(
   });
 }
 
+test("route mutation waits for asynchronous process reconciliation before publishing ready", async () => {
+  const applied = deferred<void>();
+  let applying = false;
+  const lifecycle = new RouteCatalogStartupLifecycle({
+    async apply() { applying = true; await applied.promise; },
+    attemptFactory(_operation, identity) { return { result: Promise.resolve(catalog(identity)), async cancel() {} }; }
+  });
+  lifecycle.start();
+  await waitFor(() => applying, "apply was not invoked");
+  assert.equal(lifecycle.snapshot().state, "running");
+  applied.resolve();
+  await waitFor(() => lifecycle.snapshot().state === "ready", "reconciliation never completed");
+  await lifecycle.stop();
+});
+
 test("route catalog failure degrades, retries one confirmed-exit child, applies, then becomes ready", async () => {
   const second = deferred<RouteCatalogSnapshot>();
   const statuses: RouteCatalogStartupLifecycleSnapshot[] = [];

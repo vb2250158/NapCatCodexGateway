@@ -1,4 +1,5 @@
 import type http from "node:http";
+import { NapcatLifecycleError } from "../shared/napcatStateContract.js";
 import type {
   NapcatHealthRequest,
   NapcatLaunchRequest,
@@ -51,7 +52,8 @@ function respondWithError(
   context: NapcatControlRoutesContext,
   error: unknown
 ): void {
-  context.jsonResponse(response, 400, { ok: false, message: errorMessage(error) });
+  context.jsonResponse(response, 400, { ok: false, message: errorMessage(error),
+    ...(error instanceof NapcatLifecycleError ? { state: error.state } : {}) });
 }
 
 function handleBodyAction<RequestBody>(

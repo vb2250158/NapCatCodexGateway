@@ -2272,6 +2272,26 @@ async function handleSpeechProxy(req, url, res) {
   return sendSpeechProxyResponse(res, finalRequest);
 }
 
+// Reuse the bounded request/response queue for signalling, never for camera data.
+async function handleDirectVideoOffer(req, url, res) {
+  const auth = authorizeRabiLinkRequest(req, url, {});
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  if (auth.deviceBinding) return sendJson(res, 403, { error: "Application token required." });
+  const worker = requireRokidAppTarget(auth, "video-direct");
+  const rawBody = await readRawBody(req, { maxBytes: 64 * 1024, label: "Video signalling" });
+  let offer;
+  try { offer = JSON.parse(rawBody.toString("utf8")); } catch { return sendJson(res, 400, { error: "Invalid SDP offer." }); }
+  if (!offer || typeof offer !== "object" || Object.keys(offer).some(key => !["sdp", "deviceId"].includes(key))
+      || typeof offer.sdp !== "string" || !offer.sdp.startsWith("v=0") || offer.sdp.length > 60 * 1024
+      || !/^[a-zA-Z0-9_-]{1,128}$/.test(offer.deviceId || "") || / typ relay(?: |\r|\n|$)/.test(offer.sdp)) {
+    return sendJson(res, 400, { error: "Only direct video SDP signalling is accepted." });
+  }
+  const request = createSpeechRequest(req, auth, worker, "/api/rabilink/video/offer", rawBody);
+  const completed = await speechRequests.waitForCompletion(request, speechRequestWaitMs);
+  speechRequests.cleanup();
+  return sendSpeechProxyResponse(res, completed);
+}
+
 function cleanupTasks() {
   loadRelayRuntimeState();
   const now = Date.now();
@@ -3060,7 +3080,7 @@ function handleRelayEventStream(req, url, res, body = {}) {
     subscription.emit("webgui_available", { type: "webgui_available", recovery: true });
   }
   const speechPredicate = (request) => canWorkerClaimSpeechRequest(request, appId, deviceId, deviceGuid);
-  if (capabilities.includes("speech") && speechRequests.hasClaimable(speechPredicate)) {
+  if ((capabilities.includes("speech") || capabilities.includes("video-direct")) && speechRequests.hasClaimable(speechPredicate)) {
     subscription.emit("speech_available", { type: "speech_available", recovery: true });
   }
   const identity = { deviceId, deviceKind };
@@ -3464,7 +3484,7 @@ async function handleWorkerSpeechRequests(req, url, res, body) {
   const appId = auth.app?.id || "";
   if (deviceId || deviceName) {
     const capabilities = normalizeWorkerCapabilities(url.searchParams.get("capabilities") || "speech");
-    if (!capabilities.includes("speech")) capabilities.push("speech");
+    if (!capabilities.includes("speech") && !capabilities.includes("video-direct")) capabilities.push("speech");
     const peerUrls = url.searchParams.has("peerUrls") ? normalizeWorkerPeerUrls(url.searchParams.get("peerUrls")) : null;
     recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, capabilities, peerUrls);
   }
@@ -5624,6 +5644,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && (url.pathname === "/rokid/rabilink/tools.postman.json" || url.pathname === "/openapi/rokid-rabilink-tools.postman.json")) {
       return sendOpenApi(res, toolImportPostmanFileCandidates);
+    }
+    if (req.method === "POST" && url.pathname === "/api/rabilink/video/offer") {
+      return handleDirectVideoOffer(req, url, res);
     }
     if (req.method === "GET" && (url.pathname === `${speechProxyPrefix}/openapi.json` || url.pathname === "/openapi/rabilink-speech-api.json")) {
       return sendOpenApi(res, speechOpenApiFileCandidates);
