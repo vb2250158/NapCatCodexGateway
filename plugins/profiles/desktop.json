@@ -5,6 +5,15 @@
   ],
   "instances": [
     {
+      "id": "manager:video",
+      "package": "io.rabiroute.manager.video",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": [],
+      "policy": { "resources": { "maxChildProcesses": 1, "shutdownTimeoutMs": 5000 } }
+    },
+    {
       "id": "manager:core",
       "package": "io.rabiroute.manager.core",
       "version": "1.0.0",

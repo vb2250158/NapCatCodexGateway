@@ -118,7 +118,17 @@ for (const packageEntry of packageDirectories) {
     const managerPath = path.join(versionRoot, managerEntry.module);
     const managerSource = await fs.readFile(managerPath, "utf8");
     const imports = [...managerSource.matchAll(/from\s+["']([^"']+)["']/g)].map(match => match[1]);
-    if (imports.some(specifier => specifier !== "@rabiroute/plugin-sdk")) violations.push(`${relative(managerPath)} imports outside the shared SDK`);
+    for (const specifier of imports) {
+      if (specifier === "@rabiroute/plugin-sdk" || specifier.startsWith("node:")) continue;
+      const target = path.resolve(path.dirname(managerPath), specifier);
+      const packageRelative = path.relative(versionRoot, target);
+      if (!specifier.startsWith("./") || !packageRelative || packageRelative.startsWith("..") || path.isAbsolute(packageRelative)) {
+        violations.push(`${relative(managerPath)} imports outside its package and shared SDK: ${specifier}`);
+      } else {
+        const targetStat = await fs.lstat(target).catch(() => undefined);
+        if (!targetStat?.isFile() || targetStat.isSymbolicLink()) violations.push(`${relative(managerPath)} imports a missing or linked package module: ${specifier}`);
+      }
+    }
     if (!managerSource.includes("definePlugin(")) violations.push(`${relative(managerPath)} does not use definePlugin`);
     if (!managerSource.includes("context.effects.add(")) violations.push(`${relative(managerPath)} has no releasable effect scope`);
   }

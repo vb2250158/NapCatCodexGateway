@@ -8,8 +8,9 @@ import { parsePluginProfile } from "./profile.js";
 test("built-in Manager capabilities are independent SDK packages", async () => {
   const root = path.resolve("plugins");
   const profile = parsePluginProfile(JSON.parse(await fs.readFile(path.join(root, "profiles", "desktop.json"), "utf8")) as unknown);
-  assert.equal(profile.instances.length, 30);
-  assert.equal(new Set(profile.instances.map(instance => instance.package)).size, 30);
+  const packageDirectories = (await fs.readdir(path.join(root, "builtin"), { withFileTypes: true })).filter(entry => entry.isDirectory());
+  assert.equal(profile.instances.length, packageDirectories.length);
+  assert.equal(new Set(profile.instances.map(instance => instance.package)).size, packageDirectories.length);
   assert.equal(
     profile.instances.some(instance => instance.package === "io.rabiroute.manager.wearable-companion"),
     true

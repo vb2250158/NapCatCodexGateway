@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createVideoRuntime } from "./videoRuntime.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -8921,6 +8922,9 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     { startupReady: wearableCompanionStartupReady }
   );
   const managerPluginHostServices: readonly HostService[] = Object.freeze([
+    Object.freeze({ capability: "host.manager.video@1", value: Object.freeze({
+      createRuntime: (identity: Parameters<typeof createVideoRuntime>[1]) => createVideoRuntime(rootDir, identity, managerPluginProcessLeases, managerReadOnly)
+    }) }),
     Object.freeze({
       capability: "host.manager.wearable-companion-runtime@1",
       value: wearableCompanionRuntimeIdentity

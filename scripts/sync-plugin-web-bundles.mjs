@@ -10,6 +10,7 @@ const entries = [
   ["src/bundles/builtin/message-adapter-control.ts", "io.rabiroute.manager.message-adapter-control"],
   ["src/bundles/builtin/persona.ts", "io.rabiroute.manager.persona"],
   ["src/bundles/builtin/speech.ts", "io.rabiroute.manager.speech"],
+  ["src/bundles/builtin/video.ts", "io.rabiroute.manager.video"],
   ["src/bundles/builtin/performance.ts", "io.rabiroute.manager.performance"],
   ["src/bundles/builtin/diagnostics.ts", "io.rabiroute.manager.diagnostics"],
   ["src/bundles/builtin/desktop.ts", "io.rabiroute.manager.desktop"],

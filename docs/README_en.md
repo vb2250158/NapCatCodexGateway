@@ -72,6 +72,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Local YeYu Gamer Manager integration](yeyu-gamer-manager-integration_en.md) — **Experimental integration**. Fixed local port 8877, typed health/meta/snapshot/capability reads, and plan-only Agent work-item creation through a dedicated `rabiroute.token`; disabled by default pending live installation acceptance.
 - [WeCom integration](wecom-integration_en.md)
 - [Feishu endpoint integration](feishu-integration_en.md) — enterprise-app event callbacks, signature/encryption checks, durable deduplication, and source-chat text replies.
+- [Video generation plugin](video-generation-plugin_en.md) — Install local H3, submit video jobs, follow progress, and preview or download results.
 - [Voice interaction workstation](voice-interaction-workstation_en.md) — historical wiring; FenneNote/OumuQ are retired in favor of RabiPC + RabiSpeech.
 - [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md) — direct APIs, hot/persona-keyword delivery, persona voice and language, bidirectional ASR/TTS records, opaque voiceprint/cluster evidence, RabiPC, and RabiLink relay. The selected-text menu's reading sub-feature can enqueue host TTS.
 - [Call TTS and ASR remotely](user-guide/speech-api_en.md) — application token, target PC, copyable commands, acceptance, and error recovery.

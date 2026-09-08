@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.video",
+  "version": "1.0.0",
+  "entries": {
+    "manager": { "execution": "in_process", "module": "./manager.mjs" },
+    "web": { "execution": "in_process", "module": "./web/client.mjs" }
+  },
+  "provides": ["manager.video@1"],
+  "requires": ["manager.core@1", "host.manager.http@1", "host.manager.video@1"],
+  "optional": [],
+  "permissions": []
+}

@@ -143,6 +143,8 @@ Profile 或包 revision 变化时，Plugin Kernel：
 
 ## 作者门禁
 
+可信 Manager 包可使用共享 SDK、Node 内置模块和包内 `./` 模块拆分实现。入口检查拒绝其他裸依赖、跨包路径和符号链接；这不是 JavaScript 沙箱，执行权限仍由 entry 模式和宿主能力边界决定。包内业务模块随插件一起构建，不能回引源码工作树。
+
 ```powershell
 npm test
 npm run build

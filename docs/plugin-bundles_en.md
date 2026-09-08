@@ -143,6 +143,8 @@ A failed candidate cannot contaminate the current generation or leave half-activ
 
 ## Author gates
 
+Trusted Manager packages may use the shared SDK, Node built-ins, and package-local `./` modules. Entry checks reject other bare dependencies, cross-package paths and symbolic links. This is not a JavaScript sandbox: execution modes and host capabilities remain the authority boundary. Implementation modules ship with the package and must not import the source checkout.
+
 ```powershell
 npm test
 npm run build

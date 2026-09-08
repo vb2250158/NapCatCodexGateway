@@ -1,0 +1,38 @@
+{
+  "models": [{
+    "id": "minimax-h3-fl2va",
+    "label": "MiniMax H3 · Turbo 8 步",
+    "fps": 24,
+    "width": 768,
+    "height": 768,
+    "frames": 107,
+    "maxArea": 1032192,
+    "maxFrames": 260,
+    "sha256": {
+      "diffusion": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a",
+      "textEncoder": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+      "vae": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522",
+      "lora": "2339acdf19bfe123f46b971ea35d367a84adb85de43627e1eceafa5a5b2b111e"
+    },
+    "expectedBytes": {
+      "diffusion": 20970379616,
+      "textEncoder": 15687142551,
+      "vae": 5207808496,
+      "lora": 1956193000
+    },
+    "files": {
+      "diffusion": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "textEncoder": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "vae": "minimax_h3_video_vae_fp16.safetensors",
+      "lora": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
+    }
+  }],
+  "states": {
+    "queued": { "label": "排队中", "terminal": false },
+    "running": { "label": "生成中", "terminal": false },
+    "succeeded": { "label": "已生成", "terminal": true },
+    "failed": { "label": "失败", "terminal": true },
+    "cancelled": { "label": "已取消", "terminal": true },
+    "interrupted": { "label": "已中断", "terminal": true }
+  }
+}

@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.2.5 - 2026-09-08
+
+- Add the independent `io.rabiroute.manager.video` plugin for H3 text/first-last-frame generation, serial jobs, idempotent APIs, progress events, MP4 preview and range downloads. Plugin/Host shutdown reclaims inference processes; restart never retries jobs automatically.
+- Add local model-directory revisions and explicit installation of Python/ComfyUI/CUDA dependencies and four model files. New downloads verify official sizes and SHA-256 before publication, rejecting arbitrary URLs, junctions and existing-file overwrite. Runtime files, weights and private paths are excluded from source submission.
+- Add package-local plugin modules, a separate Web entry, desktop profile registration and bilingual API/deployment documentation. Existing manual installations remain supported; directory changes do not move files.
+- Validation: all 10 video job/model tests, full build and configuration checks pass. Actual H3 text and first/last-frame generation previously passed locally; one-click runtime installation has not been accepted on a fresh machine without Python. Inherited 0.2.3 speech-directory delivery limits remain documented under Unreleased and are not claimed fixed here.
+
 ## Unreleased
 
 ### 0.2.4 source update

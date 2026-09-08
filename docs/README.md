@@ -72,6 +72,7 @@
 - [YeYu Gamer Manager 本机接入](yeyu-gamer-manager-integration.md) — **实验集成**。固定连接本机 8877，只读 health/meta/snapshot/capabilities，并用独立 `rabiroute.token` 创建 plan-only Agent work item；默认关闭，真实安装联调待验收。
 - [企业微信接入](wecom-integration.md) — WeCom 智能机器人 WebSocket 与 Outbox 回发。
 - [飞书独立消息端接入](feishu-integration.md) — 飞书应用事件订阅、签名/加密回调、持久去重与来源 chat 回发。
+- [视频生成插件](video-generation-plugin.md) — 安装本机 H3，提交视频任务，查询进度并预览或下载结果。
 - [语音交互工作站](voice-interaction-workstation.md) — 历史工作站接线记录；FenneNote/OumuQ 已停止维护，现行入口是 RabiPC + RabiSpeech。
 - [RabiSpeech 本机 TTS / ASR 服务](rabispeech-plugin.md) — 本机直接 API、热投递/人格关键词唤醒、人格声线与语言、双向 ASR/TTS 记录、不透明声纹/聚类证据和 RabiLink 中转。滑词菜单的朗读子功能会把选中文字送进本机 TTS 队列。
 - [远端调用 TTS 与 ASR](user-guide/speech-api.md) — 应用 token、目标 PC、可复制命令、验收与错误恢复。
