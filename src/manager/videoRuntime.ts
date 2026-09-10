@@ -5,6 +5,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { validateModelRoot } from "./speechModelSettings.js";
 import { localModelSettingsRequestAllowed } from "./speechModelSettingsAccess.js";
+import { recordDataMutationAudit, type DataMutationAuditRecord } from "../observability/dataMutationAudit.js";
 import type { PluginIdentity } from "../plugin-kernel/types.js";
 import type { ProcessLease, ProcessLeaseRegistry } from "../runtime/processLeaseRegistry.js";
 
@@ -24,8 +25,11 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
   let endpoint = "";
   let starting: Promise<string> | undefined;
   let installer: ProcessLease | undefined;
+  let mediaProbe: ProcessLease | undefined;
+  let probesClosed = false;
   const exitListeners = new Set<() => void>();
   async function start(modelRoot?: string): Promise<string> {
+    if(mediaProbe) throw new Error("请等待素材检查完成。");
     if (readOnly) throw new Error("视频服务在只读模式下不能启动。");
     if (lease && lease.child.exitCode === null && endpoint) return endpoint;
     if (starting) return starting;
@@ -43,7 +47,20 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
         await validateLocalModelRoot(modelRoot);
         const config = path.join(componentRoot, "model-paths.json");
         // JSON is a YAML subset; paths are never interpolated into YAML or a command.
-        await fs.writeFile(config, JSON.stringify({ rabi_video: { base_path: modelRoot, is_default: true, diffusion_models: "diffusion_models", text_encoders: "text_encoders", vae: "vae", loras: "loras" } }));
+        const audit: Omit<DataMutationAuditRecord, "outcome"> = {
+          group: "config.video", event: "video_model_paths_written", owner: "VideoRuntime", action: "write",
+          target: { type: "video_model_paths", id: "model-paths" },
+          dataSource: { kind: "file", id: "components/video/model-paths.json" },
+          changes: [{ field: "modelRoot" }]
+        };
+        recordDataMutationAudit({ ...audit, outcome: "started" });
+        try {
+          await fs.writeFile(config, JSON.stringify({ rabi_video: { base_path: modelRoot, is_default: true, diffusion_models: "diffusion_models", text_encoders: "text_encoders", vae: "vae", loras: "loras" } }));
+          recordDataMutationAudit({ ...audit, outcome: "committed" });
+        } catch (error) {
+          recordDataMutationAudit({ ...audit, outcome: "failed", result: "model_paths_write_failed" });
+          throw error;
+        }
         modelArguments.push("--extra-model-paths-config", config);
       }
       const port = await new Promise<number>((resolve, reject) => {
@@ -80,6 +97,24 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
     defaultModelRoot: path.join(comfyRoot, "models"),
     localSettingsAllowed: localModelSettingsRequestAllowed,
     validateModelRoot: validateLocalModelRoot,
+    async inspectAsset(id: string, kind: string) {
+      const extensions: Record<string,string> = {image:"png",video:"mp4",audio:"wav"};
+      if (readOnly || probesClosed || mediaProbe || installer || starting || !/^[a-f0-9-]{36}$/.test(id) || !Object.hasOwn(extensions,kind)) throw new Error("Invalid media inspection request");
+      const settings = JSON.parse(await fs.readFile(path.join(componentRoot,"runtime.json"),"utf8")) as {pythonExecutable:string};
+      const python = settings.pythonExecutable;
+      if (typeof python !== "string" || !path.isAbsolute(python) || python.startsWith("\\\\") || path.basename(python).toLowerCase() !== "python.exe") throw new Error("视频 Python 运行环境无效。");
+      const script = path.join(componentRoot,"inspect-media.py");
+      const file = path.join(rootDir,"data","video","assets",`${id}.${extensions[kind]}`);
+      let output = "";
+      if (probesClosed || mediaProbe) throw new Error("Media inspection is stopping or busy");
+      mediaProbe = leases.launch(identity,"video-media-probe",()=>spawn(python,["-I",script,file,kind],{windowsHide:true,stdio:["ignore","pipe","ignore"]}),{maxChildProcesses:2,exclusiveAcrossOwners:true});
+      const owned = mediaProbe;
+      owned.child.stdout?.on("data", chunk => { if(output.length<8192) output += String(chunk); });
+      const timer = setTimeout(()=> { void leases.terminate(owned); },20000);
+      try { await owned.settled; if(owned.child.exitCode!==0 || output.length>8192) throw new Error("素材格式、尺寸或时长不符合要求。"); return JSON.parse(output); }
+      finally { clearTimeout(timer); mediaProbe=undefined; }
+    },
+    async stopMediaProbe() { probesClosed = true; if(mediaProbe) await leases.terminate(mediaProbe); },
     async installed() {
       const settings = JSON.parse(await fs.readFile(path.join(componentRoot, "runtime.json"), "utf8").catch(() => "{}")) as { pythonExecutable?: string };
       return Promise.all([settings.pythonExecutable || path.join(componentRoot, ".venv", "Scripts", "python.exe"), path.join(comfyRoot, "main.py")].map(file => fs.access(file).then(() => true, () => false))).then(values => values.every(Boolean));

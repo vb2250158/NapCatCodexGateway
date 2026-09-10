@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { VideoError } from "./service.mjs";
+import { resolveWorkflow } from "./workflow.mjs";
 
-const folders = { diffusion: "diffusion_models", textEncoder: "text_encoders", vae: "vae", lora: "loras" };
+const folders = { diffusion: "diffusion_models", textEncoder: "text_encoders", vae: "vae", audioVae: "vae", lora: "loras", lora4: "loras" };
 export async function safeTarget(root, relative) {
   const base = path.resolve(root), target = path.resolve(base, relative);
   const inside = path.relative(base, target);
@@ -101,9 +102,13 @@ export class VideoModels {
     const models = await Promise.all(this.catalog.models.map(async model => {
       const files = await Promise.all(Object.entries(model.files).map(async ([key, name]) => {
         const target = await safeTarget(this.root(), path.join(folders[key], name));
-        return { name, bytes: model.expectedBytes[key], installed: await validSize(target, model.expectedBytes[key]) };
+        return { key, name, bytes: model.expectedBytes[key], installed: await validSize(target, model.expectedBytes[key]) };
       }));
-      return { id: model.id, label: model.label, files, installed: files.every(file => file.installed), bytes: files.reduce((sum, file) => sum + file.bytes, 0) };
+      const workflows = model.workflows ? Object.entries(model.workflows).map(([id, profile]) => {
+        const required = resolveWorkflow(model, { workflowId: id }).files;
+        return { id, label: profile.label, installed: files.filter(file => Object.values(required).includes(file.name)).every(file => file.installed) };
+      }) : undefined;
+      return { id: model.id, label: model.label, files, workflows, installed: files.every(file => file.installed), bytes: files.reduce((sum, file) => sum + file.bytes, 0) };
     }));
     return { runtimeInstalled: await this.runtime.installed(), models, job: this.job };
   }
@@ -127,7 +132,7 @@ export class VideoModels {
         const bytes = model.expectedBytes[key];
         if (!await validSize(target, bytes)) {
           if (await fs.lstat(target).catch(error => { if (error.code === "ENOENT") return null; throw error; })) throw new VideoError("已有模型文件不完整，请保留并人工检查后重试。");
-          await downloadFile(`https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/${folders[key]}/${name}`, target, bytes, model.sha256[key], this.controller.signal, count => {
+          await downloadFile(`${model.downloadBase || "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main"}/${folders[key]}/${name}`, target, bytes, model.sha256[key], this.controller.signal, count => {
             this.job.bytes = completed + count;
             if (Date.now() - lastEvent > 1000) { lastEvent = Date.now(); this.publish(); }
           });

@@ -95,18 +95,14 @@ class SystemScreenshotTest(unittest.TestCase):
         self.assertEqual(modifiers & 0x4000, 0x4000)
         self.assertEqual(key, 0x70)
 
-    def test_capture_layout_maps_high_dpi_screen_to_native_pixels(self) -> None:
-        layout = ScreenCaptureLayout.from_screens(
-            QSize(4865, 3600),
-            (
-                _FakeScreen(QRect(0, 0, 2560, 1440), 1.0),
-                _FakeScreen(QRect(-1024, 0, 1024, 768), 1.0),
-                _FakeScreen(QRect(1, -2160, 2560, 1440), 1.5),
-            ),
-            image_origin=QPoint(-1024, -2160),
-        )
-
-        self.assertEqual(layout.virtual_geometry, QRect(-1024, -2160, 3585, 3600))
+    def test_older_segmented_history_remains_readable(self) -> None:
+        layout = ScreenCaptureLayout.from_payload({
+            "virtual": [-1024, -2160, 3585, 3600],
+            "image": [4865, 3600],
+            "segments": [{"logical": [1025, 0, 2560, 1440], "source": [1025, 0, 3840, 2160]}],
+        })
+        self.assertIsNotNone(layout)
+        self.assertIsNone(layout.native_geometry)
         self.assertEqual(layout.source_rect_for_logical(QRect(1035, 10, 20, 20)), QRect(1040, 15, 30, 30))
 
     def test_overlay_selection_uses_native_pixels_for_high_dpi_screen(self) -> None:
@@ -354,7 +350,7 @@ class SystemScreenshotTest(unittest.TestCase):
         self.assertEqual(start_task.call_args_list[0].args[0].__name__, "capture_desktop_image_async")
         controller.stop()
 
-    def test_captured_virtual_desktop_keeps_all_screen_layouts_in_one_overlay(self) -> None:
+    def test_captured_virtual_desktop_uses_one_native_canvas_in_one_overlay(self) -> None:
         controller = SystemScreenshotController(
             None,  # type: ignore[arg-type]
             Path(tempfile.gettempdir()),
@@ -384,9 +380,46 @@ class SystemScreenshotTest(unittest.TestCase):
         self.assertEqual(overlay.geometry(), QRect(0, 0, 200, 100))
         self.assertIsNotNone(overlay.capture_layout)
         assert overlay.capture_layout is not None
-        self.assertEqual(len(overlay.capture_layout.segments), 2)
-        self.assertEqual(overlay._source_rect(QRect(110, 10, 20, 20)), QRect(115, 15, 30, 30))
+        self.assertEqual(overlay.capture_layout.segments, ())
+        self.assertEqual(overlay.capture_layout.native_geometry, QRect(0, 0, 250, 150))
+        self.assertEqual(overlay._source_rect(QRect(110, 10, 20, 20)), QRect(138, 15, 24, 30))
         controller.stop()
+
+    def test_native_canvas_preserves_negative_origin_hover_crop_and_history(self) -> None:
+        # Three physical monitors, including 200% and 150% displays to the left.
+        native = QRect(-7680, -729, 10240, 2171)
+        image = QImage(native.size(), QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.blue)
+        overlay = ScreenshotCaptureOverlay(ScreenshotHistory(()), QRect(-7680, -729, 5120, 1086))
+        overlay.set_capture_image(image)
+        layout = ScreenCaptureLayout(overlay.geometry(), image.size(), (), native)
+        overlay.set_capture_layout(layout)
+        self.assertEqual(ScreenCaptureLayout.from_payload(layout.to_payload()), layout)
+        candidate = ScreenshotWindowCandidate(QRect(-3800, -600, 600, 400))
+        selection = overlay._selection_from_window_candidate(candidate)
+        overlay._window_candidates = (candidate,)
+        overlay._update_window_hover(selection.center())
+        self.assertEqual(overlay._hover_window_candidate, candidate)
+        source = overlay._source_rect(selection)
+        self.assertLessEqual(abs(source.x() - 3880), 1)
+        self.assertLessEqual(abs(source.y() - 129), 1)
+        self.assertLessEqual(abs(source.width() - 600), 1)
+        self.assertLessEqual(abs(source.height() - 400), 1)
+        self.assertEqual(overlay._source_rect(overlay.rect()), image.rect())
+        overlay.close()
+
+    def test_native_canvas_tracks_delayed_window_resize(self) -> None:
+        image = QImage(1000, 600, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.blue)
+        overlay = ScreenshotCaptureOverlay(ScreenshotHistory(()), QRect(0, 0, 500, 300))
+        overlay.set_capture_image(image)
+        overlay.set_capture_layout(ScreenCaptureLayout(overlay.geometry(), image.size(), (), QRect(-800, -50, 1000, 600)))
+        overlay.show()
+        overlay.resize(1000, 600)
+        QApplication.processEvents()
+        self.assertEqual(overlay.capture_layout.virtual_geometry.size(), overlay.size())
+        self.assertEqual(overlay._source_rect(QRect(200, 100, 100, 80)), QRect(200, 100, 100, 80))
+        overlay.close()
 
     def test_window_candidate_hover_uses_the_current_cursor_without_mouse_move(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

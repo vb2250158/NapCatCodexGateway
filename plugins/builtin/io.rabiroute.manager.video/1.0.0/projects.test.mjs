@@ -1,0 +1,25 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {VideoProjects} from './projects.mjs';
+test('projects survive service recreation, creation retries and concurrent save conflicts',async t=>{
+  const stateRoot=await fs.mkdtemp(path.join(os.tmpdir(),'rabi-projects-'));
+  t.after(()=>fs.rm(stateRoot,{recursive:true,force:true}));
+  const store=new VideoProjects({stateRoot}),id=randomUUID();
+  await store.create({id});assert.equal((await store.create({id})).revision,0);
+  const value={version:1,active:'v1',items:[{id:'v1',kind:'video',text:'saved prompt'}],drafts:[]};
+  const saves=await Promise.allSettled([store.save(id,{revision:0,value,title:'作品'}),store.save(id,{revision:0,value,title:'stale'})]);
+  assert.equal(saves.filter(row=>row.status==='fulfilled').length,1);
+  const restored=new VideoProjects({stateRoot});
+  assert.equal((await restored.read(id)).value.items[0].text,'saved prompt');
+  assert.equal((await restored.list())[0].title,'作品');
+  const other=randomUUID();await restored.create({id:other});
+  await restored.save(other,{revision:0,value:{...value,items:[{id:'v1',kind:'video',text:'other project'}]}});
+  assert.equal((await restored.read(id)).value.items[0].text,'saved prompt');
+  assert.equal((await restored.read(other)).value.items[0].text,'other project');
+  await assert.rejects(restored.read('../escape'),/项目不存在/);
+  assert.throws(()=>new VideoProjects({stateRoot,readOnly:true}).save(id,{revision:1,value}),/只读/);
+});

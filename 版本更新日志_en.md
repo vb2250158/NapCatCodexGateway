@@ -6,6 +6,17 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.2.6 - 2026-09-10
+
+- Add image, video, audio and text canvas cards with selection, dragging, zoom, minimap, duplication, asset references and parameter reuse. Server revisions and atomic replacement persist projects; refresh restores cards, parameters and generated audio, while save failures and conflicts are visible.
+- Add H3 Ref2VA mixed references, bounded media decoding, standard/fast profiles, independent audio and compatible candidate routing. Queued jobs retain workflowId and legacy requests preserve their routes. Z-Image Turbo shares the ComfyUI process and serial queue for image generation.
+- Audio cards expose parameters from RabiSpeech model capabilities and support pause/interjection editing. VITS fixed voices come from local configuration, merging aliases for the same speaker ID.
+- Use one native-pixel Windows screenshot canvas to correct mixed-DPI, negative-origin, window-hover and delayed-resize mapping while preserving reads of older segmented history.
+- Submission review adds unified audit records for model-path configuration writes. Media inspection pins PNG/MP4/WAV demuxers and the local-file protocol, rejecting disguised playlists and network access during decoding.
+- Add bilingual project/workflow documentation and correct stale page-local draft and fixed-sampling descriptions. Installed-package updates, cross-computer deployment, GPU output and speed comparisons remain separate from this source submission; inherited speech-directory delivery limits remain under Unreleased.
+
+- Validation: backend 1,894 passed and 3 skipped. The first script run had 161 passes, one audit-coverage failure and 36 TODOs; the failed case passed after adding audit records. Video plugin (25), canvas/audio (15), WebGUI (262), screenshots (59), fixed voices (1) and media decoding (3) passed. Full build, configuration checks and production/full dependency audits passed with zero vulnerabilities.
+
 ## 0.2.5 - 2026-09-08
 
 - Add the independent `io.rabiroute.manager.video` plugin for H3 text/first-last-frame generation, serial jobs, idempotent APIs, progress events, MP4 preview and range downloads. Plugin/Host shutdown reclaims inference processes; restart never retries jobs automatically.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import httpx
@@ -111,10 +112,36 @@ class LocalTtsProvider:
         allowed = ", ".join(model.id for model in self.settings.models)
         raise ValueError(f"Unknown or disallowed local TTS model {requested!r}. Allowed: {allowed}")
 
-    @staticmethod
-    def _model_parameters(model_id: str) -> dict[str, object]:
+    def _model_parameters(self, model_id: str) -> dict[str, object]:
         if model_id == "onnx-vits":
-            return {"voice": {"type": "string", "description": "Use speaker:<numeric-id> for a fixed speaker."}}
+            voice: dict[str, object] = {"type": "string", "default": "default"}
+            model = self._resolve_model(model_id)
+            command = model.launch.command
+            configured = dict(model.launch.environment).get("RABISPEECH_ONNX_VITS_CONFIG")
+            if "--config" in command and command.index("--config") + 1 < len(command):
+                configured = command[command.index("--config") + 1]
+            if configured:
+                config_path = Path(configured)
+                if not config_path.is_absolute() and model.launch.working_directory:
+                    config_path = model.launch.working_directory / config_path
+                try:
+                    config = json.loads(config_path.read_text(encoding="utf-8-sig"))
+                    speakers = config.get("speakers", {})
+                    if not isinstance(speakers, dict):
+                        raise ValueError("Invalid speaker catalog")
+                    names_by_id: dict[int, list[str]] = {}
+                    for name, speaker_id in speakers.items():
+                        if isinstance(name, str) and type(speaker_id) is int and speaker_id >= 0:
+                            names_by_id.setdefault(speaker_id, []).append(name)
+                    voice["oneOf"] = [
+                        {"const": f"speaker:{speaker_id}", "title": " / ".join(names)}
+                        for speaker_id, names in names_by_id.items()
+                    ]
+                except (OSError, ValueError, AttributeError):
+                    voice["x-catalog-status"] = "unavailable"
+            else:
+                voice["x-catalog-status"] = "unavailable"
+            return {"voice": voice}
         return {
             "voice": {"type": "string", "description": "Rabi persona id backed by data/roles/<RoleId>/voice/."},
             "instructions": {"type": ["string", "null"], "description": "Optional local style/emotion instruction when supported."},

@@ -11,7 +11,7 @@
       "enabled": true,
       "config": {},
       "grants": [],
-      "policy": { "resources": { "maxChildProcesses": 1, "shutdownTimeoutMs": 5000 } }
+      "policy": { "resources": { "maxChildProcesses": 2, "shutdownTimeoutMs": 5000 } }
     },
     {
       "id": "manager:core",

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { buildWorkflow, validateCommand } from "./workflow.mjs";
+import { buildWorkflow, validateCommand, resolveWorkflow } from "./workflow.mjs";
 
 export class VideoError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -55,10 +55,11 @@ export class VideoService {
   }
   view(job) {
     const { keyHash, commandHash, firstFrame, lastFrame, output, ...value } = job;
-    return { ...value, hasFirstFrame: Boolean(firstFrame), hasLastFrame: Boolean(lastFrame), videoUrl: job.status === "succeeded" ? `/api/video/jobs/${job.id}/video` : undefined };
+    const image = this.catalog.models.find(row=>row.id===job.model)?.mode === "image";
+    return { ...value, mediaKind: image ? "image" : "video", imageUrl: image && job.status === "succeeded" ? `/api/video/jobs/${job.id}/image` : undefined, hasFirstFrame: Boolean(firstFrame), hasLastFrame: Boolean(lastFrame), videoUrl: !image && job.status === "succeeded" ? `/api/video/jobs/${job.id}/video` : undefined };
   }
   snapshot() {
-    return { online: this.online && this.runtime.alive(), models: this.catalog.models, states: this.catalog.states,
+    return { online: this.online && this.runtime.alive(), availableModels: this.availableModels || [], availableWorkflows: this.availableWorkflows || [], models: this.catalog.models, states: this.catalog.states,
       jobs: [...this.jobs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100).map(job => this.view(job)) };
   }
   async request(route, init = {}) {
@@ -82,15 +83,23 @@ export class VideoService {
           }
         }
         const info = await this.request("/object_info");
+        this.availableModels=[];
+        this.availableWorkflows=[];
         for (const model of this.catalog.models) {
-          const workflow = buildWorkflow(model, { id: "check", prompt: "check", width: 512, height: 512, frames: 22, seed: 1 });
-          for (const node of Object.values(workflow)) {
-            if (!info[node.class_type]) throw new VideoError(`H3 节点缺失：${node.class_type}`, 503);
-          }
-          for (const [node, field, file] of [["UNETLoader", "unet_name", model.files.diffusion], ["CLIPLoader", "clip_name", model.files.textEncoder], ["VAELoader", "vae_name", model.files.vae], ["LoraLoaderModelOnly", "lora_name", model.files.lora]]) {
-            if (!info[node]?.input?.required?.[field]?.[0]?.includes(file)) throw new VideoError(`H3 模型缺失：${file}`, 503);
+          for (const workflowId of model.workflows ? Object.keys(model.workflows) : [undefined]) {
+            for (const generateAudio of model.mode === "image" ? [false] : [false, true]) {
+              const command = { id:"check", prompt:"check", width:512, height:512, frames:22, seed:1, workflowId, generateAudio };
+              const workflow = buildWorkflow(model, command);
+              const resolved = resolveWorkflow(model, command);
+              if (Object.values(workflow).some(node => !info[node.class_type])) continue;
+              const files = [["UNETLoader","unet_name",resolved.files.diffusion],["CLIPLoader","clip_name",resolved.files.textEncoder],["VAELoader","vae_name",resolved.files.vae],["VAELoader","vae_name",resolved.files.audioVae],["LoraLoaderModelOnly","lora_name",resolved.files.lora]].filter(row=>row[2]);
+              if (!files.every(([node,field,file])=>info[node]?.input?.required?.[field]?.[0]?.includes(file))) continue;
+              this.availableWorkflows.push({model:model.id, workflowId:resolved.workflowId, generateAudio});
+              if (!this.availableModels.includes(model.id)) this.availableModels.push(model.id);
+            }
           }
         }
+        if(!this.availableModels.length) throw new VideoError("没有已安装完整的生成模型，请打开模型管理。",409);
         this.online = true;
         this.publish("video.changed", { online: true });
         return this.snapshot();
@@ -120,8 +129,20 @@ export class VideoService {
         return this.view(previous);
       }
       if (this.closing || !this.online || !this.runtime.alive()) throw new VideoError("请先启动视频生成服务。", 503);
+      if(this.availableModels && !this.availableModels.includes(command.model)) throw new VideoError("所选模式的模型尚未安装，请打开模型管理。",409);
+      let resolved;
+      const routingCommand = {...command};
+
+      if(command.references) {
+        const references=await Promise.all(command.references.map(id=>this.assets.read(id)));
+        routingCommand.referenceKinds = references.map(asset=>asset.kind);
+        for(const [kind,limit] of [["image",9],["video",3],["audio",3]]) if(references.filter(a=>a.kind===kind).length>limit) throw new VideoError("参考素材数量超出模式限制。");
+      }
+      try { resolved = resolveWorkflow(this.catalog.models.find(model=>model.id===command.model), routingCommand, this.availableWorkflows); }
+      catch(error) { throw new VideoError(error.message,409); }
+      if (this.availableWorkflows && !this.availableWorkflows.some(row=>row.model===command.model && row.workflowId===resolved.workflowId && row.generateAudio===!!command.generateAudio)) throw new VideoError("工作流依赖尚未就绪。",409);
       if ([...this.jobs.values()].filter(job => !this.catalog.states[job.status].terminal).length >= 8) throw new VideoError("生成队列已满，最多接受 8 个待完成任务。", 429);
-      const job = { ...command, id: randomUUID(), keyHash, commandHash, status: "queued", createdAt: new Date().toISOString(), progress: 0 };
+      const job = { ...command, workflowId: resolved.workflowId, samplingSteps: resolved.steps, id: randomUUID(), keyHash, commandHash, status: "queued", createdAt: new Date().toISOString(), progress: 0 };
       await this.save(job);
       this.jobs.set(job.id, job);
       this.pump();
@@ -164,16 +185,26 @@ export class VideoService {
           if (uploaded.name !== name || uploaded.subfolder) throw new VideoError("H3 图片上传回执不匹配。", 502);
           images.push(name);
         }
-        const history = await this.generate(job, buildWorkflow(model, job, ...images));
-        const output = Object.values(history.outputs ?? {}).flatMap(node => [...(node.images ?? []), ...(node.videos ?? [])]).find(item => item.type === "output" && item.filename?.endsWith(".mp4"));
-        if (!output) throw new VideoError("H3 未返回 MP4 文件。", 502);
+        const references=[];
+        for(const id of job.references || []) {
+          const {record,file}=await this.assets.file(id);
+          const name=path.basename(file);
+          const form=new FormData(); form.append("image",new Blob([await fs.readFile(file)]),name);
+          const uploaded=await this.request("/upload/image",{method:"POST",body:form});
+          if(uploaded.name!==name || uploaded.subfolder) throw new VideoError("参考素材上传回执不匹配。",502);
+          references.push({...record,filename:name});
+        }
+        const history = await this.generate(job, buildWorkflow(model, job, ...images, references));
+        const isImage = model.mode === "image";
+        const output = Object.values(history.outputs ?? {}).flatMap(node => [...(node.images ?? []), ...(node.videos ?? [])]).find(item => item.type === "output" && item.filename?.endsWith(isImage ? ".png" : ".mp4"));
+        if (!output) throw new VideoError("生成服务未返回预期格式的文件。", 502);
         job.output = { filename: output.filename, subfolder: output.subfolder || "" };
         const file = await this.outputPath(job);
         const handle = await fs.open(file, "r");
         try {
           const signature = Buffer.alloc(12);
           const { bytesRead } = await handle.read(signature, 0, 12, 0);
-          if (bytesRead !== 12 || signature.toString("ascii", 4, 8) !== "ftyp") throw new VideoError("输出不是有效的 MP4 容器。", 502);
+          if (bytesRead !== 12 || (isImage ? signature.subarray(0,8).toString("hex") !== "89504e470d0a1a0a" : signature.toString("ascii", 4, 8) !== "ftyp")) throw new VideoError("输出不是有效的 MP4 容器。", 502);
         } finally { await handle.close(); }
         job.status = "succeeded";
         job.progress = 1;

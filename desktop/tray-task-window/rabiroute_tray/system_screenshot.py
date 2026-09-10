@@ -328,38 +328,7 @@ class ScreenCaptureLayout:
     virtual_geometry: QRect
     image_size: QSize
     segments: tuple[ScreenCaptureSegment, ...]
-
-    @classmethod
-    def from_screens(
-        cls,
-        image_size: QSize,
-        screens: tuple[Any, ...] | list[Any],
-        image_origin: QPoint | None = None,
-    ) -> "ScreenCaptureLayout":
-        if not screens or image_size.isEmpty():
-            return cls(QRect(0, 0, max(1, image_size.width()), max(1, image_size.height())), image_size, ())
-        screen_geometries = [QRect(screen.geometry()) for screen in screens]
-        virtual_geometry = QRect(screen_geometries[0])
-        for geometry in screen_geometries[1:]:
-            virtual_geometry = virtual_geometry.united(geometry)
-        origin = image_origin or virtual_geometry.topLeft()
-        image_bounds = QRect(QPoint(0, 0), image_size)
-        segments: list[ScreenCaptureSegment] = []
-        for screen, geometry in zip(screens, screen_geometries):
-            try:
-                device_pixel_ratio = max(0.01, float(screen.devicePixelRatio()))
-            except (AttributeError, TypeError, ValueError):
-                device_pixel_ratio = 1.0
-            logical_rect = QRect(geometry.topLeft() - virtual_geometry.topLeft(), geometry.size())
-            source_rect = QRect(
-                geometry.left() - origin.x(),
-                geometry.top() - origin.y(),
-                max(1, round(geometry.width() * device_pixel_ratio)),
-                max(1, round(geometry.height() * device_pixel_ratio)),
-            ).intersected(image_bounds)
-            if not logical_rect.isEmpty() and not source_rect.isEmpty():
-                segments.append(ScreenCaptureSegment(logical_rect, source_rect))
-        return cls(virtual_geometry, image_size, tuple(segments))
+    native_geometry: QRect | None = None
 
     def source_rect_for_logical(self, logical_rect: QRect) -> QRect:
         if logical_rect.isEmpty():
@@ -407,6 +376,7 @@ class ScreenCaptureLayout:
         return {
             "virtual": self._rect_payload(self.virtual_geometry),
             "image": [self.image_size.width(), self.image_size.height()],
+            "native": self._rect_payload(self.native_geometry) if self.native_geometry is not None else None,
             "segments": [
                 {
                     "logical": self._rect_payload(segment.logical_rect),
@@ -441,7 +411,8 @@ class ScreenCaptureLayout:
             source = cls._rect_from_payload(raw_segment.get("source"))
             if logical is not None and source is not None and not logical.isEmpty() and not source.isEmpty():
                 segments.append(ScreenCaptureSegment(logical, source))
-        return cls(virtual, image_size, tuple(segments))
+        native = cls._rect_from_payload(value.get("native"))
+        return cls(virtual, image_size, tuple(segments), native)
 
     @staticmethod
     def _map_rect(rect: QRect, from_rect: QRect, to_rect: QRect) -> QRect:
@@ -1738,7 +1709,7 @@ class ScreenshotCaptureOverlay(QWidget):
             # New captures keep their original monitor geometry.  Historical
             # single-monitor images therefore reopen on that monitor instead
             # of being stretched across whichever overlay was already open.
-            self.setGeometry(self._capture_layout.virtual_geometry)
+            self.set_capture_layout(self._capture_layout)
         self._invalidate_render_cache()
         self._capture_ready = True
         source_rect = self._region_store.get(path) if self._region_store is not None else None
@@ -1774,6 +1745,19 @@ class ScreenshotCaptureOverlay(QWidget):
         else:
             self._capture_layout = layout
             self.setGeometry(layout.virtual_geometry)
+            if layout.native_geometry is not None and sys.platform == "win32" and QApplication.platformName() == "windows":
+                # A top-level HWND has ONE DPI even when it spans monitors.
+                # Qt screen rectangles use per-monitor logical sizes, so their
+                # union cannot be used as this window's canvas on mixed DPI.
+                native = layout.native_geometry
+                user32 = ctypes.windll.user32
+                user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+                user32.SetWindowPos.restype = wintypes.BOOL
+                if not user32.SetWindowPos(int(self.winId()), None, native.x(), native.y(), native.width(), native.height(), 0x0014):
+                    raise RuntimeError("无法将截图窗口定位到完整桌面。")
+                self._capture_layout = ScreenCaptureLayout(QRect(self.geometry()), layout.image_size, (), QRect(native))
+                self._pointer_position = None
+                self.set_window_candidates(self._window_candidates)
         self._invalidate_render_cache()
         self.update()
 
@@ -1950,12 +1934,23 @@ class ScreenshotCaptureOverlay(QWidget):
 
     def set_window_candidates(self, candidates: tuple[ScreenshotWindowCandidate, ...]) -> None:
         self._window_candidates = candidates
-        self._pointer_position = self._pointer_position or self.mapFromGlobal(QCursor.pos())
+        if self._pointer_position is None:
+            layout = self._capture_layout
+            if layout is not None and layout.native_geometry is not None and sys.platform == "win32":
+                cursor = wintypes.POINT()
+                if ctypes.windll.user32.GetCursorPos(ctypes.byref(cursor)):
+                    source = QPoint(cursor.x, cursor.y) - layout.native_geometry.topLeft()
+                    self._pointer_position = self._selection_from_source(QRect(source, QSize(1, 1))).topLeft()
+            if self._pointer_position is None:
+                self._pointer_position = self.mapFromGlobal(QCursor.pos())
         self._update_window_hover(self._pointer_position)
         self._update_color_preview()
         self.update()
 
     def _selection_from_window_candidate(self, candidate: ScreenshotWindowCandidate) -> QRect:
+        if self._capture_layout is not None and self._capture_layout.native_geometry is not None:
+            source = candidate.rectangle.translated(-self._capture_layout.native_geometry.topLeft())
+            return self._selection_from_source(source).intersected(self.rect())
         top_left = candidate.rectangle.topLeft() - self.geometry().topLeft()
         return QRect(top_left, candidate.rectangle.size()).intersected(self.rect())
 
@@ -1963,10 +1958,27 @@ class ScreenshotCaptureOverlay(QWidget):
         if not self._selection.isEmpty() or self._drag_start is not None:
             self._hover_window_candidate = None
             return
+        screen_point = self.mapToGlobal(point)
+        if self._capture_layout is not None and self._capture_layout.native_geometry is not None:
+            screen_point = self._source_rect(QRect(point, QSize(1, 1))).topLeft() + self._capture_layout.native_geometry.topLeft()
         self._hover_window_candidate = screenshot_window_candidate_at(
             self._window_candidates,
-            self.mapToGlobal(point),
+            screen_point,
         )
+
+    def _global_rect(self, rectangle: QRect) -> QRect:
+        layout = self._capture_layout
+        if layout is None or layout.native_geometry is None:
+            return QRect(self.mapToGlobal(rectangle.topLeft()), rectangle.size())
+        native = self._source_rect(rectangle).translated(layout.native_geometry.topLeft())
+        # Separate top-level tips and pins use the destination monitor's DPI.
+        for screen in QApplication.screens():
+            geometry = screen.geometry()
+            ratio = screen.devicePixelRatio()
+            physical = QRect(geometry.topLeft(), QSize(round(geometry.width() * ratio), round(geometry.height() * ratio)))
+            if physical.contains(native.topLeft()):
+                return ScreenCaptureLayout._map_rect(native, physical, geometry)
+        return native
 
     def _update_color_preview(self) -> None:
         if not self._selection.isEmpty() or self._drag_start is not None:
@@ -1984,7 +1996,7 @@ class ScreenshotCaptureOverlay(QWidget):
             self._color_tip.hide()
             return
         self._color_tip.present(
-            self.mapToGlobal(self._color_tip_position(self._pointer_position)),
+            self._global_rect(QRect(self._color_tip_position(self._pointer_position), QSize(1, 1))).topLeft(),
             magnifier,
             self._color_preview,
         )
@@ -2114,7 +2126,7 @@ class ScreenshotCaptureOverlay(QWidget):
         if action == "copy":
             self.copy_requested.emit(image)
         elif action == "pin":
-            origin = QRect(self.mapToGlobal(self._selection.topLeft()), self._selection.size())
+            origin = self._global_rect(self._selection)
             self.pin_requested.emit(image, origin)
         elif action == "send":
             self.send_requested.emit(image)
@@ -2177,6 +2189,10 @@ class ScreenshotCaptureOverlay(QWidget):
             painter.end()
 
     def resizeEvent(self, event) -> None:
+        layout = self._capture_layout
+        if layout is not None and layout.native_geometry is not None:
+            # WM_DPICHANGED/resize can arrive after SetWindowPos returns.
+            self._capture_layout = ScreenCaptureLayout(QRect(self.geometry()), layout.image_size, (), layout.native_geometry)
         self._invalidate_render_cache()
         super().resizeEvent(event)
 
@@ -2978,13 +2994,15 @@ class SystemScreenshotController(QObject):
             return
         if self._capture_overlay is not overlay:
             return
-        layout = ScreenCaptureLayout.from_screens(
-            result.size(),
-            list(QApplication.screens()),
-            image_origin=windows_virtual_screen_origin(),
-        )
+        native_geometry = QRect(windows_virtual_screen_origin(), result.size())
+        layout = ScreenCaptureLayout(QRect(overlay.geometry()), result.size(), (), native_geometry)
         overlay.set_capture_image(result)
-        overlay.set_capture_layout(layout)
+        try:
+            overlay.set_capture_layout(layout)
+        except RuntimeError as error:
+            overlay.capture_failed()
+            self._notify("系统截图", str(error), True)
+            return
         self._capture_save_task = start_qt_task(
             lambda: save_screenshot_image(self._project_root, result, "capture"),
             lambda save_task, saved: self._capture_image_saved(save_task, overlay, saved),

@@ -75,3 +75,21 @@ test("only a returned, owned MP4 is marked generated and exposed by opaque ID", 
   service.jobs.get(job.id).output.subfolder = "../..";
   await assert.rejects(service.outputPath(service.jobs.get(job.id)), /超出/);
 });
+
+test("image commands reject video-only fields and oversize output", () => {
+  const input={model:"z-image-turbo",prompt:"paper boat",width:1024,height:1024,seed:1};
+  assert.equal(validateCommand(input,catalog).frames,undefined);
+  for(const change of [{frames:22},{references:[]},{width:4096},{height:1025}]) assert.throws(()=>validateCommand({...input,...change},catalog));
+});
+test("PNG image jobs persist in the shared queue and expose only an image result", async t => {
+  const {service,runtime}=await fixture(t);
+  const job=await service.submit({model:"z-image-turbo",prompt:"paper boat",width:512,height:512,seed:1},"image-success-key");
+  await fs.mkdir(path.join(runtime.stateRoot,"provider-output"),{recursive:true});
+  await fs.writeFile(path.join(runtime.stateRoot,"provider-output",`${job.id}.png`),Buffer.from("89504e470d0a1a0a0000000d49484452","hex"));
+  service.generate=async()=>({outputs:{"10":{images:[{type:"output",filename:`${job.id}.png`,subfolder:""}]}}});
+  await service.runQueue();
+  const view=service.view(service.jobs.get(job.id));
+  assert.equal(view.status,"succeeded"); assert.equal(view.videoUrl,undefined);
+  assert.equal(view.imageUrl,`/api/video/jobs/${job.id}/image`);
+  assert.equal(view.mediaKind,"image");
+});
