@@ -1,3 +1,5 @@
+import { errorResponsePresentation } from "../shared/errorPresentation.js";
+import { normalizeAgentInstanceBindings, type AgentInstanceBinding } from "../shared/agentInstance.js";
 import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
@@ -79,6 +81,7 @@ type AgentBindingPatch = {
   copilotCwd?: string;
   copilotCliBin?: string;
   marvisAppId?: string;
+  agentInstanceBindings?: Record<string, AgentInstanceBinding>;
   astrbotUrl?: string;
   astrbotUsername?: string;
   astrbotPassword?: string;
@@ -91,6 +94,7 @@ type AgentBindingPatch = {
 };
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
+  body = errorResponsePresentation(body, statusCode);
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body, null, 2));
 }
@@ -315,6 +319,7 @@ function routeSummary(
     copilotCwd: definition.copilotCwd ?? "",
     copilotCliBin: definition.copilotCliBin ?? "",
     marvisAppId: definition.marvisAppId ?? "",
+    agentInstanceBindings: definition.agentInstanceBindings,
     astrbotUrl: definition.astrbotUrl ?? "",
     astrbotProjectId: definition.astrbotProjectId ?? "",
     astrbotSessionId: definition.astrbotSessionId ?? "",
@@ -615,6 +620,7 @@ async function setLocalAgentBinding(
   if (patch.astrbotUsername !== undefined) route.astrbotUsername = String(patch.astrbotUsername || "");
   if (patch.astrbotPassword !== undefined) route.astrbotPassword = String(patch.astrbotPassword || "");
   if (patch.astrbotProjectId !== undefined) route.astrbotProjectId = String(patch.astrbotProjectId || "");
+  if (patch.agentInstanceBindings !== undefined) route.agentInstanceBindings = normalizeAgentInstanceBindings(patch.agentInstanceBindings);
   if (patch.astrbotSessionId !== undefined) route.astrbotSessionId = String(patch.astrbotSessionId || "");
   if (patch.dshSessionId !== undefined) route.dshSessionId = String(patch.dshSessionId || "");
   if (patch.dshSessionName !== undefined) route.dshSessionName = String(patch.dshSessionName || "");

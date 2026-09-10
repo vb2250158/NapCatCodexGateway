@@ -16,6 +16,16 @@
 
 Agent 自己需要看的接口说明是 [Agent 需要关注的 Rabi 接口](rabi-agent-interfaces.md)。本文件主要帮助用户理解“为什么模板不用写很多”和“最终发给 Agent 的消息大概长什么样”。
 
+## 消息包精简边界
+
+默认 `focused` 模式只保留一份相关必读清单（ID、摘要、GET 地址），省略空索引及重复召回摘要；Codex Hook 使用相同视图。计划、记忆、跨人格投递和远端任务的完整操作说明改为按需读取 `rabi-agent-interfaces.md` 对应章节，读取失败时停止该操作。包内仍保留权限、动态 Manager 身份、幂等、适用的强 ETag / If-Match 和写后回读要求。显式 `legacy` 配置继续保留旧索引视图，供已有配置回滚使用；唯一迁移入口是将 `contextInjection.mode` 改为 `focused`，待旧配置与回滚需求退出后再移除该兼容分支。
+
+明确发送请求只在 `[回传参数]` 出现一次。`[发送要求]` 保留本次处理流程并引用该模板；发送目标、来源凭据和需求回执字段保持完整。最近消息中已完整显示的同 ID 消息，在紧邻对话或当前讨论片段中只引用 ID；消息被截断、无 ID 或未显示时仍保留片段文字，最近消息额度及引用链不变。
+
+只有本轮提到计划、秘书或委派，或收到计划反馈事件，才列出已配置秘书的任务名称、ID、工作目录和职责。远端任务教程还要求本轮具有远端执行意图且启用了远端消息端。这些条件只控制提示，不创建任务或授予权限；未命中时仍可先读接口文档按需使用能力。
+
+通用包不内置具体人名或人格的陪伴/心跳策略；这些行为由所绑定的人格文件和本次模板定义。身份事实、候选/冲突边界、明确发送目标、附件及引用证据继续保留。
+
 ## 统一触发管线
 
 上下文不再由各个入口分别调用角色知识。所有入口先转换成标准触发，再进入 `RabiContextManager`：
@@ -186,7 +196,7 @@ Agent 需要关注的 Rabi 接口文档链接
 
 ## 命中召回与处理前确认
 
-`[记忆与计划]` 在默认 `focused` 模式只显示高相关摘要和全量索引的查询路径，不展开无关的当前计划、近期记忆或技能。近期记忆统一指 `memory/recent/` 里的记忆；记忆活跃时间取 `updatedAt` 和 `viewedAt` 中较新的一个，只用于生命周期与相关项排序。
+`[记忆与计划]` 在默认 `focused` 模式只显示查询路径和操作合同入口，高相关摘要只在 `[处理前上下文确认]` 显示一次，不展开无关的当前计划、近期记忆或技能。近期记忆统一指 `memory/recent/` 里的记忆；记忆活跃时间取 `updatedAt` 和 `viewedAt` 中较新的一个，只用于生命周期与相关项排序。
 
 除此之外，RabiRoute 还会在投递消息给 Agent 之前，根据当前用户消息做轻量相关性打分，把高相关条目列入 `[处理前上下文确认]`。这个确认协议不只服务聊天回复，也适用于发布任务、更新计划、写入记忆或执行外部动作。
 
@@ -228,11 +238,11 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 ## 自动包装格式
 
-最终投递给 Agent 的消息由 RabiRoute 自动包装生成。首段固定为 `[消息源]`，下一段固定为 `[消息内容]`。事件信息、最近消息、引用解析、角色路径和协作要求全部排在消息内容之后。空字段、未启用能力和没有人格绑定的段落会被省略或替换。
+最终投递给 Agent 的消息由 RabiRoute 自动包装生成。首段固定为 `[消息源]`，下一段固定为 `[消息内容]`。事件信息、最近消息、引用解析和角色路径归入消息内容之后的 `[相关上下文]`；不注入通用协作要求。空字段、未启用能力和没有人格绑定的段落会被省略或替换。
 
 四种来源分别使用不同身份字段：消息端必须提供 `messageAdapter`、`conversationType`、`conversationId`、`messageId`，以及 `senderName` 或 `senderId`；Agent 必须提供实际 `agentAdapter`、会话名称和完整会话 ID；计划必须提供计划名称和计划 ID；系统必须提供事件类型、名称和 ID，必要时可补充触发方类型、名称和 ID。
 
-`contextBlocks` 放事件、附件、最近消息等补充上下文，`controlBlocks` 放初始化、回复合同和协作要求。固定顺序是消息源、消息内容、上下文块、控制块。上下文块和控制块不得包含 `[消息源]`、`[消息内容]` 或 `[投递源]`，正文中的 `[标题]` 会被引用化，不能伪造同级控制板块。
+`contextBlocks` 放事件、附件、最近消息等补充上下文，`controlBlocks` 放回传参数和本次必要的发送要求。固定顺序是消息源、消息内容、相关上下文、回传参数及本次发送要求。上下文块和控制块不得包含 `[消息源]`、`[消息内容]` 或 `[投递源]`，正文中的 `[标题]` 会被引用化，不能伪造同级控制板块。
 
 旧 `[投递源]`、旧嵌套信封和旧 Agent 回复会在新信封渲染前移除。旧重放记录没有保存结构化来源时，系统明确标为“历史投递记录”，不猜原消息端、Agent 或会话。
 
@@ -251,7 +261,6 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 事件：<事件说明>
 路由类型：<routeKind>
 事件时间：<time>
-当前时间：<currentTime>
 
 [最近消息]
 最近 <recentMessageLimit> 条双向消息：
@@ -271,28 +280,10 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 记忆目录：<agentRoleDir>/memory
 
 [记忆与计划]
-更新记忆与计划的说明文档：<agentInterfaceDocPath>
-可用 API 提示：
-- 查看/更新计划：GET /api/roles/<roleId>/plans、GET /api/roles/<roleId>/plans/{planId}、POST /api/roles/<roleId>/plans、PATCH /api/roles/<roleId>/plans/{planId}
-- 查看记忆：GET /api/roles/<roleId>/memory、GET /api/roles/<roleId>/memory/recent、GET /api/roles/<roleId>/memory/recent/{memoryId}、GET /api/roles/<roleId>/memory/consolidated、GET /api/roles/<roleId>/memory/consolidated/{memoryId}
-- 新增近期记忆：POST /api/roles/<roleId>/memory/recent
-- 更新指定近期记忆：PATCH /api/roles/<roleId>/memory/recent/{memoryId}
-- 按 ID 查看记忆会刷新 viewedAt；更新近期记忆会刷新 updatedAt 和 viewedAt；关键词命中召回会刷新 viewedAt
-
-当前计划：
-- <planId>：<planTitle>
-
-近期记忆：
-- <memoryId>：<memoryTitle>
-
-可用技能：
-- <skillId>：<skillTitle> - <skillSummary>（GET /api/roles/<roleId>/skills/<skillId>）
-
-命中技能：
-- <skillId>：<skillTitle> - <skillSummary>（GET /api/roles/<roleId>/skills/<skillId>）
-
-命中召回：
-- <itemId>：<itemTitle>
+操作说明：<agentInterfaceDocPath>
+按需读取：/api/roles/<roleId>/plans、/memory、/skills
+写入、跨人格投递或远端任务前读取对应章节；无法读取时停止该操作。
+保留 Action Gate、动态 Manager 身份、幂等、适用的强 ETag / If-Match 和写后回读要求。
 
 [处理前上下文确认]
 - <高相关必读项及 GET 路径>
@@ -308,23 +299,16 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 历史会话归档：<conversationArchiveDir>
 会话归档索引：<conversationArchiveIndexPath>
 
-[回传]
+[回传参数]
 明确发送 API：<sendApiUrl>
 发送请求模板：<sendRequestJson>
 来源上下文（仅供审计和跨人格联系，不可作为发送参数）：<replyContextJson>
-
-[跨人格联系]
-查询：GET /api/personas?addressable=true
-投递：POST /api/personas/{personaId}/messages
-来源 Route：replyContext.runtimeRouteId
-来源凭据：replyContext.personaMessagingCapability
-要求：每次业务投递使用稳定且唯一的 deliveryId；回复时沿用 personaConversationId、引用当前 messageId，并增加 personaMessageHopCount，不得超过 personaMessageMaxHops
 
 [发送要求]
 <按 outputAdapter、replyToSource 和来源消息生成的回传说明>
 
 [远端 Agent 设备]
-<仅在 route 启用 remoteAgent 消息端时注入本机 Manager API 提示>
+<仅在本轮涉及远端执行且启用 remoteAgent 时注入>
 
 [用户模板补充]
 <用户在 route 模板里写的可选补充要求；为空时省略本段>
@@ -377,23 +361,13 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 记忆目录：data/roles/Rabi/memory
 
 [记忆与计划]
-更新记忆与计划的说明文档：docs/rabi-agent-interfaces.md
-可用 API 提示：
-- 查看/更新计划：GET /api/roles/Rabi/plans、GET /api/roles/Rabi/plans/{planId}、POST /api/roles/Rabi/plans、PATCH /api/roles/Rabi/plans/{planId}
-- 查看记忆：GET /api/roles/Rabi/memory、GET /api/roles/Rabi/memory/recent、GET /api/roles/Rabi/memory/recent/{memoryId}、GET /api/roles/Rabi/memory/consolidated、GET /api/roles/Rabi/memory/consolidated/{memoryId}
-- 新增近期记忆：POST /api/roles/Rabi/memory/recent
-- 更新指定近期记忆：PATCH /api/roles/Rabi/memory/recent/{memoryId}
-- 按 ID 查看记忆会刷新 viewedAt；更新近期记忆会刷新 updatedAt 和 viewedAt；关键词命中召回会刷新 viewedAt
+操作说明：docs/rabi-agent-interfaces.md
+按需读取：/api/roles/Rabi/plans、/api/roles/Rabi/memory、/api/roles/Rabi/skills
+涉及写入、跨人格投递或远端任务前读取对应章节；无法读取时停止该操作。
+保留权限、动态 Manager 身份、幂等、适用的强 ETag / If-Match 和写后回读要求。
 
-当前计划：
-- plan-001：完善计划和记忆机制文档
-
-近期记忆：
-- memory-001：用户希望计划和记忆由 Agent 主动维护
-- memory-002：近期记忆和当前计划默认只注入 ID 与标题
-
-命中召回：
-- memory-003：更新记忆与计划的说明文档路径
+[处理前上下文确认]
+- memory-003：接口说明位置 — 操作前核对当前合同（近期记忆） GET /api/roles/Rabi/memory/recent/memory-003
 
 [日志]
 群聊日志：data/route/default-main/group-messages.jsonl
@@ -403,7 +377,7 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 角色面板记录：data/roles/Rabi/role-panel/messages.jsonl
 语音转写日志：data/route/default-main/voice-transcripts.jsonl
 
-[发送]
+[回传参数]
 明确发送 API：`<managerBaseUrl>/api/agent/send`；安装版从 Host `status --json` 发现本代地址，源码模式由 Manager 标准输出提供。
 发送请求模板：{"deliveryId":"<稳定发送 ID>","sender":{"agentType":"primary_persona","sessionId":"<当前主人格完整会话 ID>"},"routeId":"default-main","channel":"napcat","params":{"target":"group","groupId":"example-group-id","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<发送正文>"}}
 Codex 主人格 Route 开启“仅允许主人格发送消息”Hook 后，`sender.sessionId` 必须填写该 Route 绑定的 `codexThreadId`。

@@ -59,6 +59,23 @@ test("a response closes the old request and can create a new required request in
   assert.notEqual(response.requestId, first.requestId);
 });
 
+test("late original delivery commit cannot reopen a request after its recovered reply", () => {
+  const persistence = new MemoryPersistence();
+  const store = new AgentRequestStore(persistence);
+  const original = store.prepare({ ...parties(), responsePolicy: "required", responseInstruction: "请回复" });
+  store.commit(original, { action: "receipt_recovered", transport: "desktop-ipc" });
+  const reply = store.prepare({
+    source: parties().target, target: parties().source, responsePolicy: "none",
+    inReplyToRequestId: original.requestId, result: "完成", nextAction: "无"
+  });
+  store.commit(reply);
+  store.commit(original, { action: "started", transport: "desktop-ipc" });
+  const restored = new AgentRequestStore(persistence).get(original.requestId || "");
+  assert.equal(restored?.status, "responded");
+  assert.equal(restored?.deliveryAction, "receipt_recovered");
+  assert.equal(restored?.response?.result, "完成");
+});
+
 test("legacy delivery wrappers are removed from Agent response results", () => {
   const store = new AgentRequestStore(new MemoryPersistence());
   const request = store.prepare({
@@ -125,16 +142,16 @@ test("responses fail closed when source, target, or required fields do not match
 test("responses accept equivalent normal and extended Windows workspace paths", () => {
   const store = new AgentRequestStore(new MemoryPersistence());
   const prepared = store.prepare({
-    source: { ...parties().source, workspace: "\\\\?\\C:\\Data\\CottonProject\\RabiRoute" },
-    target: { ...parties().target, workspace: "C:\\Data\\CottonProject\\RabiRoute" },
+    source: { ...parties().source, workspace: "\\\\?\\C:\\Work\\ExampleProject" },
+    target: { ...parties().target, workspace: "C:\\Work\\ExampleProject" },
     responsePolicy: "required",
     responseInstruction: "请回复"
   });
   store.commit(prepared);
 
   const response = store.prepare({
-    source: { ...parties().target, workspace: "\\\\?\\C:\\Data\\CottonProject\\RabiRoute" },
-    target: { ...parties().source, workspace: "C:\\Data\\CottonProject\\RabiRoute\\" },
+    source: { ...parties().target, workspace: "\\\\?\\C:\\Work\\ExampleProject" },
+    target: { ...parties().source, workspace: "C:\\Work\\ExampleProject\\" },
     inReplyToRequestId: prepared.requestId,
     result: "done",
     nextAction: "none",
@@ -146,16 +163,16 @@ test("responses accept equivalent normal and extended Windows workspace paths", 
 test("equivalent workspace replies reserve, release, and commit pendingResponseDeliveryId", () => {
   const store = new AgentRequestStore(new MemoryPersistence());
   const request = store.prepare({
-    source: { ...parties().source, workspace: "\\\\?\\C:\\Data\\CottonProject\\RabiRoute" },
-    target: { ...parties().target, workspace: "C:\\Data\\CottonProject\\RabiRoute" },
+    source: { ...parties().source, workspace: "\\\\?\\C:\\Work\\ExampleProject" },
+    target: { ...parties().target, workspace: "C:\\Work\\ExampleProject" },
     responsePolicy: "required",
     responseInstruction: "请回复"
   });
   store.commit(request);
 
   const responseInput = {
-    source: { ...parties().target, workspace: "\\\\?\\C:\\Data\\CottonProject\\RabiRoute" },
-    target: { ...parties().source, workspace: "C:\\Data\\CottonProject\\RabiRoute\\" },
+    source: { ...parties().target, workspace: "\\\\?\\C:\\Work\\ExampleProject" },
+    target: { ...parties().source, workspace: "C:\\Work\\ExampleProject\\" },
     inReplyToRequestId: request.requestId,
     result: "done",
     nextAction: "none",

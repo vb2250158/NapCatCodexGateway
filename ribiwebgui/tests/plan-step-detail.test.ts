@@ -50,7 +50,9 @@ test("plan detail renderer is wired to summaries and expanded steps without hori
   const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
   const component = fs.readFileSync(path.join(root, "src", "components", "PlanStepDetail.vue"), "utf8");
 
-  assert.equal((page.match(/<PlanStepDetail /g) || []).length, 2);
+  assert.equal((page.match(/<PlanStepDetail /g) || []).length, 3);
+  assert.match(page, /<details v-if="step.detail && isApprovalStep\(plan, step\)"/);
+  assert.match(page, /<PlanStepDetail v-else-if="step.detail"/);
   assert.match(component, /white-space:\s*pre-wrap/);
   assert.match(component, /overflow-wrap:\s*anywhere/);
   assert.match(component, /word-break:\s*break-word/);

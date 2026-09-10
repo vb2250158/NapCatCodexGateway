@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../../userFacingError";
 import { computed, onMounted, ref } from "vue";
 import type { XiaomiHomeAuthorizationSnapshot } from "@shared/xiaomiHomeAuthContract";
 import type { XiaomiHomeSettingsSnapshot } from "@shared/xiaomiHomeSettingsContract";
@@ -70,7 +71,7 @@ async function load(): Promise<void> {
     authorization.value = nextAuthorization;
     error.value = "";
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
   } finally {
     loading.value = false;
   }
@@ -112,7 +113,7 @@ async function connect(): Promise<void> {
     baseUrl.value = settings.value.settings.baseUrl;
     error.value = "";
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
   } finally {
     accessToken.value = "";
     busy.value = false;
@@ -127,7 +128,7 @@ async function refresh(): Promise<void> {
     authorization.value = await xiaomiHomeAuthClient.refresh(authorization.value.revision);
     error.value = "";
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
   } finally {
     busy.value = false;
   }
@@ -142,7 +143,7 @@ async function disconnect(): Promise<void> {
     authorization.value = await xiaomiHomeAuthClient.disconnect(authorization.value.revision);
     error.value = "";
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
   } finally {
     busy.value = false;
   }

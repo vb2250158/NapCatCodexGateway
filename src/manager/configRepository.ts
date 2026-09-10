@@ -363,7 +363,7 @@ export class ManagerConfigRepository {
     }
   }
 
-  writeConfig(config: GatewayConfigFile): GatewayConfigFile {
+  writeConfig(config: GatewayConfigFile, scope?: { configName: string; previousId: string }): GatewayConfigFile {
     if (!Array.isArray(config.gateways)) throw new Error("routes must be an array");
     const normalized = { gateways: config.gateways.map((definition) => this.normalize(definition)) };
     autoAssignGatewayPorts(normalized.gateways, this.managerPort);
@@ -379,6 +379,7 @@ export class ManagerConfigRepository {
       const oldConfigName = routeRuntimeParts(raw.id).configName || sanitizeConfigName(raw.configName);
       const configName = sanitizeConfigName(definition.configName) || definition.id;
       activeConfigNames.add(configName);
+      if (scope && configName !== scope.configName) continue;
       if (oldConfigName && oldConfigName !== configName) {
         const oldConfigPath = this.adapterConfigPath(oldConfigName);
         if (fs.existsSync(oldConfigPath)) {
@@ -405,7 +406,13 @@ export class ManagerConfigRepository {
     for (const [roleId, fragment] of groupedByRole.entries()) {
       this.writePersonaConfig(roleId, fragment);
     }
-    this.removeConfigFilesMissingFrom(activeConfigNames);
+    if (scope) {
+      const previousName = routeRuntimeParts(scope.previousId).configName || sanitizeConfigName(scope.previousId);
+      if (previousName && previousName !== scope.configName) {
+        const oldPath = this.adapterConfigPath(previousName);
+        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+      }
+    } else this.removeConfigFilesMissingFrom(activeConfigNames);
     return normalized;
   }
 

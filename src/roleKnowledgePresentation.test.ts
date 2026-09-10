@@ -93,6 +93,20 @@ test("pending approval remains metadata under the explicit 待审批 status", ()
   assert.equal(presentation.approval.enabled, true);
 });
 
+test("QA presentation uses acceptance copy while keeping the stable key and purple palette", () => {
+  const presentation = planPresentation(plan("等待 QA"), workflow);
+  assert.equal(presentation.status, "等待 QA");
+  assert.equal(presentation.tone, "等待 QA");
+  assert.equal(presentation.label, "等待 QA 验收");
+  assert.equal(presentation.labelEn, "Awaiting QA acceptance");
+  assert.deepEqual(presentation.palette, {
+    accent: "#7c3aed",
+    background: "#f3e8ff",
+    foreground: "#6d28d9"
+  });
+  assert.notDeepEqual(presentation.palette, planPresentation(plan("等待打包"), workflow).palette);
+});
+
 test("status ordering follows the configured status vocabulary", () => {
   const statuses: PlanStatus[] = ["关闭", "完成", "暂停", "待讨论", "等待 QA", "等待打包", "执行中", "待审批", "待补充信息", "分析中"];
   const ordered = presentPlans(statuses.map((status, index) => plan(status, {

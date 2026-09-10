@@ -52,10 +52,10 @@ test("Agent source renders the actual Agent endpoint and complete session identi
     workspace: "C:/Data/Project"
   }, "同步计划结果", "2026/9/7 12:34:56");
 
-  assert.match(message, /^\[消息源\]\n消息源类型：Agent\nAgent 端：dsh/);
-  assert.match(message, /Agent 类型：计划秘书 Agent/);
-  assert.match(message, /会话名称：发布计划秘书\n会话 ID：session-00000000-0000-4000-8000-000000000001/);
-  assert.match(message, /工作目录：C:\/Data\/Project\n消息包发送时间：2026\/9\/7 12:34:56\n\n\[消息内容\]\n同步计划结果$/);
+  assert.match(message, /^\[消息源\]\n类型：Agent｜处理端：dsh/);
+  assert.match(message, /角色：计划秘书 Agent/);
+  assert.match(message, /会话：发布计划秘书\n会话 ID：session-00000000-0000-4000-8000-000000000001/);
+  assert.match(message, /工作目录：C:\/Data\/Project\n投递时间：2026\/9\/7 12:34:56\n\n\[消息内容\]\n同步计划结果$/);
 });
 
 test("plan source renders plan identity and its originating Agent session", () => {
@@ -77,9 +77,9 @@ test("plan source renders plan identity and its originating Agent session", () =
     "消息源类型：计划",
     "计划名称：消息源统一",
     "计划 ID：plan-source-contract",
-    "Agent 端：codex",
-    "Agent 类型：计划执行 Agent",
-    "会话名称：消息源统一任务",
+    "处理端：codex",
+    "角色：计划执行 Agent",
+    "会话：消息源统一任务",
     "会话 ID：019f0000-0000-7000-8000-000000000010",
     "工作目录：C:/Data/RabiRoute",
     "消息包发送时间：2026/9/7 12:34:56"

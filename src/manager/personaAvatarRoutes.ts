@@ -1,3 +1,4 @@
+import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import fs from "node:fs";
 import http from "node:http";
 import {
@@ -20,6 +21,7 @@ class PersonaAvatarRouteError extends Error {
 }
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
+  body = errorResponsePresentation(body, statusCode);
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body, null, 2));
 }

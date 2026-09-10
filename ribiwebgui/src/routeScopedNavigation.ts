@@ -58,6 +58,11 @@ export function routeScopedPageFromPath(path: string): RouteScopedPage | "" {
   return "";
 }
 
+export function showsRouteSwitcher(path: string): boolean {
+  const page = routeScopedPageFromPath(path);
+  return page === "adapters" || page === "persona" || page === "knowledge";
+}
+
 export function routeScopedPathForCurrentPage(routeKey: string, currentPath: string): string {
   if (/^\/routes\/[^/]+\/persona\/document$/.test(currentPath)) {
     return routeScopedPersonaDocumentPath(routeKey);
@@ -70,6 +75,16 @@ export function routeScopedPathForCurrentPage(routeKey: string, currentPath: str
 }
 
 export function routeKeyFromWebguiHash(hash: string): string {
+  // During lazy plugin registration the requested URL is retained in recovery.from.
+  // Read that target instead of treating recovery as an unscoped first-Route visit.
+  for (let depth = 0; depth < 4; depth += 1) {
+    const target = hash.startsWith("#") ? hash.slice(1) : hash;
+    const queryIndex = target.indexOf("?");
+    if (target.slice(0, queryIndex) !== "/plugin-recovery" || queryIndex < 0) break;
+    const from = new URLSearchParams(target.slice(queryIndex + 1)).get("from") || "";
+    if (!from.startsWith("/") || from.startsWith("//")) return "";
+    hash = `#${from}`;
+  }
   const match = hash.match(/^#\/routes\/([^/?#]+)(?:\/(?:overview|adapters|persona(?:\/(?:document|sync))?|knowledge|speech|runtime))?(?:[/?#]|$)/)
     || hash.match(/^#\/persona\/([^/?#]+)(?:[/?#]|$)/);
   if (!match?.[1]) return "";

@@ -1,3 +1,4 @@
+import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import type http from "node:http";
 import { forwardFenneNoteRequest, type FenneNoteOutputMode } from "../fenneNoteOutput.js";
 
@@ -10,6 +11,7 @@ export type FenneNoteOutputServiceOptions = {
 };
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
+  body = errorResponsePresentation(body, statusCode);
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body));
 }

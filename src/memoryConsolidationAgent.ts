@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { requestMessageAgentManager } from "./messageAgentPool.js";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
 import { sameCodexWorkspace } from "./codexTaskIdentity.js";
@@ -24,6 +25,7 @@ export type MemoryConsolidationAgentState = {
   schemaVersion: 1;
   updatedAt: string;
   binding?: MemoryConsolidationAgentBinding;
+  pendingDelivery?: { promptHash: string; deliveryId?: string };
 };
 
 export type MemoryConsolidationAgentOptions = {
@@ -58,6 +60,7 @@ function readState(filePath: string): MemoryConsolidationAgentState {
     return {
       schemaVersion: MEMORY_CONSOLIDATION_AGENT_SCHEMA_VERSION,
       updatedAt: String(raw.updatedAt || new Date(0).toISOString()),
+      ...(raw.pendingDelivery ? { pendingDelivery: raw.pendingDelivery } : {}),
       binding: {
         agentAdapter: parseAgentAdapterType(String(binding.agentAdapter || "")) ?? "codex",
         threadId,
@@ -126,9 +129,29 @@ export class MemoryConsolidationAgent {
     if (!messageSource) throw new Error("Memory consolidation Agent delivery requires messageSource.");
     let delivered!: MemoryConsolidationAgentBinding;
     const operation = this.deliveryTail.catch(() => undefined).then(async () => {
+      const promptHash = createHash("sha256").update(JSON.stringify({ prompt, messageSource })).digest("hex");
+      if (this.state.pendingDelivery) {
+        const pending = this.state.pendingDelivery;
+        const binding = this.state.binding;
+        if (!binding || pending.promptHash !== promptHash || !pending.deliveryId) {
+          throw Object.assign(new Error("Memory delivery is uncertain; automatic resend is blocked."), { code: "MEMORY_DELIVERY_UNCONFIRMED" });
+        }
+        const receipt = await this.request({ action: "read", agentAdapter: binding.agentAdapter, threadId: binding.threadId, deliveryId: pending.deliveryId });
+        if (receipt.delivery?.state !== "accepted") {
+          throw Object.assign(new Error("Memory delivery receipt is not confirmed; automatic resend is blocked."), { code: "MEMORY_DELIVERY_UNCONFIRMED" });
+        }
+        this.state.pendingDelivery = undefined;
+        binding.initializedAt ??= this.now().toISOString();
+        this.persist(binding);
+        delivered = structuredClone(binding);
+        return;
+      }
       const binding = await this.resolveBinding();
       const shouldInitialize = !binding.initializedAt;
-      await this.request({
+      this.state.pendingDelivery = { promptHash };
+      this.persist(binding);
+      try {
+        await this.request({
         action: "send",
         agentAdapter: binding.agentAdapter,
         threadId: binding.threadId,
@@ -138,7 +161,23 @@ export class MemoryConsolidationAgent {
         sandbox: "workspace-write",
         model: normalizeCodexMemoryConsolidationAgentModel(this.options.model),
         prompt
-      });
+        });
+      } catch (error) {
+        const failure = error as { statusCode?: number; response?: Record<string, any> };
+        const response = failure.response;
+        const deliveryId = response?.delivery?.deliveryId ?? response?.data?.delivery?.deliveryId;
+        if (typeof deliveryId === "string" && deliveryId.trim()) {
+          this.state.pendingDelivery = { promptHash, deliveryId };
+        } else if (response?.commitState === "not_started") {
+          this.state.pendingDelivery = undefined;
+        }
+        this.persist(binding);
+        if (this.state.pendingDelivery) {
+          throw Object.assign(new Error("Memory delivery is uncertain; receipt verification is required before retry."), { code: "MEMORY_DELIVERY_UNCONFIRMED", cause: error });
+        }
+        throw error;
+      }
+      this.state.pendingDelivery = undefined;
       if (shouldInitialize) binding.initializedAt = this.now().toISOString();
       this.persist(binding);
       delivered = structuredClone(binding);
@@ -212,6 +251,7 @@ export class MemoryConsolidationAgent {
     this.state = {
       schemaVersion: MEMORY_CONSOLIDATION_AGENT_SCHEMA_VERSION,
       updatedAt: this.now().toISOString(),
+      ...(this.state.pendingDelivery ? { pendingDelivery: this.state.pendingDelivery } : {}),
       binding: structuredClone(binding)
     };
     atomicWriteFileSync(this.options.statePath, `${JSON.stringify(this.state, null, 2)}\n`);

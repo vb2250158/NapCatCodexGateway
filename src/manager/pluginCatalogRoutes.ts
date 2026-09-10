@@ -1,7 +1,10 @@
+import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import path from "node:path";
 import type http from "node:http";
 import type { GenerationRuntime, PluginGeneration } from "../plugin-kernel/index.js";
 import type { WebPluginModule } from "./webPluginModules.js";
+import type { PluginCatalogInput } from "./pluginCatalogPresentation.js";
+import type { HotPatchInvocation } from "../plugin-kernel/hotPatchProcess.js";
 
 export type PluginReconciliationApiContext = {
   diagnostics?: () => readonly unknown[];
@@ -9,6 +12,7 @@ export type PluginReconciliationApiContext = {
 };
 export type PluginCatalogApiContext = {
   runtime: GenerationRuntime;
+  renderCatalog: (input: PluginCatalogInput, host?: "web" | "desktop") => Promise<HotPatchInvocation<unknown>>;
   reconciliation?: PluginReconciliationApiContext;
   webModules?: {
     list(): Promise<readonly WebPluginModule[]> | readonly WebPluginModule[];
@@ -16,6 +20,7 @@ export type PluginCatalogApiContext = {
   };
 };
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
+  body = errorResponsePresentation(body, statusCode);
   response.setHeader("cache-control", "no-store");
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body));
@@ -31,16 +36,6 @@ function reconciliationPayload(context: PluginCatalogApiContext): object {
     failed: generation.records.filter(record => record.status === "failed").map(record => record.identity.instanceId),
     diagnostics: [...(context.reconciliation?.diagnostics?.() ?? [])]
   };
-}
-function contributionPayload(generation: PluginGeneration, host?: "web" | "desktop") {
-  const pluginIds = new Map(generation.records.map(record => [record.identity.instanceId, record.identity.pluginId]));
-  return generation.contributions.contributions.flatMap(contribution => {
-    const value = contribution.value && typeof contribution.value === "object" && !Array.isArray(contribution.value)
-      ? contribution.value as Record<string, unknown> : {};
-    const hosts = Array.isArray(value.hosts) ? value.hosts.filter(item => typeof item === "string") as string[] : [];
-    if (host && !hosts.includes(host)) return [];
-    return [Object.freeze({ instanceId: contribution.instanceId, pluginId: pluginIds.get(contribution.instanceId) ?? "", kind: contribution.kind, id: contribution.id, ...value })];
-  });
 }
 export function handlePluginCatalogApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse, context: PluginCatalogApiContext): boolean {
   if (requestUrl.pathname === "/api/plugins/reconciliation") {
@@ -75,23 +70,13 @@ export function handlePluginCatalogApi(request: http.IncomingMessage, requestUrl
   const requestedHost = requestUrl.searchParams.get("host");
   if (requestedHost && requestedHost !== "web" && requestedHost !== "desktop") { jsonResponse(response, 400, { code: -1, message: "Plugin catalog host must be web or desktop." }); return true; }
   const generation = context.runtime.current();
-  const contributions = contributionPayload(generation, requestedHost as "web" | "desktop" | undefined);
-  jsonResponse(response, 200, { code: 0, data: {
-    schemaVersion: 2, generation: generation.id, host: requestedHost || "all",
-    revision: { plugins: generation.sequence, contributions: generation.contributions.revision },
-    plugins: generation.records.map(record => ({
-      instanceId: record.identity.instanceId, pluginId: record.identity.pluginId,
-      manifest: {
-        id: record.manifest.id,
-        version: record.manifest.version,
-        kind: "package",
-        hosts: Object.keys(record.manifest.entries),
-        capabilities: record.manifest.provides
-      },
-      host: record.identity.host, scope: "global", status: record.status, missingCapabilities: record.missingCapabilities,
-      ...(record.error ? { error: record.error } : {})
-    })),
-    contributions
-  }});
+  void context.renderCatalog({ id: generation.id, sequence: generation.sequence, records: generation.records, contributions: generation.contributions },
+    requestedHost as "web" | "desktop" | undefined).then(result => {
+      if (response.destroyed || response.writableEnded) return;
+      response.setHeader("x-rabiroute-source-revision", String(result.revision));
+      jsonResponse(response, 200, { code: 0, data: result.value });
+    }).catch(() => {
+      if (!response.destroyed && !response.writableEnded) jsonResponse(response, 503, { code: -1, message: "Plugin catalog presentation is unavailable." });
+    });
   return true;
 }

@@ -399,3 +399,17 @@ test("plan feedback commit rejects a reused id with different content inside the
     2
   );
 });
+
+
+test("save-only user feedback has no delivery or post-commit work", () => {
+  for (const kind of ["guidance", "approval_suggestion"] as const) {
+    const input = { roleId: "reviewer", planId: "plan", planTitle: "Review", author: "user", source: "webgui", kind, text: "QA passed; review later" };
+    const saved = createPlanFeedbackRecord({ ...input, notifyAgent: false });
+    assert.equal(saved.deliveryStatus, "record_only");
+    assert.equal(saved.postCommit, undefined);
+    assert.equal(saved.gatewayId, undefined);
+    const delivered = createPlanFeedbackRecord({ ...input, notifyAgent: true });
+    assert.equal(delivered.deliveryStatus, "pending");
+    assert.equal(delivered.postCommit?.status, "pending");
+  }
+});

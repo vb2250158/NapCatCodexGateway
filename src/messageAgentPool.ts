@@ -5,11 +5,7 @@ import path from "node:path";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
 import { sameCodexWorkspace } from "./codexTaskIdentity.js";
 import { parseAgentAdapterType, type AgentAdapterType } from "./agentAdapters/types.js";
-import {
-  communicationModeForRouteKind,
-  proactiveCommunicationPolicyLines,
-  type AgentCommunicationMode
-} from "./shared/agentCommunicationPolicy.js";
+import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPolicy.js";
 import { codexThreadTitleMaxLength, normalizeCodexThreadTitle } from "./shared/codexThreadTitle.js";
 import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
 import type { RabiMessageSource } from "./shared/rabiMessage.js";
@@ -131,7 +127,10 @@ export function requestMessageAgentManager(
       if (settled || !responseEnded || !socketClosed) return;
       settled = true;
       if (responseStatus < 200 || responseStatus >= 300 || responseBody.code === -1) {
-        reject(new Error(String(responseBody.message || `Manager returned HTTP ${responseStatus}.`)));
+        reject(Object.assign(new Error(String(responseBody.message || `Manager returned HTTP ${responseStatus}.`)), {
+          statusCode: responseStatus,
+          response: responseBody
+        }));
         return;
       }
       resolve(responseBody);
@@ -505,13 +504,6 @@ function groupMessageIds(group: PendingMessageGroup): string[] {
     .slice(-50);
 }
 
-function communicationModeForMessageGroup(group: PendingMessageGroup): AgentCommunicationMode {
-  const modes = group.items.map((item) => communicationModeForRouteKind(item.payload.routeKind));
-  if (modes.includes("explicit")) return "explicit";
-  if (modes.includes("ambient")) return "ambient";
-  if (modes.includes("heartbeat")) return "heartbeat";
-  return "internal";
-}
 
 type ActiveContinuationCandidate = {
   worker: MessageAgentWorker;
@@ -549,7 +541,6 @@ function workerHandoffPrompt(
   requirementId?: string
 ): string {
   const threadsApi = `${managerBaseUrl.replace(/\/+$/, "")}/api/agent/threads`;
-  const communicationMode = communicationModeForMessageGroup(group);
   const criticalFactInstructions = [
     "",
     "[项目事实判断由 Agent 负责]",
@@ -587,9 +578,6 @@ function workerHandoffPrompt(
     "收到结果后，由本任务结合最新上下文决定是否外发。",
     ...heartbeatInstructions,
     ...criticalFactInstructions,
-    "",
-    "[主动协作要求]",
-    ...proactiveCommunicationPolicyLines(communicationMode),
     "",
     "[本轮可见性与结束条件]",
     "当前任务输出只供内部查看。外部消息必须取得渠道回执；待决定事项必须实际交给主人格。",

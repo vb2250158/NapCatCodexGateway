@@ -15,8 +15,18 @@ import {
   normalizeRolePlanFromManager,
   openPlanAgentTask,
   submitPlanFeedback,
+  ManagerRequestError,
   synchronizeRoleKnowledgeLifecycle
 } from "../src/roleKnowledgeClient.js";
+
+test("plan feedback errors retain commit state and actionable server guidance", () => {
+  const error = new ManagerRequestError("Version conflict", 412, {
+    reason: "revision_conflict", commitState: "not_started", nextAction: "Read the latest plan and merge changes."
+  });
+  assert.equal(error.details?.commitState, "not_started");
+  assert.match(error.message, /Version conflict/);
+  assert.match(error.message, /Read the latest plan/);
+});
 
 function plan(presentation?: RolePlan["presentation"]): RolePlan {
   return {
@@ -895,4 +905,33 @@ test("pending memory consolidation counts reject a Manager envelope error", asyn
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+
+test("WebGUI saves both feedback kinds without a Route and reads their durable receipt", async () => {
+  const originalFetch = globalThis.fetch;
+  let recorded: Record<string, unknown> | undefined;
+  let posts = 0;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/meta") return Response.json({ applicationGenerationId: "save-only-generation", managerInstanceId: "save-only-manager" });
+    if (init?.method === "POST") {
+      posts += 1;
+      const body = JSON.parse(String(init.body));
+      assert.equal(body.notifyAgent, false);
+      assert.equal(body.gatewayId, undefined);
+      assert.deepEqual(body.planAttachmentIds, ["reference"]);
+      recorded = { ...body, id: body.feedbackId, planId: "plan", deliveryStatus: "record_only" };
+      return Response.json({ code: 0, data: recorded }, { status: 202, headers: { etag: '"saved"', "idempotency-key": `plan-feedback:${body.feedbackId}` } });
+    }
+    return Response.json({ code: 0, data: { records: recorded ? [recorded] : [] } }, { headers: { etag: '"read-revision"' } });
+  }) as typeof fetch;
+  try {
+    for (const kind of ["guidance", "approval_suggestion"] as const) {
+      const current = await loadPlanFeedbackWithRevision("reviewer", "plan");
+      const receipt = await submitPlanFeedback({ roleId: "reviewer", planId: "plan", kind, stepId: kind === "guidance" ? undefined : "review", feedbackId: `saved-${kind}`, text: "review later", attachments: [], planAttachmentIds: ["reference"], source: "webgui", notifyAgent: false, expectedRevision: current.etag });
+      assert.equal(receipt.feedback.deliveryStatus, "record_only");
+      assert.equal((await loadPlanFeedbackWithRevision("reviewer", "plan")).approval.latest?.id, receipt.feedback.id);
+    }
+    assert.equal(posts, 2);
+  } finally { globalThis.fetch = originalFetch; }
 });

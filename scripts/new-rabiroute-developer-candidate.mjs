@@ -49,6 +49,16 @@ function createDeveloperCandidate(options) {
     replaceDirectory(path.join(buildRoot, "dist"), path.join(stagingRoot, "dist"));
     replaceDirectory(path.join(buildRoot, "ribiwebgui", "dist"), path.join(stagingRoot, "ribiwebgui", "dist"));
     replaceDirectory(path.join(buildRoot, "assets"), path.join(stagingRoot, "assets"));
+    if (fs.statSync(path.join(buildRoot, "apps", "rabi-agent"), { throwIfNoEntry: false })?.isDirectory()) {
+      replaceDirectory(path.join(buildRoot, "apps", "rabi-agent"), path.join(stagingRoot, "apps", "rabi-agent"));
+    }
+    // Runtime context links and plugin entrypoints must match the new Manager build.
+    for (const name of ["docs", "plugins", "skills", "source-patches"]) {
+      replaceDirectory(path.join(buildRoot, name), path.join(stagingRoot, name));
+    }
+    for (const name of ["README.md", "README_zh.md", "版本更新日志.md", "版本更新日志_en.md"]) {
+      fs.copyFileSync(requireFile(buildRoot, name), path.join(stagingRoot, name));
+    }
     if (fs.statSync(path.join(buildRoot, "scripts"), { throwIfNoEntry: false })?.isDirectory()) {
       replaceDirectory(path.join(buildRoot, "scripts"), path.join(stagingRoot, "scripts"));
     }

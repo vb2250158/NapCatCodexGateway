@@ -18,6 +18,7 @@ dependencyResolutionManagement {
         flatDir {
             dirs("$rootDir/out/reference/RokidAiSdkDemo/app/libs")
         }
+        maven { url "https://jitpack.io"; content { includeGroupByRegex "com\\.github\\.pedroSG94.*" } }
         maven { url "https://maven.aliyun.com/repository/google/" }
         maven { url "https://maven.aliyun.com/repository/public/" }
         maven { url "https://maven.aliyun.com/nexus/content/repositories/releases/" }
@@ -28,3 +29,4 @@ dependencyResolutionManagement {
 rootProject.name = "RabiLinkProbe"
 include ":app"
 include ":glass-app"
+include ":glass-video-app"

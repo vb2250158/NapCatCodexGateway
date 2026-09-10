@@ -12,6 +12,8 @@ The Message Agent list, task limit, and actual delivery share one weighted order
 
 ## Maturity definitions
 
+Source hot patches are experimental: a shared catalog automatically registers new modules and watches source and resources, retaining state across compatible updates through the plugin service. Tests cover automatic registration, asynchronous revision leases, failure isolation, repeated updates, and recovery. Arbitrary TypeScript syntax, automatic structural migrations, and coverage of every business module remain incomplete. See [source hot patches](source-hot-patches_en.md) for scope and upgrade acceptance.
+
 | Status | Meaning |
 | --- | --- |
 | `verified` | The repository contains a complete implementation, configuration/diagnostic entry points, and automated contract tests. External platforms may still require accounts, login, or real hardware. |

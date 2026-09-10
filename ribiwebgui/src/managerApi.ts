@@ -1,3 +1,5 @@
+import { useI18n } from "./i18n";
+import { errorResponsePresentation } from "../../src/shared/errorPresentation";
 import { appendWebguiTokenQuery, captureWebguiTokenFromHref } from "./webguiAccessToken";
 
 declare global {
@@ -37,7 +39,7 @@ function prefixedManagerUrl(value: string): string {
   return `${base}${value}`;
 }
 
-function managerAccessToken(): string {
+export function managerAccessToken(): string {
   try {
     return window.sessionStorage.getItem(WEBGUI_TOKEN_SESSION_KEY)?.trim() || "";
   } catch {
@@ -98,7 +100,22 @@ export function installManagerFetchPrefix(): void {
   if (window.__RABI_MANAGER_FETCH_INSTALLED__) return;
   window.__RABI_MANAGER_FETCH_INSTALLED__ = true;
   captureManagerAccessToken();
-  const originalFetch = window.fetch.bind(window);
+  const rawFetch = window.fetch.bind(window);
+  const originalFetch: typeof fetch = async (input, init) => {
+    const response = await rawFetch(input, init);
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, window.location.href);
+    if (url.origin !== window.location.origin || !shouldPrefixManagerPath(url.pathname)) return response;
+    const readJson = response.json.bind(response);
+    response.json = async () => {
+      const payload = errorResponsePresentation(await readJson(), response.status) as Record<string, unknown>;
+      if (!payload || typeof payload !== "object" || !payload.errorMessages) return payload;
+      const messages = payload.errorMessages as Record<string, string>;
+      const message = messages[useI18n().locale.value];
+      const nested = payload.error && typeof payload.error === "object" ? payload.error as Record<string, unknown> : undefined;
+      return { ...payload, message, ...(nested ? { error: { ...nested, message } } : {}) };
+    };
+    return response;
+  };
   window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     if (typeof input === "string") {
       const managerRequest = isSameOriginManagerUrl(input);

@@ -11,7 +11,8 @@ namespace RabiRoute.WindowsHost;
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record HostRequest(
     string? Command,
-    string? ApplicationGenerationId = null);
+    string? ApplicationGenerationId = null,
+    JsonElement? SourcePatch = null);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record HostResponse(
     bool Ok,
@@ -26,7 +27,9 @@ internal sealed record HostResponse(
     string? TrayBoundManagerInstanceId = null,
     IReadOnlyList<uint>? JobMemberPids = null,
     string? OperationId = null,
-    bool? AuditPersisted = null);
+    bool? AuditPersisted = null,
+    string? SourcePatchOperationId = null,
+    JsonElement? SourcePatch = null);
 
 internal static class HostIdentity
 {
@@ -93,7 +96,8 @@ internal static class HostProtocol
         string command,
         string? applicationGenerationId,
         TimeSpan timeout,
-        string? pipeName = null)
+        string? pipeName = null,
+        JsonElement? sourcePatch = null)
     {
         using var timeoutSource = new CancellationTokenSource(timeout);
         await using var client = new NamedPipeClientStream(
@@ -105,7 +109,7 @@ internal static class HostProtocol
         try
         {
             await client.ConnectAsync(timeoutSource.Token);
-            await WriteAsync(client, new HostRequest(command, applicationGenerationId), timeoutSource.Token);
+            await WriteAsync(client, new HostRequest(command, applicationGenerationId, sourcePatch), timeoutSource.Token);
             return await ReadAsync<HostResponse>(client, timeoutSource.Token);
         }
         catch (OperationCanceledException)

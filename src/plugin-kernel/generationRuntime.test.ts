@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
 import {
   GenerationRuntime,
   RequiredPluginCapabilitiesUnavailableError,
@@ -34,6 +36,68 @@ function candidate(input: Partial<PluginCandidate> & Pick<PluginCandidate, "inst
 function createRuntime(options: Omit<ConstructorParameters<typeof GenerationRuntime>[0], "host" | "executor"> = {}): GenerationRuntime {
   return new GenerationRuntime({ host: "manager", executor: testExecutor, ...options });
 }
+
+test("source publication shares the generation mutation fence without blocking snapshot reads", async () => {
+  const runtime = createRuntime();
+  const original = runtime.current().id;
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  try {
+    const publication = runtime.publishSourcePatch(original, async () => { entered(); await gate; return "published"; });
+    await started;
+    const switching = runtime.switch([candidate({ instanceId: "next", manifest: manifest("io.test.next"), module: { activate() {} } })]);
+    assert.equal(runtime.current().id, original);
+    release();
+    assert.equal(await publication, "published");
+    await switching;
+    await assert.rejects(runtime.publishSourcePatch(original, async () => "unexpected"), /no longer active/);
+  } finally { release(); await runtime.dispose(); }
+});
+
+test("GenerationRuntime keeps candidate routes invisible until publication and hides failed candidates", async () => {
+  const runtime = createRuntime();
+  const routes = new ManagerPluginRouteRegistry(() => new Set(runtime.current().records
+    .filter(record => record.status === "active").map(record => record.identity.activationId)));
+  let observed = "";
+  const read = () => {
+    observed = "";
+    routes.handle({ method: "GET" } as IncomingMessage, new URL("http://localhost/test"), {} as ServerResponse);
+    return observed;
+  };
+  const revision = (label: string, barrier: () => Promise<void> = async () => {}) => candidate({
+    instanceId: "routes", revision: label, manifest: manifest("io.test.routes"),
+    module: { activate(context) {
+      context.effects.add(async () => {
+        const unregister = routes.register("routes", [{ routeId: "test", match: { kind: "exact", path: "/test" },
+          handler: () => { observed = label; return true; } }]);
+        try { await barrier(); } catch (error) { unregister(); throw error; }
+        return unregister;
+      });
+    } }
+  });
+  try {
+    assert.throws(() => routes.register("outside", []), /activation context/);
+    await runtime.switch([revision("old")]);
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const switching = runtime.switch([revision("new", async () => { entered(); await waiting; })]);
+    await started;
+    assert.equal(read(), "old");
+    release();
+    await switching;
+    assert.equal(read(), "new");
+    await runtime.switch([revision("failed", async () => {
+      assert.equal(read(), "new");
+      throw new Error("candidate failed");
+    })]);
+    assert.equal(read(), "new");
+  } finally { await runtime.dispose(); }
+  assert.equal(read(), "");
+});
 
 test("GenerationRuntime publishes services and contributions atomically", async () => {
   const lifecycle: string[] = [];

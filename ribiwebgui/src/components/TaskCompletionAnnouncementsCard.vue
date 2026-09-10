@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, onMounted, ref } from "vue";
 import type { SpeechPersona } from "@shared/speechControlContract";
 import type {
@@ -41,7 +42,7 @@ async function refresh(): Promise<void> {
     records.value = history.records;
     personas.value = personaPayload.personas;
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
   } finally {
     loading.value = false;
   }
@@ -56,7 +57,7 @@ async function save(): Promise<void> {
     settings.value = await speechControlClient.updateTaskCompletionAnnouncementSettings(settings.value);
     message.value = "已保存。";
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
   } finally {
     saving.value = false;
   }
@@ -71,7 +72,7 @@ async function preview(): Promise<void> {
     const result = await speechControlClient.previewTaskCompletionAnnouncement();
     message.value = result.spoken ? "测试已进入主机全局播放队列。" : `未播报：${result.reason || "未知原因"}`;
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
   } finally {
     previewing.value = false;
   }

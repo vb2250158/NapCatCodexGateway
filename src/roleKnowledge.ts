@@ -1,5 +1,10 @@
+import { RoleStorageValidationError } from "./shared/roleStorageValidationError.js";
+import { publishKnowledgeChange, type KnowledgeChange, type KnowledgeKind } from "./roleKnowledgeSearch.js";
+import { readPlanIdentity, readPlanIdentityAsync } from "./planIdentityReadCache.js";
+import { normalizePlanQuestions, type PlanQuestion } from "./shared/planQuestions.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { normalizePlanMessageChannels, validatePlanMessageChannels, type AgentHookDestination } from "./shared/agentHookAutomation.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -128,6 +133,7 @@ export type PlanStep = {
   startedAt?: string;
   completedAt?: string;
   approvalRequest?: PlanApprovalRequest;
+  questions?: PlanQuestion[];
 };
 
 export type KnowledgeSource = {
@@ -161,6 +167,8 @@ export type PlanSecretaryBinding = {
 };
 
 export type PlanItem = {
+  /** Optional final-result destinations. Persona event rules still apply when omitted. */
+  messageChannels?: AgentHookDestination[];
   id: string;
   title: string;
   focus: string;
@@ -820,7 +828,7 @@ function parseKeywordValue(value: unknown): string[] {
 
 function requireKeywords(keywords: string[], label: string): void {
   if (keywords.length === 0) {
-    throw new Error(`${label} keywords are required.`);
+    throw new RoleStorageValidationError(`${label} keywords are required.`);
   }
 }
 
@@ -886,19 +894,19 @@ function textChars(value: unknown): number {
 function assertTextLimit(label: string, value: unknown, maximum: number): void {
   const actual = textChars(value);
   if (actual > maximum) {
-    throw new Error(`${label} exceeds ${maximum} characters (received ${actual}). Split it into focused items.`);
+    throw new RoleStorageValidationError(`${label} exceeds ${maximum} characters (received ${actual}). Split it into focused items.`);
   }
 }
 
 function assertSingleFocus(label: string, focus: string, maximum: number): void {
-  if (!focus.trim()) throw new Error(`${label} focus is required.`);
-  if (/\r|\n/.test(focus)) throw new Error(`${label} focus must be a single line and describe one subject.`);
+  if (!focus.trim()) throw new RoleStorageValidationError(`${label} focus is required.`);
+  if (/\r|\n/.test(focus)) throw new RoleStorageValidationError(`${label} focus must be a single line and describe one subject.`);
   assertTextLimit(`${label} focus`, focus, maximum);
 }
 
 function assertKeywordLimits(label: string, keywords: string[], maximumItems: number, maximumChars: number): void {
   if (keywords.length > maximumItems) {
-    throw new Error(`${label} has ${keywords.length} keywords; maximum is ${maximumItems}. Keep one focused subject.`);
+    throw new RoleStorageValidationError(`${label} has ${keywords.length} keywords; maximum is ${maximumItems}. Keep one focused subject.`);
   }
   for (const keyword of keywords) {
     assertTextLimit(`${label} keyword`, keyword, maximumChars);
@@ -1058,9 +1066,9 @@ function validateApprovalRequest(contract: PlanApprovalRequest, limits: PlanWrit
   assertTextLimit("Plan approvalRequest.request", contract.request, limits.approvalRequestChars);
   assertTextLimit("Plan approvalRequest.recommendation", contract.recommendation, limits.approvalRequestChars);
   assertTextLimit("Plan approvalRequest.reason", contract.reason, limits.approvalReasonChars);
-  if (contract.files.length > 50) throw new Error("Plan approvalRequest.files cannot contain more than 50 items.");
-  if (contract.commands.length > 50) throw new Error("Plan approvalRequest.commands cannot contain more than 50 items.");
-  if (contract.changes.length > 50) throw new Error("Plan approvalRequest.changes cannot contain more than 50 items.");
+  if (contract.files.length > 50) throw new RoleStorageValidationError("Plan approvalRequest.files cannot contain more than 50 items.");
+  if (contract.commands.length > 50) throw new RoleStorageValidationError("Plan approvalRequest.commands cannot contain more than 50 items.");
+  if (contract.changes.length > 50) throw new RoleStorageValidationError("Plan approvalRequest.changes cannot contain more than 50 items.");
   for (const item of contract.files) {
     assertTextLimit("Plan approvalRequest file path", item.path, limits.approvalPathChars);
     assertTextLimit("Plan approvalRequest file destination", item.destination, limits.approvalPathChars);
@@ -1082,7 +1090,7 @@ function validateApprovalRequest(contract: PlanApprovalRequest, limits: PlanWrit
     ["rollback", contract.rollback],
     ["outOfScope", contract.outOfScope]
   ] as const) {
-    if (items.length > 50) throw new Error(`Plan approvalRequest.${label} cannot contain more than 50 items.`);
+    if (items.length > 50) throw new RoleStorageValidationError(`Plan approvalRequest.${label} cannot contain more than 50 items.`);
     for (const item of items) assertTextLimit(`Plan approvalRequest.${label} item`, item, limits.approvalListItemChars);
   }
   assertTextLimit("Plan approvalRequest.requestedAt", contract.requestedAt, 80);
@@ -1109,16 +1117,16 @@ function validatePlanSteps(
 ): void {
   const status = assertWritablePlanStatus(workflow, plan.status);
   if (requireSteps && plan.steps.length === 0) {
-    throw new Error("Plan steps are required. List every ordered step and identify the current step when work is in progress.");
+    throw new RoleStorageValidationError("Plan steps are required. List every ordered step and identify the current step when work is in progress.");
   }
   if (plan.steps.length > limits.maxSteps) {
-    throw new Error(`Plan has ${plan.steps.length} steps; maximum is ${limits.maxSteps}. Split the plan into focused plans.`);
+    throw new RoleStorageValidationError(`Plan has ${plan.steps.length} steps; maximum is ${limits.maxSteps}. Split the plan into focused plans.`);
   }
 
   const ids = new Set<string>();
   for (const step of plan.steps) {
-    if (!step.id.trim()) throw new Error("Plan step id is required.");
-    if (ids.has(step.id)) throw new Error(`Plan step id must be unique: ${step.id}`);
+    if (!step.id.trim()) throw new RoleStorageValidationError("Plan step id is required.");
+    if (ids.has(step.id)) throw new RoleStorageValidationError(`Plan step id must be unique: ${step.id}`);
     ids.add(step.id);
     assertTextLimit("Plan step id", step.id, 80);
     assertTextLimit("Plan step title", step.title, limits.stepTitleChars);
@@ -1126,32 +1134,32 @@ function validatePlanSteps(
     assertTextLimit("Plan step waitingFor", step.waitingFor, limits.stepWaitingForChars);
     assertTextLimit("Plan step blockedBy", step.blockedBy, limits.stepBlockedByChars);
     if (step.isBlocked === true && !step.blockedBy?.trim()) {
-      throw new Error("A blocked plan step must provide blockedBy.");
+      throw new RoleStorageValidationError("A blocked plan step must provide blockedBy.");
     }
     if (step.isBlocked === true && step.id !== plan.currentStepId) {
-      throw new Error("Only the current plan step can be blocked.");
+      throw new RoleStorageValidationError("Only the current plan step can be blocked.");
     }
     if (step.approvalRequest) validateApprovalRequest(step.approvalRequest, limits);
   }
 
   if (plan.currentStepId && !ids.has(plan.currentStepId)) {
-    throw new Error(`Plan currentStepId does not match a step: ${plan.currentStepId}`);
+    throw new RoleStorageValidationError(`Plan currentStepId does not match a step: ${plan.currentStepId}`);
   }
   if (plan.steps.length > 0 && status.currentStep === "required") {
-    if (!plan.currentStepId) throw new Error("An active plan must provide currentStepId.");
+    if (!plan.currentStepId) throw new RoleStorageValidationError("An active plan must provide currentStepId.");
   }
   if (status.currentStep === "forbidden" && plan.currentStepId) {
-    throw new Error(`Plan status ${status.key} forbids currentStepId.`);
+    throw new RoleStorageValidationError(`Plan status ${status.key} forbids currentStepId.`);
   }
   if (plan.archiveStatus === "已归档" && !status.archiveEligible) {
-    throw new Error(`Plan status ${status.key} is not eligible for archival.`);
+    throw new RoleStorageValidationError(`Plan status ${status.key} is not eligible for archival.`);
   }
   const approvalGate = planApprovalGate(plan);
   if (status.requiresApproval && approvalGate.state !== "pending") {
-    throw new Error(`Plan status ${status.key} requires one complete pending approvalRequest on its current step.`);
+    throw new RoleStorageValidationError(`Plan status ${status.key} requires one complete pending approvalRequest on its current step.`);
   }
   if (approvalGate.state === "pending" && !status.requiresApproval) {
-    throw new Error("A complete pending approvalRequest requires a plan status configured with requiresApproval=true.");
+    throw new RoleStorageValidationError("A complete pending approvalRequest requires a plan status configured with requiresApproval=true.");
   }
 }
 
@@ -1170,10 +1178,10 @@ function validatePlanWrite(
   assertTextLimit("Plan waitingFor", plan.waitingFor, limits.waitingForChars);
   assertTextLimit("Plan blockedBy", plan.blockedBy, limits.blockedByChars);
   if (plan.isBlocked === true && !plan.blockedBy?.trim()) {
-    throw new Error("A blocked plan must provide blockedBy.");
+    throw new RoleStorageValidationError("A blocked plan must provide blockedBy.");
   }
   if (plan.isBlocked === true && !status.requiresApproval) {
-    throw new Error("Only a plan status configured to require approval can be blocked by a pending approval.");
+    throw new RoleStorageValidationError("Only a plan status configured to require approval can be blocked by a pending approval.");
   }
   assertTextLimit("Plan source.summary", plan.source?.summary, limits.sourceSummaryChars);
   assertTextLimit("Plan taskBinding.sessionId", plan.taskBinding?.sessionId, 240);
@@ -1186,17 +1194,17 @@ function validatePlanWrite(
   if (approvalGate.state === "pending") {
     const step = currentPlanStep(plan);
     if (plan.isBlocked !== true || step?.isBlocked !== true) {
-      throw new Error("Manager must derive isBlocked=true from a complete pending approval contract.");
+      throw new RoleStorageValidationError("Manager must derive isBlocked=true from a complete pending approval contract.");
     }
     if (!planBlockingReason(plan)) {
-      throw new Error("An approval-blocked plan must identify the approver and requested decision.");
+      throw new RoleStorageValidationError("An approval-blocked plan must identify the approver and requested decision.");
     }
   } else if (plan.isBlocked === true || plan.steps.some((step) => step.isBlocked === true)) {
-    throw new Error("isBlocked is Manager-derived and is only valid for a complete pending approval contract.");
+    throw new RoleStorageValidationError("isBlocked is Manager-derived and is only valid for a complete pending approval contract.");
   }
   const total = planTextTotal(plan);
   if (total > limits.totalChars) {
-    throw new Error(`Plan text exceeds ${limits.totalChars} characters in total (received ${total}). Split it into one plan per subject.`);
+    throw new RoleStorageValidationError(`Plan text exceeds ${limits.totalChars} characters in total (received ${total}). Split it into one plan per subject.`);
   }
 }
 
@@ -1213,7 +1221,7 @@ function validateMemoryWrite(
   assertKeywordLimits(label, memory.keywords, limits.maxKeywords, limits.keywordChars);
   const total = memoryTextTotal(memory);
   if (total > limits.totalChars) {
-    throw new Error(`${label} text exceeds ${limits.totalChars} characters in total (received ${total}). Split it into one memory per subject.`);
+    throw new RoleStorageValidationError(`${label} text exceeds ${limits.totalChars} characters in total (received ${total}). Split it into one memory per subject.`);
   }
 }
 
@@ -1302,7 +1310,8 @@ function normalizePlanSteps(value: unknown, legacyCompletedAt: string): PlanStep
       blockedBy: typeof raw.blockedBy === "string" ? raw.blockedBy : undefined,
       startedAt: typeof raw.startedAt === "string" ? raw.startedAt : completedAt,
       completedAt,
-      approvalRequest: normalizeApprovalRequest(raw.approvalRequest)
+      approvalRequest: normalizeApprovalRequest(raw.approvalRequest),
+      questions: raw.questions == null ? undefined : normalizePlanQuestions(raw.questions)
     }];
   });
 }
@@ -1509,6 +1518,7 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     source: raw.source && typeof raw.source === "object" && !Array.isArray(raw.source) ? raw.source as KnowledgeSource : undefined,
     secretaryBinding: normalizePlanSecretaryBinding(raw.secretaryBinding),
     taskBinding: normalizePlanTaskBinding(raw.taskBinding),
+    messageChannels: raw.messageChannels === undefined ? undefined : normalizePlanMessageChannels(raw.messageChannels),
     dueAt: typeof raw.dueAt === "string" ? raw.dueAt : undefined,
     completedAt: typeof raw.completedAt === "string" ? raw.completedAt : undefined,
     archivedAt: archiveStatus === "已归档" && typeof raw.archivedAt === "string" ? raw.archivedAt : undefined,
@@ -2146,6 +2156,7 @@ function findPlanRecord(roleDir: string, planId: string): PlanRecord | null {
   const candidateSet = new Set(candidates.map((filePath) => path.resolve(filePath)));
   for (const filePath of allPlanFiles(roleDir)) {
     if (candidateSet.has(path.resolve(filePath))) continue;
+    if (readPlanIdentity(filePath) !== planId) continue;
     const record = planRecordFromFile(filePath, planId);
     if (record) records.push(record);
   }
@@ -2320,7 +2331,9 @@ export async function getPlanAsync(
     const records = await Promise.all(
       fallbackFiles
         .slice(offset, offset + PLAN_BY_ID_ASYNC_READ_CONCURRENCY)
-        .map(filePath => readPlanRecordAsync(filePath, canonicalPlanId, signal))
+        .map(async filePath => await readPlanIdentityAsync(filePath, signal) === canonicalPlanId
+          ? readPlanRecordAsync(filePath, canonicalPlanId, signal)
+          : null)
     );
     matches.push(...records.filter((record): record is PlanRecord => record !== null));
     signal?.throwIfAborted();
@@ -2404,6 +2417,33 @@ function listMemoryCatalog<T extends MemoryCatalogItem>(
   }
   memoryCatalogCache.set(cacheKey, { validUntil: Date.now() + MEMORY_CATALOG_CACHE_TTL_MS, items });
   return items;
+}
+
+/** Bounded read-worker entry; never used on a Manager request event loop. */
+export function readKnowledgeSearchFileInWorker(filePath: string, kind: KnowledgeKind): KnowledgeChange {
+  const raw = kind !== "plan" && filePath.toLowerCase().endsWith(".md")
+    ? parseMemoryMarkdown(filePath) : JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+  if (!raw) throw new Error("Knowledge file is incomplete or invalid");
+  const fallback = path.basename(filePath, path.extname(filePath));
+  const item = kind === "plan" ? normalizePlan(raw)
+    : kind === "recent" ? normalizeRecentMemory(raw, fallback) : normalizeConsolidatedMemory(raw, fallback);
+  if (!item) throw new Error("Knowledge file is incomplete or invalid");
+  return { kind, item };
+}
+
+/** A point result updates a published projection, but never warms an incomplete catalog. */
+export function publishCommittedRoleMemory(roleDir: string, rawMemory: RecentMemoryItem): Readonly<RecentMemoryItem> {
+  const memory = immutablePublication(rawMemory);
+  const key = memoryCatalogDirectory(roleDir, "recent");
+  const cached = memoryCatalogCache.get(key);
+  if (cached) {
+    const found = cached.items.some(item => item.id === memory.id);
+    memoryCatalogCache.set(key, { validUntil: Date.now() + MEMORY_CATALOG_CACHE_TTL_MS,
+      items: found ? cached.items.map(item => item.id === memory.id ? memory : item) : [...cached.items, memory] });
+    recentMemoryConsolidationProjectionCache.delete(key);
+  }
+  publishKnowledgeChange(roleDir, { kind: "recent", item: memory });
+  return memory;
 }
 
 function memoryCatalogPathIdentity(filePath: string): string {
@@ -2611,7 +2651,16 @@ export function readRecentMemoryFromStorageInWorker(
   roleDir: string,
   memoryId: string
 ): RecentMemoryItem | undefined {
-  invalidateMemoryCatalog(memoryCatalogDirectory(roleDir, "recent"));
+  const directory = memoryCatalogDirectory(roleDir, "recent");
+  // Canonical Markdown reads are point reads; the catalog fallback is only for legacy filenames.
+  const canonical = path.join(directory, `${safeIdPart(memoryId) || "memory"}.md`);
+  if (fs.existsSync(canonical)) {
+    const raw = parseMemoryMarkdown(canonical);
+    const memory = raw ? normalizeRecentMemory(raw, memoryId) : null;
+    if (!memory || memory.id !== memoryId) throw new Error("Memory identity could not be verified");
+    return memory.consolidatedAt ? undefined : memory;
+  }
+  invalidateMemoryCatalog(directory);
   return listActiveRecentMemories(roleDir).find((memory) => memory.id === memoryId);
 }
 
@@ -2739,6 +2788,7 @@ export function publishRolePlanCatalog(roleDir: string, rawPlans: unknown): read
  */
 export function publishCommittedRolePlan(roleDir: string, rawPlan: unknown): Readonly<PlanItem> {
   const [plan] = immutablePlanCatalog(normalizedPublishedPlans([rawPlan]));
+  publishKnowledgeChange(roleDir, { kind: "plan", item: plan });
   const cacheKey = planListCacheKey(roleDir);
   const cached = planListCache.get(cacheKey);
   if (!cached) return plan;
@@ -3134,6 +3184,7 @@ export function createPlan(
   }
   validatePlanSecretaryBindingInput(input.secretaryBinding);
   validatePlanTaskBindingInput(input.taskBinding);
+  validatePlanMessageChannels(input.messageChannels);
   const id = typeof input.id === "string" && input.id.trim()
     ? canonicalLogicalPlanId(input.id)
     : generatedId("plan", String(input.title || ""));
@@ -3217,6 +3268,7 @@ export function updatePlan(
     }
     if (Object.prototype.hasOwnProperty.call(patch, "secretaryBinding")) validatePlanSecretaryBindingInput(patch.secretaryBinding);
     if (Object.prototype.hasOwnProperty.call(patch, "taskBinding")) validatePlanTaskBindingInput(patch.taskBinding);
+    if (Object.prototype.hasOwnProperty.call(patch, "messageChannels")) validatePlanMessageChannels(patch.messageChannels);
     const recordedAt = nowIso();
     const clearedStartedAt = planStepIdsWithClearedTime(patch.steps, "startedAt");
     const clearedCompletedAt = planStepIdsWithClearedTime(patch.steps, "completedAt");

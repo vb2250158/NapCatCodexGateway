@@ -13,6 +13,16 @@ public static class HostEntry
         var jsonOutput = args.Contains("--json", StringComparer.OrdinalIgnoreCase);
         if (jsonOutput) ConsoleBridge.AttachToParent();
         if (command == "self-test") return RunSelfTest();
+        JsonElement? sourcePatch = null;
+        if (SourcePatchTransport.IsCommand(command))
+        {
+            try { sourcePatch = SourcePatchTransport.ReadRequest(ParseOption(args, "--source-patch-request")); }
+            catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or ArgumentException or UnauthorizedAccessException)
+            {
+                if (jsonOutput) WriteJson(new HostResponse(false, "invalid_request", "Source patch request file could not be validated."));
+                return 64;
+            }
+        }
 
         using var mutexLease = new NamedMutexLease(HostIdentity.MutexName);
         if (!mutexLease.OwnsMutex)
@@ -20,7 +30,8 @@ public static class HostEntry
             var response = await HostProtocol.SendAsync(
                 command ?? "activate",
                 generationId,
-                command == "restart" ? TimeSpan.FromSeconds(210) : TimeSpan.FromSeconds(30));
+                command == "restart" ? TimeSpan.FromSeconds(210) : TimeSpan.FromSeconds(30),
+                sourcePatch: sourcePatch);
             if (jsonOutput) WriteJson(response ?? new HostResponse(false, "unreachable", "The Host control pipe did not respond."));
             return response?.Ok == true ? 0 : 2;
         }
@@ -30,9 +41,9 @@ public static class HostEntry
             if (jsonOutput) WriteJson(new HostResponse(false, "stopped", "Unknown Host command."));
             return 64;
         }
-        if (command is "quit" or "restart" or "status")
+        if (command is "quit" or "restart" or "status" || SourcePatchTransport.IsCommand(command))
         {
-            var staleFencedQuit = command == "quit";
+            var staleFencedQuit = command == "quit" || SourcePatchTransport.IsCommand(command);
             var response = staleFencedQuit
                 ? new HostResponse(false, "stale_generation", "No matching Host generation is running.")
                 : new HostResponse(true, "stopped", "No Host instance is running.");
@@ -95,7 +106,7 @@ public static class HostEntry
             {
                 if (index + 1 >= args.Length) return "invalid";
                 var value = args[index + 1].Trim().ToLowerInvariant();
-                return value is "quit" or "restart" or "status" or "activate" ? value : "invalid";
+                return value is "quit" or "restart" or "status" or "activate" || SourcePatchTransport.IsCommand(value) ? value : "invalid";
             }
         }
         if (args.Contains("--self-test", StringComparer.OrdinalIgnoreCase)) return "self-test";

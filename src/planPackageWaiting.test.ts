@@ -52,6 +52,19 @@ test("package lifecycle detection remains evidence-only and does not change stat
   assert.equal(planIsWaitingForPackage(item, workflow), false);
 });
 
+test("non-project-content plans do not enter package or QA waits from generic waiting text", () => {
+  const investigation = plan("执行中", {
+    title: "调查与资料收集",
+    focus: "核对现有资料并整理结论，不修改项目内容。",
+    waitingFor: "等待打包、等待 QA",
+    steps: [{ id: "investigate", title: "调查与资料收集" }],
+    currentStepId: "investigate"
+  });
+  assert.equal(planHasPackageLifecycle(investigation), false);
+  assert.equal(planIsWaitingForPackage(investigation, workflow), false);
+  assert.equal(planIsWaitingForQaAcceptance(investigation, workflow), false);
+});
+
 test("legacy global package gate migration writes a canonical single status", () => {
   const legacy = {
     ...plan("执行中"),

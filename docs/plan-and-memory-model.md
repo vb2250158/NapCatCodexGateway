@@ -6,6 +6,34 @@
 
 # 计划和记忆机制
 
+待审批页面优先显示 Agent 提供的问题和选项；只有所有问题都没有选项时，才补充“按此方案执行”和“提出审批建议”两个默认选项。均不预选，选择建议必须填写具体内容。每题的“补充说明或其他答案”复用反馈输入组件，支持 @ 引用计划附件、文件选择、剪贴板粘贴和键盘提交；附件统一预览、删除并随本次反馈提交，不再显示独立的审批建议输入框。审批资料变更后必须重新确认。选项 requiresText=true 要求附加文字，问题 requireOption=true 要求明确选择；普通待补充信息仍可直接输入答案。
+
+## 计划问题与回答
+
+“待补充信息”要求 Agent 先查阅与问题相关的现有代码、配置、设计、文档和附件，在计划中写明资料清单、确认结果、分析卡点和仍无法确定的问题，再提出最少必要的具体询问。缺日志或复现步骤本身不构成等待理由。
+
+待审批和待补充信息的当前步骤均可通过既有计划 POST/PATCH 保存 `questions`。WebGUI 在原有审批/引导提交区显示问题：有 `options` 时显示单选选项，无选项时显示文字输入框；两种模式都允许自由文字回答。推荐项不自动选择，必填题允许选择或输入其他答案。选项不会自动批准方案或改变计划状态，答案通过既有反馈记录保存并通知原绑定任务，由 Agent 消费后推进。
+
+```json
+{
+  "id": "clarify-entry",
+  "title": "确认剩余入口分支",
+  "questions": [{
+    "id": "entry",
+    "prompt": "问题发生在哪个入口？",
+    "context": "已核对配置和两个入口的调用链，剩余分支需要现场确认。",
+    "options": [
+      { "id": "list", "label": "列表页", "description": "继续核对列表入口的状态恢复" },
+      { "id": "detail", "label": "详情页", "description": "继续核对详情入口的初始化" }
+    ],
+    "placeholder": "也可以描述其他入口或补充实际表现",
+    "required": true
+  }]
+}
+```
+
+每步最多 5 题、每题最多 6 个选项；问题与选项 ID 必须在各自范围内唯一。`prompt` 最多 500 字符，`context` 1000，选项 `label` 200、`description` 500，`placeholder` 300；`required` 默认 true，选项可标 `recommended: true`。问题和所选标签随答案保存为反馈文字，合计沿用 2000 字符限制。提交前核对最新步骤和问题；问题已变化时要求刷新并重新确认，原有 ETag/幂等反馈链路继续生效。待补充信息的旧计划未提供此字段时保留自由文字反馈，不自动推断问题或补造调查结果。
+
 > 状态：现行指南。已按 `src/roleKnowledge.ts`、Manager API 和测试核对；文中明确区分当前实现与后续计划。
 
 本文说明 RabiRoute 中计划和记忆的运行机制：数据放在哪里、如何分层、怎样进入处理端 Agent、何时更新，以及托盘面板如何展示。
@@ -74,7 +102,7 @@ data/roles/<RoleId>/identity-relations/events.jsonl
 关闭
 ```
 
-业务代码通过 `planWorkflow.roles` 查找分析、待补充信息、审批、执行、打包、QA、讨论、暂停、完成和关闭对应的 key。默认配置下，仍在调查和分析时使用“分析中”；只有分析已经完成，但现有信息仍无法形成可审批的具体方案，且缺失信息会影响原因、改法、实施范围或验收合同时，才使用“待补充信息”；完整审批合同正式等待回执时使用“待审批”；批准或用户直接授权后使用“执行中”。暂未复现、疑似历史已修复、等待目标包、等待 QA 或等待是否关闭都不属于“待补充信息”。开发侧完成但缺目标包或纳入证明时使用“等待打包”，目标包确认但缺 QA 结论时使用“等待 QA”，确认问题无效或历史已修复且无需验收时凭证据使用“关闭”。Manager 将 `plan.status` 的 key 与配置中的 label、description、palette、order 和 views 一起返回；客户端不解释 key，也不从步骤、`waitingFor` 或审批资料派生第二套状态。
+业务代码通过 `planWorkflow.roles` 查找分析、待补充信息、审批、执行、打包、QA、讨论、暂停、完成和关闭对应的 key。默认配置下，仍在调查和分析时使用“分析中”；只有分析已经完成，但现有信息仍无法形成可审批的具体方案，且缺失信息会影响原因、改法、实施范围或验收合同时，才使用“待补充信息”；完整审批合同正式等待回执时使用“待审批”；批准或用户直接授权后使用“执行中”。暂未复现、疑似历史已修复、等待目标包、等待 QA 或等待是否关闭都不属于“待补充信息”。开发侧完成但缺目标包或纳入证明时使用“等待打包”，目标包确认但缺 QA 结论时使用 QA 状态 key“等待 QA”，默认显示名称为“等待 QA 验收”；确认问题无效或历史已修复且无需验收时凭证据使用“关闭”。Manager 将 `plan.status` 的 key 与配置中的 label、description、palette、order 和 views 一起返回；客户端不解释 key，也不从步骤、`waitingFor` 或审批资料派生第二套状态。
 
 `planWorkflow.schemaVersion=4` 保留 v3 取消步骤状态字段的结构，并收窄默认“待补充信息”说明。现有 v1/v2/v3 人格配置第一次读取时会保留自定义状态和相对顺序；v1 还会在分析状态后加入默认“待补充信息”定义。v2/v3 只替换仍使用旧默认 key、label 和说明的中英文说明，不覆盖人格自定义说明，也不会补回或重新启用被 Agent 移除的状态。
 
@@ -223,7 +251,7 @@ WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles
 
 `steps` 是计划的有序执行路径，不保存独立状态。顶层 `currentStepId` 指向当前步骤，`completedAt` 记录已经完成的步骤；后续步骤不需要“未开始”字段。计划阶段只写入 `plan.status`，状态名称和说明统一从 `personaConfig.json.planWorkflow.statuses` 读取。`detail`、`waitingFor`、`blockedBy`、`approvalRequest` 和步骤 ID 只提供执行、等待与审批证据。Manager 维护步骤的 `startedAt` 与 `completedAt`。
 
-分析完成后，如果现有信息仍无法形成可审批的具体方案，且缺失信息会影响原因、改法、范围或验收合同，写入 `planWorkflow.roles.informationNeeded` 指向的 key，并在 `waitingFor` 中列出缺少的具体信息和提供者。信息补齐后恢复为 `roles.analysis`。不能因为暂未复现、疑似历史已修复、缺目标包、等待 QA 或等待是否关闭而使用该状态。明确等待讨论时写入 `roles.discussion` 指向的 key；普通暂停使用 `roles.paused`。恢复时按实际阶段选择 analysis 或 execution role 指向的 key。
+分析完成后，如果现有信息仍无法形成可审批的具体方案，且缺失信息会影响原因、改法、范围或验收合同，写入 `planWorkflow.roles.informationNeeded` 指向的 key，并在 `waitingFor` 中列出缺少的具体信息和提供者。信息补齐后恢复为 `roles.analysis`。不能因为暂未复现、疑似历史已修复、缺目标包、等待 QA 验收或等待是否关闭而使用该状态。明确等待讨论时写入 `roles.discussion` 指向的 key；普通暂停使用 `roles.paused`。恢复时按实际阶段选择 analysis 或 execution role 指向的 key。
 
 需要审批的当前步骤应带完整 `approvalRequest`。`approver`、`request`、`recommendation`、`alternatives` 和 `reason` 说明审批人、决定、推荐、备选与原因；`files` 逐项写路径、`create/modify/delete/move` 和具体改动；`commands` 写完整命令、用途和预期影响；`changes` 写配置、数据库、云环境或外部系统目标；`validation`、`rollback`、`outOfScope` 分别声明验收、回退和明确排除范围；`requestedAt`、`sourceMessageId / feedbackId`、`responseStatus` 记录请求来源与回执。`files / commands / changes` 至少一类非空。缺必要栏目的审批步骤由 Manager 标为 `presentation.approval.state=incomplete`、`enabled=false`。仍可继续独立分析时使用 analysis role；只有分析已结束但无法形成可审批具体方案时使用 informationNeeded role。合同完整且 `responseStatus=pending` 后，Agent 把 `plan.status` 写为 approval role 指向的 key；Manager 同时返回 `presentation.approval.state=ready` 和 `enabled=true`，但不会替 Agent 改写状态。
 
@@ -239,7 +267,7 @@ Manager 提供只读批量状态接口 `GET /api/roles/:roleId/plan-agents/statu
 
 收到业务任务完成提醒后，负责秘书直接消费结果、PATCH 计划步骤与记忆，并在计划仍可推进时通过 `/api/agent/threads` 的 `action=send` 向该计划自身 `taskBinding.sessionId + workspace` 精确续投业务任务。普通进展、状态变化、等待条件和下一步由秘书直接处理；只有需要用户/主人格决策、批准、授权、补充输入、跨计划裁决、完整收尾或安全外发复核时才升级给主人格。计划暂停或秘书轮转不能清空业务 `taskBinding`；只有业务任务确实失效并完成受控迁移时才改绑，计划完成后可保留绑定作为历史证据。每次完成回传、heartbeat 或恢复巡检都应并行使用秘书槽管理不同计划分片，并在结束前满足 `可推进但无人管理的计划数 = 0` 与 `可推进但空闲的业务任务数 = 0`；已处于 `active/in-progress` 的业务任务不重复投递。等待审批或负责人时只执行已有授权范围内的询问、追问和补证据，不越过动作门禁。
 
-PangHu 正式 Main 的 Unity Editor 正在打开、导入、运行其它测试、MCP 暂不可用或共享测试排队时，计划仍继续执行。秘书不得把这些条件写成全局冻结或等待工作位，也不得停止 Editor、取消他人测试或覆盖无关改动。原业务任务继续实现、收窄 SVN 更新与合并、静态资源/Prefab/配置和直接序列化合同、非 Unity runner 与 CLI 验证；确实无法并行完成的 GameView、PlayMode 或交互项单列为人工或后续运行验收。无关全量测试失败不阻断匹配验证和功能开发，但必须保留失败事实与未运行项。
+项目正式工作副本的 Unity Editor 正在打开、导入、运行其它测试、MCP 暂不可用或共享测试排队时，计划仍继续执行。秘书不得把这些条件写成全局冻结或等待工作位，也不得停止 Editor、取消他人测试或覆盖无关改动。原业务任务继续实现、收窄 SVN 更新与合并、静态资源/Prefab/配置和直接序列化合同、非 Unity runner 与 CLI 验证；确实无法并行完成的 GameView、PlayMode 或交互项单列为人工或后续运行验收。无关全量测试失败不阻断匹配验证和功能开发，但必须保留失败事实与未运行项。
 
 计划管理写入按 `planId` 隔离：同一计划同时只有一个控制面 writer，不同计划可以并行。共享 ledger、问题账本和发送回执在短文件锁内读取最新状态、只合并目标记录并原子替换，不能用旧的全量快照覆盖其它计划。锁元数据先完整写入候选文件，再以同卷 hard-link 原子发布；运行热路径不自动删除 stale 或损坏锁，遇到此类锁时失败关闭，只允许在已暂停 writer、确认 quiescent 的维护窗口显式修复。`claim` / `clarify` 以来源消息和稳定 key 获取独立 lease，并在外发前保存 reservation；发送结果不明确或已发送但验证失败时保留 `uncertain` / `sent_unverified`，禁止自动重发。
 
@@ -307,7 +335,7 @@ GET /api/roles/:roleId/knowledge-validation
 待审批      审批材料已完整，等待指定审批人决定
 执行中      Agent 正在执行当前步骤
 等待打包    改动已完成，等待生成可交付包
-等待 QA     包已交付，等待 QA 验收
+等待 QA     包已交付，显示为“等待 QA 验收”
 待讨论      需要讨论后才能决定下一步
 暂停        明确停止继续推进，但保留当前步骤和恢复位置
 完成        目标已经完成，保留一段时间供用户确认
@@ -600,7 +628,7 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 只有当前状态定义同时满足 `terminal=true`、`archiveEligible=true` 且 `archiveStatus=未归档` 的计划，才会在超过 `planWorkflow.archiveAfterHours` 后改为 `archiveStatus=已归档` 并移动到 `archive/`。归档不改变 `plan.status`。
 
-Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计划主体仍由 Agent 通过 Manager 维护。对于 Manager 标记为 `approval.enabled=true` 的当前步骤，两端可以提交正式审批建议。RibiWebGUI 只在 Manager 返回 `presentation.acceptsGuidance=true` 且计划没有进入审批步骤时提供计划级引导入口：引导只关联 `planId`，不关联某个 `stepId`，Agent 可据此调整计划说明、执行方向和后续步骤。审批和引导都只追加审计记录并可选通知 Agent，不直接修改计划状态或步骤。
+Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计划主体仍由 Agent 通过 Manager 维护。对于 Manager 标记为 `approval.enabled=true` 的当前步骤，两端可以提交正式审批建议。RibiWebGUI 只在 Manager 返回 `presentation.acceptsGuidance=true` 且计划没有进入审批步骤时提供计划级引导入口：引导只关联 `planId`，不关联某个 `stepId`，Agent 可据此调整计划说明、执行方向和后续步骤。审批和引导都只追加审计记录并可选通知 Agent，不直接修改计划状态或步骤。WebGUI 统一使用“提交并投递”和“提交”两个动作；“提交”只保存 `record_only` 记录，不要求 Route、不触发 Agent 或 QA 后处理，Agent 可在空闲时读取审阅。
 
 计划分页接口还支持 `sort=<status|updated|importance|urgency>`、可重复的 `status=<状态 key>`、可重复的 `tag=<keywords 标签>` 和 `facets=0`。`updated` 比较 `updatedAt` 时间戳；其余三种排序比较 Manager 生成的整数等级。状态等级来自状态配置的 `order`，并通过 `statusLevel` 返回；重要程度 `importance` 和紧急程度 `urgency` 都使用 `0–4`：`0` 最高，`1` 高，`2` 中，`3` 低，`4` 未设置。旧 `priority` 字符串只在读取边界转换为重要程度整数；旧计划没有 `urgency` 时，可由 `dueAt` 转为兼容等级。排序过程不比较标签文字。响应同时返回状态 key、配置的中英文名称与说明、色板、视图和等级，WebGUI 只负责显示。筛选与排序都在分页前执行。
 
@@ -639,7 +667,7 @@ Manager 把 `plan.status` 作为状态 key，并通过 `presentation.label / lab
 
 `nextAction`、`currentStep`、步骤标题和 `waitingFor` 只解释下一步与等待原因，不能改写 `plan.status`。
 
-内容变更计划通过 `planWorkflow.roles.execution / package / qa / completed` 对应的状态推进；QA 失败回到 `roles.analysis` 或 `roles.execution`。默认模板显示为“执行中 → 等待打包 → 等待 QA → 完成”。Agent 只在同步、提交和无冲突回读证据齐全后写 package role 的 key，只在目标包证明纳入后写 QA role 的 key；Manager 校验这些证据，但不从步骤或正文自动切换状态。QA 发送回执属于 QA 阶段内的证据，不创建额外主状态。
+内容变更计划通过 `planWorkflow.roles.execution / package / qa / completed` 对应的状态推进；QA 失败回到 `roles.analysis` 或 `roles.execution`。默认模板显示为“执行中 → 等待打包 → 等待 QA 验收 → 完成”。Agent 只在同步、提交和无冲突回读证据齐全后写 package role 的 key，只在目标包证明纳入后写 QA role 的 key；Manager 校验这些证据，但不从步骤或正文自动切换状态。QA 发送回执属于 QA 阶段内的证据，不创建额外主状态。
 
 `presentation.status` 必须与 `plan.status` 的 key 完全相同，显示使用配置的 `label / labelEn`。状态排序取配置 `order`，视图成员关系取配置 `views`；同一状态内再按更新时间排列。归档视图只由 `archiveStatus` 决定，与任何关闭 role 的 key 无关。
 
@@ -684,3 +712,18 @@ Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、阶�
 ```
 
 托盘视图主要服务用户观察。是否把其中内容交给 Agent，由路由模板、摘要注入或 Manager API 决定。
+
+计划可选 `messageChannels` 列表，Agent 可在创建计划或 PATCH 时绑定；省略或 `[]` 均合法，不阻断建计划、执行或人格事件投递。每项为 `{channel, gatewayId, params}`，复用事件投递的 NapCat 群／个人 QQ 与语音参数。计划渠道只用于绑定 Codex 任务的最终结果；与人格规则共同匹配，同一任务、轮次、目标去重。Hook 自动通知不要求原始群消息编号，也不被旧引用式进度通知的失败阻断；Agent 主动回复仍尽量引用来源。
+
+## 计划写入校验与并发边界
+
+计划状态配置决定是否允许 `currentStepId`。转入 `currentStep=forbidden` 的完成状态时，PATCH 必须显式传 `currentStepId: null`；历史步骤可保留，不能把人工完成虚构成所有历史步骤都执行过。
+
+写入前的计划内容校验返回 HTTP 400、`state=invalid_request`、`commitState=not_started` 和具体原因；带幂等键的请求同时返回 `retry=correct_request_with_new_idempotency_key`。调用方确认拒绝后修正内容，使用新幂等键提交；不要无限重试旧内容。真实超时、进程丢失或提交结果无法证明时仍返回结果不确定，只能回读并使用原键和原内容恢复。历史上被误判为不确定的校验失败，可用原请求重放：存储拥有者先恢复事务、核对未变更的版本，再把确定拒绝写成终态回执；不得手改回执。
+
+单计划写入的版本检查按规范存储位置定位目标计划，不读取全人格计划列表。当前存储写入池仍是一个有界串行队列（默认最多等待 32 项），不是无限并行写入；队列满时拒绝新增工作。客户端应限制在途请求、对临时繁忙退避，独立 GET 可使用有界并发。跨人格写入分片和批量接口需要另行验证锁、generation 隔离、过载公平性及 p95/p99 延迟后再启用。
+
+单计划读取仍检查 active/archive 的全部文件位置，包含错放目录中的重复逻辑 ID。进程内身份缓存只保存可重建的文件 ID，最多 4096 项；每次使用前核对设备、文件身份、大小、mtime 和 ctime，新增、替换或变化文件重新解析，读取中发生变化则重试一次后明确失败。目标计划正文仍从既有入口读取，缓存不成为计划事实源。热读跳过无关文件正文与完整计划规范化；冷读和目录枚举仍随计划数增长。异步路径保持有界并发和取消，不提高读 worker 数量或进程优先级。性能改善需区分夹具热读结果与当前运行代的真实端到端验收。
+
+
+计划与记忆摘要搜索及自动增量缓存接口见 [搜索合同](knowledge-search.md)。

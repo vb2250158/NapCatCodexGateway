@@ -2,6 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MemoryConsolidationScheduler } from "./memoryConsolidationScheduler.js";
 
+test("removed schedule targets no longer poison the failure summary", async () => {
+  let enabled = true;
+  const scheduler = new MemoryConsolidationScheduler({
+    listTargets: () => enabled ? [{ gatewayId: "route-a", roleId: "role-a", roleKey: "role-a", roleDir: "/a" }] : [],
+    requestDueRun: () => { throw new Error("offline"); },
+    deliver: () => {},
+    scheduleDeadline: () => ({ unref() {} } as NodeJS.Timeout),
+    clearDeadline: () => {}
+  });
+  await scheduler.runOnce();
+  assert.equal(scheduler.failureSummary().backoff, 1);
+  enabled = false;
+  await scheduler.runOnce();
+  assert.deepEqual(scheduler.failureSummary(), { backoff: 0, incidents: 0 });
+  await scheduler.stop();
+});
+
 test("memory consolidation scheduler delivers a due run once and schedules the next future deadline", async () => {
   const delivered: string[] = [];
   const deadlines: number[] = [];

@@ -244,17 +244,18 @@ function buildMergedReplayEnvelope(attempts: DeliveryReplayAttempt[]): RabiDeliv
   const eventId = attempts.map((attempt) => attempt.attemptId).join(",").slice(0, 300);
   const contextBlocks = attempts.flatMap((attempt, attemptIndex) => attempt.packets.map((packet, packetIndex) => {
     const sourceLines = packet.messageSource
-      ? rabiMessageSourceLines(packet.messageSource).slice(1)
+      ? rabiMessageSourceLines(packet.messageSource, originalDeliveryTime(packet.message)).slice(1)
       : rabiMessageSourceLines({
           type: "system",
           eventType: "legacy_delivery_record",
           eventName: "历史投递记录",
           eventId: `${attempt.attemptId}:${packet.ruleId}`.slice(0, 300)
-        }).slice(1);
+        }, originalDeliveryTime(packet.message)).slice(1);
     const content = normalizeRabiMessageContent(packet.content ?? packet.message, true);
     return [
       `[重放消息 ${attemptIndex + 1}.${packetIndex + 1}]`,
       `attemptId：${attempt.attemptId}`,
+      `原投递记录时间：${new Date(attempt.time).toISOString()}`,
       `routeKind：${attempt.routeKind}`,
       `messageId：${attempt.messageId}`,
       ...sourceLines,
@@ -273,6 +274,11 @@ function buildMergedReplayEnvelope(attempts: DeliveryReplayAttempt[]): RabiDeliv
     messageContent: `重放 ${attempts.length} 次失败投递。按原顺序处理；外发仍需通过原有发送安全门。`,
     contextBlocks
   };
+}
+
+function originalDeliveryTime(message: string): string {
+  const header = message.split(/\r?\n\r?\n\[消息内容\]/)[0];
+  return /^(?:投递时间|消息包发送时间)：([^\r\n]+)$/m.exec(header)?.[1] || "旧记录未保存";
 }
 
 function legacyReplayCanFallback(attempt: DeliveryReplayAttempt, error: unknown): boolean {

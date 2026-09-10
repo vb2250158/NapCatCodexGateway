@@ -36,6 +36,39 @@ function transaction(
   };
 }
 
+test("scoped upsert changes only one route file, supports rename, and exposes durable recovery", () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-scoped-save-"));
+  try {
+    const initial = executeRouteCatalogTransaction(transaction(rootDir, "seed", "seed", {
+      kind: "replace", config: { gateways: [
+        { id: "a", configName: "a", agentRoleId: "Shared", recentMessageLimit: 10, gatewayPort: 23001 },
+        { id: "b", configName: "b", agentRoleId: "Shared", recentMessageLimit: 10, gatewayPort: 23002 }
+      ] }
+    }));
+    const aPath = path.join(rootDir, "data", "route", "a", "adapterConfig.json");
+    const before = fs.readFileSync(aPath, "utf8");
+    const mutation = transaction(rootDir, "scoped", "attempt", {
+      kind: "upsert", previousId: "b", expectedContentHash: initial.routeConfigHash,
+      definition: { ...initial.gateways.find(row => row.id === "b")!, id: "renamed", configName: "renamed", recentMessageLimits: { napcat: 25 } }
+    });
+    const saved = executeRouteCatalogTransaction(mutation);
+    assert.deepEqual(saved.gateways.map(row => row.id), ["a", "renamed"]);
+    assert.equal(fs.readFileSync(aPath, "utf8"), before, "unrelated adapter file is untouched");
+    assert.equal(saved.gateways.find(row => row.id === "renamed")?.recentMessageLimits?.napcat, 25);
+    assert.equal(saved.gateways.find(row => row.id === "a")?.recentMessageLimits?.napcat, 25, "shared persona has one authoritative value");
+    const replay = executeRouteCatalogTransaction(mutation);
+    assert.equal(replay.routeConfigHash, saved.routeConfigHash);
+    const recovered = executeRouteCatalogTransaction(transaction(rootDir, "resolve", "resolve", { kind: "capture", resolveOperationId: "scoped" }));
+    assert.deepEqual(recovered.resolvedMutation, { operationId: "scoped", state: "committed" });
+    const absent = executeRouteCatalogTransaction(transaction(rootDir, "absent", "absent", { kind: "capture", resolveOperationId: "never-written" }));
+    assert.equal(absent.resolvedMutation?.state, "not_committed");
+    assert.throws(() => executeRouteCatalogTransaction(transaction(rootDir, "collision", "collision", {
+      kind: "upsert", previousId: "renamed", expectedContentHash: saved.routeConfigHash,
+      definition: { ...saved.gateways[0], id: "a", configName: "a" }
+    })), /different Route/);
+  } finally { fs.rmSync(rootDir, { recursive: true, force: true }); }
+});
+
 function journalPath(rootDir: string, directory: "pending" | "receipts", operationId: string): string {
   return path.join(
     rootDir,

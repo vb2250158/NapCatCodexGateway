@@ -26,10 +26,11 @@ test("every Desktop delivery has one stable UUID receipt marker", () => {
 
   const existing = ensureCodexDesktopDeliveryMarkerForTest(
     "[Agent 回复合同]\n本次投递 deliveryId：aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
-    requestedId
+    "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
   );
   assert.equal(existing.deliveryId, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
   assert.equal(existing.prompt.match(/deliveryId/g)?.length, 1);
+  assert.throws(() => ensureCodexDesktopDeliveryMarkerForTest(existing.prompt, requestedId), /conflicts/);
 });
 
 test("Codex model catalog keeps visible models and reasoning metadata", () => {
@@ -238,7 +239,7 @@ test("local state lookup finds a bootstrapped task before it has a first message
     );
   `);
   const taskId = "019f0000-0000-7000-8000-000000000073";
-  const taskTitle = "[PangHu][Bug] 摆放系统 - 建筑或物件位置重叠";
+  const taskTitle = "[ExampleProject][Bug] 摆放系统 - 建筑或物件位置重叠";
   database.prepare(`
     INSERT INTO threads (
       id, title, cwd, rollout_path, updated_at, updated_at_ms,

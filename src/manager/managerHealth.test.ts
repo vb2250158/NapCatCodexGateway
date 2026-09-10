@@ -24,8 +24,21 @@ test("Manager health separates event-loop liveness from required and business re
     live: true,
     requiredReady: true,
     businessReady: true,
+    backgroundState: "healthy",
+    backgroundIncidentCount: 0,
     message: "Manager event loop, required capabilities, and enabled Route ingress are ready."
   });
+});
+
+test("background incidents remain visible without blocking unrelated ready APIs", () => {
+  const health = buildManagerHealthSnapshot({ ...base, backgroundIncidentCount: 3 });
+  assert.equal(health.state, "healthy");
+  assert.equal(health.requiredReady, true);
+  assert.equal(health.businessReady, true);
+  assert.equal(health.backgroundState, "degraded");
+  assert.equal(health.backgroundIncidentCount, 3);
+  assert.match(health.message, /background incidents=3/);
+  assert.equal(buildManagerHealthSnapshot({ ...base, backgroundIncidentCount: 3, planStorageReady: false }).state, "degraded");
 });
 
 test("missing required capabilities are not hidden inside generic degraded health", () => {

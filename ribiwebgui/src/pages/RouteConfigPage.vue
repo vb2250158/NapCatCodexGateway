@@ -1,12 +1,15 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { useSpeechStore } from "../stores/speechStore";
+import InstanceAgentSettings from "../components/InstanceAgentSettings.vue";
+import type { AgentInstance } from "@shared/agentInstance";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import TrustedWebRendererHost from "../components/TrustedWebRendererHost.vue";
 import { NapcatState, type NapcatLoginPanelData, type NapcatHealthSnapshot } from "@shared/napcatStateContract";
-import { managerEventSource } from "../managerApi";
+import { managerEventSource, managerAccessToken } from "../managerApi";
 import { pluginCatalogStore } from "../pluginCatalogStore";
 import { webRenderersAt } from "../pluginRenderers";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
@@ -235,7 +238,7 @@ async function runMessageAdapterScan(): Promise<void> {
     messageAdapterScan.value.partial = false;
     messageAdapterScan.value.durationMs = 0;
     messageAdapterScan.value.checkedAt = "";
-    messageAdapterScan.value.error = error instanceof Error ? error.message : String(error);
+    messageAdapterScan.value.error = userFacingError(error);
   }
   finally { messageAdapterScan.value.loading = false; }
 }
@@ -245,6 +248,7 @@ async function rescanNapcatInstances(): Promise<void> {
 }
 
 async function runAgentScan(): Promise<void> {
+  void refreshLanAgentNodes();
   if (agentScan.value.loading) return;
   agentScan.value.loading = true;
   const dshRevisionAtStart = dshScanRevision.value;
@@ -268,7 +272,43 @@ async function runAgentScan(): Promise<void> {
   finally { agentScan.value.loading = false; }
 }
 
+const agentInstances = ref<AgentInstance[]>([]);
+const lanAgentLoading = ref(false);
+const lanAgentError = ref("");
+const remoteAgentScans = ref<Partial<Record<AgentAdapterType, AgentScanResult>>>({});
+async function instanceOperation(type: AgentAdapterType, operation: string, payload: Record<string, unknown> = {}): Promise<any> {
+  const binding = gateway.value?.agentInstanceBindings?.[type];
+  if (!binding) throw new Error("未选择实例 Agent");
+  const access = await fetch("/api/webgui-access").then(response => response.json());
+  const response = await fetch(`/api/lan-agent/instances/${encodeURIComponent(binding.instanceId)}/agents/${encodeURIComponent(binding.agentId)}/${operation}`, {
+    method: "POST", headers: { "content-type": "application/json", "x-rabiroute-webgui-token": access.data?.token || managerAccessToken() }, body: JSON.stringify({ provider: type, ...payload })
+  });
+  const body = await response.json();
+  if (!response.ok || body.code !== 0) throw new Error(body.message || "实例操作失败");
+  return body.result;
+}
+async function refreshLanAgentNodes(): Promise<void> {
+  if (lanAgentLoading.value) return;
+  lanAgentLoading.value = true;
+  lanAgentError.value = "";
+  try {
+    const access = await fetch("/api/webgui-access").then(response => response.json());
+    const token = access.data?.token || managerAccessToken();
+    const response = await fetch("/api/lan-agent/instances", { cache: "no-store", headers: { "x-rabiroute-webgui-token": token } });
+    const body = await response.json();
+    if (!response.ok || body.code !== 0) throw new Error(body.message || "读取远端节点失败");
+    agentInstances.value = body.instances || [];
+  } catch (error) {
+    agentInstances.value = [];
+    lanAgentError.value = userFacingError(error);
+  } finally { lanAgentLoading.value = false; }
+}
+
 function refreshAgentScan(type: AgentAdapterType): void {
+  if (gateway.value?.agentInstanceBindings?.[type]) {
+    void instanceOperation(type, "scan").then(result => { remoteAgentScans.value[type] = result?.agents?.[type]; }).catch(error => { lanAgentError.value = String(error.message || error); });
+    return;
+  }
   const scan = type === "dsh" ? runDshAgentScan : runAgentScan;
   void scan();
 }
@@ -543,7 +583,7 @@ async function requestPersonalWeixinLogin(): Promise<void> {
     if (!response.ok) throw new Error(payload.message || `HTTP ${response.status}`);
     await store.load();
   } catch (error) {
-    weixinLoginError.value = error instanceof Error ? error.message : String(error);
+    weixinLoginError.value = userFacingError(error);
   } finally {
     weixinLoginBusy.value = false;
   }
@@ -672,7 +712,7 @@ async function persistAndSyncSpeechAdapter(): Promise<void> {
     await store.save();
     await speech.reconcileMicrophone();
   } catch (cause) {
-    speechAdapterActionError.value = cause instanceof Error ? cause.message : String(cause);
+    speechAdapterActionError.value = userFacingError(cause);
   } finally {
     speechAdapterActionBusy.value = false;
   }
@@ -1141,7 +1181,7 @@ async function removeNapcatInstance(instance: NapCatInstance): Promise<void> {
   } catch (e: unknown) {
     napcatLaunchResult.value = {
       ...napcatLaunchResult.value,
-      [instance.id]: { ok: false, message: e instanceof Error ? e.message : String(e) }
+      [instance.id]: { ok: false, message: userFacingError(e) }
     };
   }
 }
@@ -1345,7 +1385,7 @@ async function runAgentDeliveryTest(type: AgentAdapterType): Promise<void> {
     agentDeliveryTest.value = {
       loading: null,
       result: null,
-      error: error instanceof Error ? error.message : String(error)
+      error: userFacingError(error)
     };
   }
 }
@@ -1423,7 +1463,7 @@ async function refreshRemoteAgentDevices(): Promise<void> {
     }
     remoteAgentDevices.value = Array.isArray(data.devices) ? data.devices : [];
   } catch (error: unknown) {
-    remoteAgentDeviceError.value = error instanceof Error ? error.message : String(error);
+    remoteAgentDeviceError.value = userFacingError(error);
   } finally {
     remoteAgentDevicesLoading.value = false;
   }
@@ -1446,7 +1486,7 @@ async function scanRemoteAgentDevices(): Promise<void> {
       selectedRemoteAgentDeviceId.value = remoteAgentDevices.value[0].deviceId;
     }
   } catch (error: unknown) {
-    remoteAgentDeviceError.value = error instanceof Error ? error.message : String(error);
+    remoteAgentDeviceError.value = userFacingError(error);
   } finally {
     remoteAgentDevicesLoading.value = false;
   }
@@ -1481,7 +1521,7 @@ async function connectRemoteAgentDevice(): Promise<void> {
     remoteAgentPassword.value = "";
     remoteAgentConnectResult.value = { ok: true, message: "已连接远端 Agent，密码已记住。" };
   } catch (error: unknown) {
-    remoteAgentConnectResult.value = { ok: false, message: error instanceof Error ? error.message : String(error) };
+    remoteAgentConnectResult.value = { ok: false, message: userFacingError(error) };
   } finally {
     remoteAgentConnecting.value = false;
   }
@@ -1505,7 +1545,7 @@ async function disconnectRemoteAgentDevice(): Promise<void> {
     remoteAgentDevices.value = Array.isArray(data.devices) ? data.devices : remoteAgentDevices.value;
     remoteAgentConnectResult.value = { ok: true, message: "已断开远端 Agent。" };
   } catch (error: unknown) {
-    remoteAgentConnectResult.value = { ok: false, message: error instanceof Error ? error.message : String(error) };
+    remoteAgentConnectResult.value = { ok: false, message: userFacingError(error) };
   } finally {
     remoteAgentConnecting.value = false;
   }
@@ -1873,7 +1913,7 @@ async function launchNapcatInstanceAndRecheck(
     }
     return { ok: true, message: launchMessage, target, health, launch: launchBody };
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = userFacingError(e);
     napcatLaunchResult.value = {
       ...napcatLaunchResult.value,
       [instance.id]: { ok: false, message }
@@ -2060,7 +2100,7 @@ async function loadNapcatLoginPanel(instance: NapCatInstance): Promise<void> {
   } catch (error) {
     if (gateway.value?.id !== gatewayId || napcatPanelDisposed) return;
     ui.panel = null;
-    ui.error = error instanceof Error ? error.message : String(error);
+    ui.error = userFacingError(error);
   } finally {
     ui.loading = false;
     if (!napcatPanelDisposed && gateway.value?.id === gatewayId && ui.visible) {
@@ -2105,7 +2145,7 @@ async function submitNapcatQuickLogin(instance: NapCatInstance): Promise<void> {
     ui.message = result.message || "已提交快速登录请求。";
     scheduleNapcatPanelRefresh(instance);
   } catch (error) {
-    ui.error = error instanceof Error ? error.message : String(error);
+    ui.error = userFacingError(error);
   } finally {
     ui.busy = false;
   }
@@ -2125,7 +2165,7 @@ async function refreshNapcatLoginQr(instance: NapCatInstance): Promise<void> {
     await sleep(350);
     await loadNapcatLoginPanel(instance);
   } catch (error) {
-    ui.error = error instanceof Error ? error.message : String(error);
+    ui.error = userFacingError(error);
   } finally {
     ui.busy = false;
   }
@@ -2173,7 +2213,7 @@ async function submitNapcatPasswordLogin(instance: NapCatInstance): Promise<void
     });
     await handleNapcatPasswordChallenge(instance, result);
   } catch (error) {
-    ui.error = error instanceof Error ? error.message : String(error);
+    ui.error = userFacingError(error);
   } finally {
     ui.busy = false;
   }
@@ -2239,7 +2279,7 @@ async function startNapcatCaptcha(instance: NapCatInstance): Promise<void> {
     captcha.show();
   } catch (error) {
     ui.busy = false;
-    ui.error = error instanceof Error ? error.message : String(error);
+    ui.error = userFacingError(error);
   }
 }
 
@@ -2257,7 +2297,7 @@ async function submitNapcatCaptcha(instance: NapCatInstance, ticket: string, ran
     ui.captcha = null;
     await handleNapcatPasswordChallenge(instance, result);
   } catch (error) {
-    ui.error = error instanceof Error ? error.message : String(error);
+    ui.error = userFacingError(error);
   } finally {
     ui.busy = false;
   }
@@ -2289,7 +2329,7 @@ async function prepareNapcatNewDeviceQr(instance: NapCatInstance): Promise<void>
     scheduleNapcatNewDevicePoll(instance);
   } catch (error) {
     if (ui.newDevice) ui.newDevice.status = "error";
-    ui.error = error instanceof Error ? error.message : String(error);
+    ui.error = userFacingError(error);
   }
 }
 
@@ -2328,7 +2368,7 @@ async function pollNapcatNewDevice(instance: NapCatInstance): Promise<void> {
     scheduleNapcatNewDevicePoll(instance);
   } catch (error) {
     if (ui.newDevice) ui.newDevice.status = "error";
-    ui.error = error instanceof Error ? error.message : String(error);
+    ui.error = userFacingError(error);
   }
 }
 
@@ -2377,7 +2417,7 @@ async function startNapcatAndManage(instance: NapCatInstance): Promise<void> {
   } catch (e: unknown) {
     napcatLaunchResult.value = {
       ...napcatLaunchResult.value,
-      [instance.id]: { ok: false, message: e instanceof Error ? e.message : String(e) }
+      [instance.id]: { ok: false, message: userFacingError(e) }
     };
   } finally {
     managingNapcatLogin.value = { ...managingNapcatLogin.value, [instance.id]: false };
@@ -2443,7 +2483,7 @@ async function adoptNapcatAccountOwner(instance: NapCatInstance): Promise<void> 
   } catch (e: unknown) {
     napcatLaunchResult.value = {
       ...napcatLaunchResult.value,
-      [instance.id]: { ok: false, message: e instanceof Error ? e.message : String(e) }
+      [instance.id]: { ok: false, message: userFacingError(e) }
     };
   } finally {
     adoptingNapcatOwner.value = { ...adoptingNapcatOwner.value, [instance.id]: false };
@@ -2606,7 +2646,7 @@ async function fixNapcatPorts(instance?: NapCatInstance): Promise<void> {
       await store.save();
     }
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = userFacingError(e);
     store.error = message;
     napcatPortFixResult.value = {
       ...napcatPortFixResult.value,
@@ -2679,7 +2719,7 @@ async function configureNapcatOneBot(instance: NapCatInstance): Promise<void> {
   } catch (e: unknown) {
     napcatOneBotFixResult.value = {
       ...napcatOneBotFixResult.value,
-      [instance.id]: { ok: false, message: e instanceof Error ? e.message : String(e) }
+      [instance.id]: { ok: false, message: userFacingError(e) }
     };
   } finally {
     configuringNapcatOneBot.value = { ...configuringNapcatOneBot.value, [instance.id]: false };
@@ -2966,7 +3006,7 @@ async function repairAllNapcatIssues(): Promise<void> {
       repairAll: {
         ok: false,
         message: "修复失败。",
-        steps: [e instanceof Error ? e.message : String(e)]
+        steps: [userFacingError(e)]
       }
     };
   } finally {
@@ -3017,7 +3057,7 @@ async function copyText(text: string, message = "已复制"): Promise<void> {
   try {
     await copyTextToClipboard(text);
   } catch (error) {
-    result = `复制失败：${error instanceof Error ? error.message : String(error)}`;
+    result = `复制失败：${userFacingError(error)}`;
   }
   copyResult.value = result;
   window.setTimeout(() => {
@@ -3047,7 +3087,7 @@ async function deleteCurrentGateway(): Promise<void> {
   try {
     await store.deleteGateway(gateway.value.id);
   } catch (error) {
-    deleteError.value = error instanceof Error ? error.message : String(error);
+    deleteError.value = userFacingError(error);
   } finally {
     deletingGateway.value = false;
   }
@@ -3071,7 +3111,7 @@ async function triggerHeartbeatNow(): Promise<void> {
         : "心跳已接受，正在后台投递；请到运行日志查看最终结果。"
     };
   } catch (e: unknown) {
-    heartbeatTriggerResult.value = { ok: false, message: e instanceof Error ? e.message : String(e) };
+    heartbeatTriggerResult.value = { ok: false, message: userFacingError(e) };
   } finally {
     triggeringHeartbeat.value = false;
   }
@@ -3093,7 +3133,7 @@ async function openMarvis(): Promise<void> {
       message: body.message || (resp.ok ? "已尝试打开 Marvis。" : "打开 Marvis 失败。")
     };
   } catch (e: unknown) {
-    marvisOpenResult.value = { ok: false, message: e instanceof Error ? e.message : String(e) };
+    marvisOpenResult.value = { ok: false, message: userFacingError(e) };
   } finally {
     openingMarvis.value = false;
   }
@@ -3118,7 +3158,7 @@ async function testNapcatHealth(): Promise<void> {
     const body = await resp.json().catch(() => ({}));
     napcatHealthResult.value = { ok: Boolean(body.ok), ...body };
   } catch (e: unknown) {
-    napcatHealthResult.value = { ok: false, message: e instanceof Error ? e.message : String(e) };
+    napcatHealthResult.value = { ok: false, message: userFacingError(e) };
   } finally {
     testingNapcatHealth.value = false;
   }
@@ -3195,7 +3235,7 @@ async function testNapcatInstanceHealth(instance: NapCatInstance): Promise<void>
   } catch (e: unknown) {
     napcatInstanceHealthResult.value = {
       ...napcatInstanceHealthResult.value,
-      [instance.id]: { ok: false, message: e instanceof Error ? e.message : String(e) }
+      [instance.id]: { ok: false, message: userFacingError(e) }
     };
   } finally {
     testingNapcatInstance.value = { ...testingNapcatInstance.value, [instance.id]: false };
@@ -3223,7 +3263,7 @@ async function launchNapcatInstance(instance: NapCatInstance): Promise<void> {
   } catch (e: unknown) {
     napcatLaunchResult.value = {
       ...napcatLaunchResult.value,
-      [instance.id]: { ok: false, message: e instanceof Error ? e.message : String(e) }
+      [instance.id]: { ok: false, message: userFacingError(e) }
     };
   } finally {
     launchingNapcatInstance.value = { ...launchingNapcatInstance.value, [instance.id]: false };
@@ -3254,7 +3294,7 @@ async function restartNapcatInstance(instance: NapCatInstance): Promise<void> {
   } catch (e: unknown) {
     napcatLaunchResult.value = {
       ...napcatLaunchResult.value,
-      [instance.id]: { ok: false, message: e instanceof Error ? e.message : String(e) }
+      [instance.id]: { ok: false, message: userFacingError(e) }
     };
   } finally {
     restartingNapcatInstance.value = { ...restartingNapcatInstance.value, [instance.id]: false };
@@ -3280,8 +3320,21 @@ const testingAstrbotLogin = ref(false);
 const astrbotLoginResult = ref<{ ok: boolean; message: string } | null>(null);
 
 const agentTypes = computed(() => gateway.value?.agentAdapters ?? []);
-const visibleAgentItems = computed(() => agentDefs.filter(a => agentTypes.value.includes(a.type)));
-const availableAgentsToAdd = computed(() => agentDefs.filter(a => !agentTypes.value.includes(a.type)));
+function boundInstance(type: AgentAdapterType) {
+  const binding = gateway.value?.agentInstanceBindings?.[type];
+  return agentInstances.value.find(instance => instance.instanceId === binding?.instanceId);
+}
+function boundInstanceAgent(type: AgentAdapterType) {
+  return boundInstance(type)?.agents.find(agent => agent.agentId === gateway.value?.agentInstanceBindings?.[type]?.agentId);
+}
+const visibleAgentItems = computed(() => agentDefs.filter(a => agentTypes.value.includes(a.type)).map(agent => gateway.value?.agentInstanceBindings?.[agent.type] ? { ...agent, title: `远端Agent(${boundInstance(agent.type)?.address || "离线"})` } : agent));
+const availableAgentsToAdd = computed(() => [
+  ...agentDefs.filter(agent => !agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, nodeId: undefined as string | undefined, agentId: undefined as string | undefined })),
+  ...agentInstances.value.filter(instance => !instance.local).flatMap(instance => instance.agents.flatMap(remote => {
+    const def = agentDefs.find(agent => agent.type === (remote.provider === "codex-desktop" ? "codex" : remote.provider));
+    return def ? [{ ...def, title: `远端Agent(${instance.address || "离线"}) · ${remote.name}`, nodeId: instance.instanceId, agentId: remote.agentId }] : [];
+  }))
+]);
 const primaryAgentType = computed(() => resolvePrimaryAgentAdapter(
   agentTypes.value,
   gateway.value?.primaryAgentAdapter
@@ -3381,6 +3434,7 @@ function samePath(left?: string, right?: string): boolean {
 }
 
 function agentScanFor(type: AgentAdapterType): AgentScanResult | undefined {
+  if (gateway.value?.agentInstanceBindings?.[type]) return remoteAgentScans.value[type];
   const scan = agentScan.value.agents[type];
   if (type !== "astrbot" || !gateway.value) return scan;
 
@@ -3582,6 +3636,12 @@ function managedAgentSessionContext(type: AgentAdapterType): {
   dshBaseUrl?: string;
 } | null {
   if (!gateway.value || (type !== "codex" && type !== "dsh")) return null;
+  if (gateway.value.agentInstanceBindings?.[type]) {
+    const agent = boundInstanceAgent(type);
+    if (!agent) return null;
+    return { agentAdapter: type, sessionId: agent.sessionId || "", sessionName: agent.name,
+      workspace: agent.workspace || "", dshBaseUrl: agent.dshBaseUrl };
+  }
   if (type === "dsh") {
     return {
       agentAdapter: "dsh",
@@ -3630,7 +3690,7 @@ async function openManagedAgentSession(agentAdapter: "codex" | "dsh"): Promise<v
     managedAgentSessionAction.value = {
       loading: false,
       message: "",
-      error: error instanceof Error ? error.message : String(error)
+      error: userFacingError(error)
     };
   }
 }
@@ -3651,12 +3711,17 @@ async function updateHooksToAgent(type: AgentAdapterType): Promise<void> {
   if (hookUpdate.value.loading) return;
   hookUpdate.value = { loading: true, message: "", error: "" };
   try {
+    if (gateway.value?.agentInstanceBindings?.[type]) {
+      const result = await instanceOperation(type, "hooks");
+      hookUpdate.value.message = result.message;
+      return;
+    }
     const response = await fetch(`/api/agent-adapters/hooks/update?adapter=${encodeURIComponent(type)}`, { method: "POST" });
     const result = await response.json();
     if (!response.ok || result.ok !== true) throw new Error(result.message || "Hook 更新失败");
     hookUpdate.value.message = result.message;
   } catch (error) {
-    hookUpdate.value.error = error instanceof Error ? error.message : String(error);
+    hookUpdate.value.error = userFacingError(error);
   } finally {
     hookUpdate.value.loading = false;
   }
@@ -3693,7 +3758,7 @@ async function lookupCodexThreadBinding(): Promise<void> {
     if (body.thread.cwd) gateway.value.codexCwd = body.thread.cwd;
     touch();
   } catch (error) {
-    codexBinding.value.error = error instanceof Error ? error.message : String(error);
+    codexBinding.value.error = userFacingError(error);
   } finally {
     codexBinding.value.loading = false;
   }
@@ -3731,7 +3796,7 @@ async function initializeManagedAgentSession(agentAdapter: "codex" | "dsh"): Pro
     managedAgentSessionAction.value = {
       loading: false,
       message: "",
-      error: error instanceof Error ? error.message : String(error)
+      error: userFacingError(error)
     };
   }
 }
@@ -3769,9 +3834,11 @@ function agentWarnings(type: AgentAdapterType): string[] {
   return [...new Set(warnings)];
 }
 
-function addAgent(type: AgentAdapterType): void {
+function addAgent(type: AgentAdapterType, nodeId?: string, agentId?: string): void {
   if (!gateway.value) return;
-  gateway.value.agentAdapters = [...agentTypes.value, type];
+  if (nodeId && agentId) gateway.value.agentInstanceBindings = { ...gateway.value.agentInstanceBindings, [type]: { instanceId: nodeId, agentId } };
+
+  gateway.value.agentAdapters = [...new Set([...agentTypes.value, type])];
   gateway.value.primaryAgentAdapter = resolvePrimaryAgentAdapter(
     gateway.value.agentAdapters,
     gateway.value.primaryAgentAdapter
@@ -3785,6 +3852,12 @@ function addAgent(type: AgentAdapterType): void {
 }
 
 async function postAgentThreadAction(payload: Record<string, unknown>): Promise<Record<string, any>> {
+  const type = (payload.agentAdapter || primaryAgentType.value) as AgentAdapterType;
+  if (gateway.value?.agentInstanceBindings?.[type]) {
+    const result = await instanceOperation(type, "threads", { ...payload, agentAdapter: type });
+    if (result.statusCode >= 400) throw new Error(result.data?.message || "实例任务操作失败");
+    return { code: 0, data: result.data };
+  }
   const response = await fetch("/api/agent/threads", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -3912,7 +3985,7 @@ async function initializePlanAssistants(): Promise<void> {
       ...codexPlanAssistants.value,
       loading: false,
       message: "",
-      error: error instanceof Error ? error.message : String(error)
+      error: userFacingError(error)
     };
   }
 }
@@ -3920,6 +3993,7 @@ async function initializePlanAssistants(): Promise<void> {
 function removeAgent(type: AgentAdapterType): void {
   if (!gateway.value) return;
   gateway.value.agentAdapters = agentTypes.value.filter(t => t !== type);
+  if (gateway.value.agentInstanceBindings) delete gateway.value.agentInstanceBindings[type];
   gateway.value.primaryAgentAdapter = resolvePrimaryAgentAdapter(
     gateway.value.agentAdapters,
     gateway.value.primaryAgentAdapter
@@ -3954,7 +4028,7 @@ async function testAstrbotLogin(): Promise<void> {
       message: body.message || (resp.ok ? "AstrBot 登录验证成功。" : "AstrBot 登录验证失败。")
     };
   } catch (e: unknown) {
-    astrbotLoginResult.value = { ok: false, message: e instanceof Error ? e.message : String(e) };
+    astrbotLoginResult.value = { ok: false, message: userFacingError(e) };
   } finally {
     testingAstrbotLogin.value = false;
   }
@@ -3985,29 +4059,13 @@ async function refreshVisibleNapcatHealth(): Promise<void> {
   }
 }
 
-function gatewayFromRouteParam(id: string | undefined) {
-  if (!id || !store.gateways.length) return null;
-  const decodedId = decodeURIComponent(id);
-  return store.gateways.find(g => configNameFor(g) === decodedId || g.id === decodedId || configNameFor(g) === id || g.id === id) || null;
-}
-
-// URL ↔ gateway 双向同步（放最后避免 TDZ）
-watch([() => route.params.id as string, () => store.gateways], ([id]) => {
-  const found = gatewayFromRouteParam(id);
-  if (found && found.id !== store.selectedGatewayId) store.selectGateway(found.id);
-}, { immediate: true });
-
-watch(() => store.selectedGatewayId, (id) => {
-  const routeGateway = gatewayFromRouteParam(route.params.id as string | undefined);
-  if (routeGateway && routeGateway.id !== id) return;
-  const gw = store.gateways.find(g => g.id === id);
-  const name = gw ? configNameFor(gw) : id;
-  if (name && route.params.id !== name) router.replace(routeScopedAdaptersPath(name));
-});
-
-watch(() => gateway.value?.configName, (name) => {
+// Only an explicit edit of the current config name changes its URL here.
+// Ordinary navigation and browser history are synchronized by App.
+watch(() => gateway.value?.configName, (name, previousName) => {
   configNameError.value = "";
-  if (name && route.params.id !== name) router.replace(routeScopedAdaptersPath(name));
+  if (previousName && route.params.id === previousName && name && name !== previousName) {
+    void router.replace({ path: routeScopedAdaptersPath(name), query: route.query, hash: route.hash });
+  }
 });
 
 watch(() => gateway.value?.id, () => {
@@ -5596,7 +5654,11 @@ watch(
                   </v-dialog>
                 </div>
                 <!-- Codex -->
-                <template v-if="agent.type === 'codex'">
+                <template v-if="gateway.agentInstanceBindings?.[agent.type]">
+                  <InstanceAgentSettings v-if="boundInstance(agent.type) && boundInstanceAgent(agent.type)" :instance="boundInstance(agent.type)!" :agent="boundInstanceAgent(agent.type)!" @saved="refreshLanAgentNodes" />
+                  <v-alert v-else type="warning" variant="tonal">此实例中的 Agent 暂不可用，请刷新实例列表。</v-alert>
+                </template>
+                <template v-else-if="agent.type === 'codex'">
                   <v-alert type="info" variant="tonal" density="compact" class="mb-2">
                     实际消息只交给 Codex/ChatGPT Desktop 当前任务执行，因此桌面端会立即显示消息并沿用该任务的工具、模型与权限。Desktop 未启动或目标任务无法加载时会明确失败，不会启动备用 Runtime。
                   </v-alert>
@@ -6141,7 +6203,7 @@ watch(
                     </div>
                     <v-alert v-if="gateway.codexPlanAssistantEnabled" :type="agent.type === 'dsh' ? 'success' : 'warning'" variant="tonal" density="compact" class="mt-2 mb-2">
                       <template v-if="agent.type === 'dsh'">
-                        当前本机已读回 6 个 DSH 计划协助会话，并验证同一秘书会话复用、计划绑定迁移和正式回复来源；发布包与全新环境回归待完成。
+                        DSH 计划协助会话由当前选择的实例创建和复用。请刷新会话并核对任务名称、工作目录与实际回复。
                       </template>
                       <template v-else>
                         实验能力：代码和契约测试已覆盖精确 ID、命名与复用；仍需在真实 {{ managedAgentLabel(agent.type) }} 中确认多会话可见、同 ID 续投和工具 owner。
@@ -6232,7 +6294,7 @@ watch(
                 v-for="agent in availableAgentsToAdd"
                 :key="agent.type"
                 :title="agent.title"
-                @click="addAgent(agent.type)"
+                @click="addAgent(agent.type, agent.nodeId, agent.agentId)"
               />
             </v-list>
           </v-menu>

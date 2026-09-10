@@ -1,3 +1,4 @@
+import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -7,6 +8,7 @@ import type { PlanAttachment } from "../shared/planAttachmentContract.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
+  body = errorResponsePresentation(body, statusCode);
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body, null, 2));
 }
@@ -98,8 +100,12 @@ export function handlePlanAttachmentApi(
       "x-content-type-options": "nosniff"
     });
     response.end(request.method === "HEAD" ? undefined : responseBody);
-  } catch {
-    jsonResponse(response, 404, { code: -1, message: "Plan attachment not found." });
+  } catch (error) {
+    const causeCode = (error as NodeJS.ErrnoException).code;
+    const message = error instanceof Error ? error.message : String(error);
+    const status = causeCode === "ENOENT" || /not found|unavailable|managed directories/i.test(message) ? 404 : causeCode === "EACCES" || causeCode === "EPERM" ? 403 : 500;
+    jsonResponse(response, status, { code: -1, reason: causeCode || "attachment_read_failed",
+      message });
   }
   return true;
 }

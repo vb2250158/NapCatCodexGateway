@@ -43,6 +43,14 @@ import com.rabi.link.modules.conversation.RabiMobileSpeechArchive;
 
 /** Foreground phone client. Glasses are optional; this service works with the phone alone. */
 public final class RabiConversationService extends Service {
+    private static RabiConversationService currentInstance;
+    public static void pauseForLocalCapture() {
+        RabiConversationService current = currentInstance;
+        if (current == null || current.shutdownComplete) return;
+        current.pauseAllCaptureModes();
+        current.voiceServiceActive = false;
+        current.updateStatus("采集已暂停，消息连接继续保持");
+    }
     public static final String ACTION_START = "com.rabi.link.conversation.START";
     public static final String ACTION_STOP = "com.rabi.link.conversation.STOP";
     public static final String ACTION_REVIEW = "com.rabi.link.conversation.REVIEW";
@@ -70,7 +78,11 @@ public final class RabiConversationService extends Service {
 
     private RabiPhoneAudioCapture phoneAudioCapture;
     private RabiMobileSpeechArchive speechArchive;
-    private RabiGlassPcBackend backend;
+    private volatile RabiGlassPcBackend backend;
+    private final java.util.concurrent.ExecutorService initializationExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private final java.util.ArrayDeque<Runnable> pendingStarts = new java.util.ArrayDeque<>();
+    private boolean initialized;
+    private boolean initializing;
     private RabiChatStore chatStore;
     private RokidCxrController glassController;
     private RabiGlassBridge glassBridge;
@@ -82,7 +94,7 @@ public final class RabiConversationService extends Service {
     };
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
-    private boolean shutdownComplete;
+    private volatile boolean shutdownComplete;
     private boolean networkKnownOffline;
     private boolean networkFallbackCheckScheduled;
     private boolean voiceServiceActive;
@@ -190,6 +202,7 @@ public final class RabiConversationService extends Service {
 
     @Override
     public void onCreate() {
+        currentInstance = this;
         super.onCreate();
         RabiConversationSettings.videoPreferences(this).registerOnSharedPreferenceChangeListener(videoSettingsListener);
         createChannel();
@@ -207,6 +220,10 @@ public final class RabiConversationService extends Service {
                 if (target != null) target.queueDiagnostic(event, level, state);
             }
         });
+    }
+
+    /** Queue recovery can inspect many files. It must never run on Android's main thread. */
+    private void initializeBackend() {
         speechArchive = RabiMobileSpeechArchive.tryCreate(this);
         if (speechArchive != null) try { speechArchive.cleanup(); }
         catch (Throwable ignored) { }
@@ -277,7 +294,6 @@ public final class RabiConversationService extends Service {
                 if (backend != null) backend.queueDiagnostic("conversation.error", "error", "conversation backend error");
             }
         });
-        registerNetworkEvents();
     }
 
     public static void updateProactivityPreference(Context context, String preference) {
@@ -358,6 +374,38 @@ public final class RabiConversationService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
+        if (!initialized && !ACTION_STOP.equals(action)) {
+            startForeground(REVIEW_NOTIFICATION_ID, new NotificationCompat.Builder(this, LISTENING_CHANNEL)
+                    .setSmallIcon(com.rabi.link.R.drawable.rabiroute_icon).setContentTitle("正在恢复消息记录")
+                    .setContentText("后台读取历史队列，本地录制继续运行").setOngoing(true).build(),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+            Intent deferred = intent == null ? null : new Intent(intent);
+            pendingStarts.add(() -> onStartCommand(deferred, flags, startId));
+            if (!initializing) {
+                initializing = true;
+                initializationExecutor.execute(() -> {
+                    try {
+                        initializeBackend();
+                        if (shutdownComplete) { if (backend != null) backend.stop(); return; }
+                        notificationHandler.post(() -> {
+                            if (shutdownComplete) return;
+                            initialized = true; initializing = false;
+                            registerNetworkEvents();
+                            while (!pendingStarts.isEmpty() && !shutdownComplete) pendingStarts.removeFirst().run();
+                        });
+                    } catch (Exception error) {
+                        notificationHandler.post(() -> {
+                            if (shutdownComplete) return;
+                            initializing = false; pendingStarts.clear();
+                            updateStatus("消息队列恢复失败，已保留原文件；请稍后重试");
+                            android.util.Log.e("RabiConversation", "queue_initialization_failed", error);
+                            shutdown(false); stopSelf();
+                        });
+                    }
+                });
+            }
+            return START_NOT_STICKY;
+        }
         updateRuntime("serviceAction", action == null ? ACTION_START : action);
         if (ACTION_STOP.equals(action)) {
             RabiConversationServiceState.setRestoreEnabled(this, false);
@@ -484,6 +532,10 @@ public final class RabiConversationService extends Service {
             updateStatus("已暂停采集 · 消息连接继续保持");
             return;
         }
+        if (!com.rabi.link.recording.CaptureOwnership.acquire("conversation")) {
+            updateStatus("本地录制正在进行，消息连接保留，语音采集已暂停");
+            return;
+        }
         if (settings.inputMode == RabiConversationSettings.InputMode.GLASSES) {
             if (glassController != null && inputMode == RabiConversationSettings.InputMode.GLASSES) {
                 if (RabiConversationSettings.directVideoEnabled(this)) startDirectVideo();
@@ -509,6 +561,7 @@ public final class RabiConversationService extends Service {
         stopGlassesBackend();
         if (backend != null) backend.pauseAudioStream();
         setInputMode(RabiConversationSettings.InputMode.PAUSED);
+        com.rabi.link.recording.CaptureOwnership.release("conversation");
     }
 
     private void setInputMode(RabiConversationSettings.InputMode next) {
@@ -995,6 +1048,7 @@ public final class RabiConversationService extends Service {
     private void shutdown(boolean explicitStop) {
         if (shutdownComplete) return;
         shutdownComplete = true;
+        pendingStarts.clear();
         notificationHandler.removeCallbacks(reviewNotificationRefresh);
         unregisterNetworkEvents();
         RabiAudioShutdownSequence.run(
@@ -1003,12 +1057,15 @@ public final class RabiConversationService extends Service {
                 () -> { if (backend != null) backend.stop(); });
         inputMode = RabiConversationSettings.InputMode.PAUSED;
         stopForeground(STOP_FOREGROUND_REMOVE);
+        com.rabi.link.recording.CaptureOwnership.release("conversation");
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) { manager.cancel(NOTIFICATION_ID); manager.cancel(REVIEW_NOTIFICATION_ID); }
         if (explicitStop) stopSelf();
     }
 
     @Override public void onDestroy() {
+        if (currentInstance == this) currentInstance = null;
+        initializationExecutor.shutdown();
         RabiConversationSettings.videoPreferences(this).unregisterOnSharedPreferenceChangeListener(videoSettingsListener);
         shutdown(false);
         super.onDestroy();

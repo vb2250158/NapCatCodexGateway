@@ -11,6 +11,8 @@ export type ManagerHealthSnapshot = Readonly<{
   live: true;
   requiredReady: boolean;
   businessReady: boolean;
+  backgroundState: "healthy" | "degraded";
+  backgroundIncidentCount: number;
   message: string;
 }>;
 
@@ -30,18 +32,17 @@ export function buildManagerHealthSnapshot(input: Readonly<{
   const businessReady = input.routesReady && input.planStorageReady;
   const healthy = input.pluginReadiness.state === "ready"
     && requiredReady
-    && businessReady
-    && input.backgroundIncidentCount === 0;
+    && businessReady;
   const message = !requiredReady
     ? `Manager event loop is live, but required plugin capabilities are unavailable: ${input.pluginReadiness.missingCapabilities.join(", ")}`
     : input.pluginReadiness.state !== "ready"
       ? "Manager event loop and required capabilities are ready, but optional plugins are degraded."
       : !input.planStorageReady
         ? "Manager event loop and required capabilities are ready, but plan storage startup recovery is not ready."
-      : input.backgroundIncidentCount > 0
-        ? `Manager event loop and required capabilities are ready, but background incidents remain: incidents=${input.backgroundIncidentCount}`
-        : input.routesReady
-          ? "Manager event loop, required capabilities, and enabled Route ingress are ready."
+      : input.routesReady
+          ? input.backgroundIncidentCount > 0
+            ? `Manager event loop, required capabilities, and enabled Route ingress are ready; background incidents=${input.backgroundIncidentCount} are isolated from API readiness.`
+            : "Manager event loop, required capabilities, and enabled Route ingress are ready."
           : `Manager event loop and required capabilities are ready, but Route ingress is degraded: ready=${input.routeReadyCount}/${input.routeRequiredCount}; blocked=${input.blockedRouteIds.join(",") || "none"}; failed=${input.failedRouteIds.join(",") || "none"}`;
   return Object.freeze({
     state: healthy ? "healthy" : "degraded",
@@ -51,6 +52,8 @@ export function buildManagerHealthSnapshot(input: Readonly<{
     live: true,
     requiredReady,
     businessReady,
+    backgroundState: input.backgroundIncidentCount > 0 ? "degraded" : "healthy",
+    backgroundIncidentCount: input.backgroundIncidentCount,
     message
   });
 }

@@ -65,6 +65,14 @@ test("the hook forwards the original event and injects only Manager output", asy
   assert.equal(output.hookSpecificOutput.additionalContext, "[Rabi Manager]\n统一上下文");
 });
 
+test("Stop applies Manager persona followup once without interpreting reply text", async (t) => {
+  const followup = { decision: "block", reason: "Configured followup" };
+  const mock = await server((_request, response) => json(response, 200, { code: 0, data: { followup } }));
+  t.after(() => mock.close());
+  assert.deepEqual(await handleHookInput({ hook_event_name: "Stop", session_id: "worker" }, { managerUrl: mock.url }), followup);
+  assert.equal(await handleHookInput({ hook_event_name: "Stop", session_id: "worker", stop_hook_active: true }, { managerUrl: mock.url }), null);
+});
+
 test("an unbound Manager response produces no hook output", async (t) => {
   const mock = await server((_request, response) => json(response, 200, { code: 0, data: { additionalContext: "" } }));
   t.after(() => mock.close());
@@ -156,26 +164,23 @@ test("Stop returns one non-blocking reminder after confirmed project file change
   assert.equal(output.continue, undefined);
 });
 
-test("Stop blocks completion when PangHu progress lacks its required group receipt context", async (t) => {
+test("Stop ignores unrelated application payloads", async (t) => {
   const mock = await server((_request, response) => json(response, 200, {
     code: 0,
     data: {
-      pangHuProgressNotification: {
+      unrelatedNotification: {
         status: "failed",
-        reason: "PANGHU_PROGRESS_NOTIFICATION_CONTEXT_REQUIRED",
-        error: "PangHu progress notification requires a managed work-group issue mapping with groupId and sourceMessageId."
+        reason: "UNRELATED_CONTEXT_REQUIRED"
       }
     }
   }));
   t.after(() => mock.close());
   const output = await handleHookInput({
     hook_event_name: "Stop",
-    session_id: "session-panghu",
-    turn_id: "turn-panghu-missing-context"
+    session_id: "session-example",
+    turn_id: "turn-missing-context"
   }, { managerUrl: mock.url });
-  assert.match(output.systemMessage, /PangHu/);
-  assert.match(output.systemMessage, /managed work-group issue mapping/);
-  assert.equal(output.continue, undefined);
+  assert.equal(output, null);
 });
 
 test("Stop surfaces a non-blocking system warning when reminder delivery fails", async (t) => {

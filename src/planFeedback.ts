@@ -188,7 +188,7 @@ export function createPlanFeedbackRecord(input: CreatePlanFeedbackInput): PlanFe
     updatedAt: createdAt,
     storageRevision: createStorageRevision(),
     deliveryStatus: notifyAgent ? "pending" : "record_only",
-    ...(author === "agent" ? {} : {
+    ...(author === "agent" || !notifyAgent ? {} : {
       postCommit: {
         deliveryId: id,
         status: "pending" as const,

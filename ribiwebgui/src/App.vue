@@ -1,11 +1,12 @@
 <script setup lang="ts">
+import { userFacingError } from "./userFacingError";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
 import LocaleSwitcher from "./components/LocaleSwitcher.vue";
 import QuickSetupDialog from "./components/QuickSetupDialog.vue";
 import { useI18n } from "./i18n";
-import { routeScopedPathForCurrentPage } from "./routeScopedNavigation";
+import { routeScopedPathForCurrentPage, routeKeyFromWebguiHash, showsRouteSwitcher } from "./routeScopedNavigation";
 import { pluginCatalogStore } from "./pluginCatalogStore";
 import { buildWebNavigation } from "./pluginNavigation";
 import { gatewayPersonaDisplayName } from "./personaPresentation";
@@ -126,7 +127,9 @@ function ensurePageDiagnostics(force = false): Promise<void> {
 const drawerPreferences = readDrawerPreferences();
 const drawer = ref(route.path === "/docs" ? drawerPreferences.docs : drawerPreferences.default);
 const snackbar = ref("");
-const selectedRouteKey = computed(() => store.selectedGateway ? configNameFor(store.selectedGateway) : "");
+const showRouteSwitcher = computed(() => showsRouteSwitcher(route.path));
+const selectedRouteKey = computed(() => store.requestedRouteKey || (store.selectedGateway ? configNameFor(store.selectedGateway) : ""));
+watch(() => route.fullPath, path => store.syncRouteSelection(`#${path}`), { immediate: true, flush: "sync" });
 const navigationGroups = computed(() => buildWebNavigation(pluginCatalogStore.contributions.value, selectedRouteKey.value));
 const navItems = computed(() => navigationGroups.value.routePrimary.map(item => ({ ...item, title: t(item.title) })));
 const utilityNavItems = computed(() => navigationGroups.value.utility.map(item => ({ ...item, title: t(item.title) })));
@@ -143,7 +146,7 @@ const routeOptions = computed(() => store.gateways.map(gateway => {
   const title = gatewayPersonaDisplayName(gateway, runtime.roleInfo);
   return { title, value: gateway.id };
 }));
-const selectedGatewayName = computed(() => store.selectedGateway ? store.configNameFor(store.selectedGateway) : "未选择路由");
+const selectedGatewayName = computed(() => selectedRouteKey.value || "未选择路由");
 
 function pageSaveState(): WebCommandState {
   return {
@@ -179,7 +182,11 @@ function commandState(command: WebCommandContribution): WebCommandState {
 
 async function executeCommand(command: WebCommandContribution): Promise<void> {
   if (commandState(command).enabled === false) return;
-  await command.execute(commandContext());
+  try {
+    await command.execute(commandContext());
+  } catch (error) {
+    store.error = userFacingError(error);
+  }
 }
 
 async function loadGatewayEditorInBackground(): Promise<void> {
@@ -187,9 +194,9 @@ async function loadGatewayEditorInBackground(): Promise<void> {
   if (store.gateways.length === 0) {
     const quickSetup = webCommandForHandler(pluginCatalogStore.commands.value, "web.quick-setup");
     if (quickSetup) await executeCommand(quickSetup);
-  } else if (selectedRouteKey.value) {
+  } else if (selectedRouteKey.value && !routeKeyFromWebguiHash(`#${route.fullPath}`)) {
     const scopedPath = routeScopedPathForCurrentPage(selectedRouteKey.value, route.path);
-    if (scopedPath && scopedPath !== route.path) await router.replace(scopedPath);
+    if (scopedPath && scopedPath !== route.path) await router.replace({ path: scopedPath, query: route.query, hash: route.hash });
   }
   void ensurePageDiagnostics();
 }
@@ -265,11 +272,14 @@ function canLeaveDirtyState(): boolean {
 
 function selectGateway(id: string): void {
   if (!canLeaveDirtyState()) return;
-  store.selectGateway(id);
   const gateway = store.gateways.find(candidate => candidate.id === id);
   const name = gateway ? configNameFor(gateway) : id;
   const scopedPath = routeScopedPathForCurrentPage(name, route.path);
-  if (scopedPath && scopedPath !== route.path) void router.replace(scopedPath);
+  if (scopedPath && scopedPath !== route.path) {
+    void router.push({ path: scopedPath, query: route.query, hash: route.hash });
+  } else if (!scopedPath) {
+    store.selectGateway(id);
+  }
 }
 </script>
 
@@ -289,25 +299,6 @@ function selectGateway(id: string): void {
       <v-divider />
 
       <div class="sidebar-body">
-        <v-card class="route-picker mb-3" variant="flat">
-          <v-card-text class="pa-3">
-            <v-select
-              :model-value="store.selectedGatewayId"
-              :items="routeOptions"
-              aria-label="选择航线"
-              hide-details
-              @update:model-value="value => selectGateway(String(value || ''))"
-            >
-              <template #item="{ props: itemProps, item }">
-                <v-list-item v-bind="itemProps" />
-              </template>
-              <template #selection="{ item }">
-                <span class="text-truncate">{{ item.raw.title }}</span>
-              </template>
-            </v-select>
-          </v-card-text>
-        </v-card>
-
         <v-list nav density="comfortable" bg-color="transparent" class="sidebar-list">
           <v-list-item
             v-for="item in navItems"
@@ -380,13 +371,33 @@ function selectGateway(id: string): void {
 
     <v-app-bar flat class="top-app-bar px-2">
       <v-app-bar-nav-icon @click="drawer = !drawer" />
-      <v-toolbar-title class="topbar-title">
-        <div class="font-weight-bold">{{ pageTitle }}</div>
-        <div class="topbar-subtitle">{{ selectedGatewayName }}</div>
-      </v-toolbar-title>
+      <div class="topbar-context" :class="{ 'has-route-switcher': showRouteSwitcher }">
+        <v-toolbar-title class="topbar-title">
+          <div class="font-weight-bold">{{ pageTitle }}</div>
+          <div class="topbar-subtitle">{{ selectedGatewayName }}</div>
+        </v-toolbar-title>
+        <v-select
+          v-if="showRouteSwitcher"
+          class="topbar-route-picker"
+          :model-value="store.selectedGatewayId"
+          :items="routeOptions"
+          aria-label="选择航线"
+          density="compact"
+          hide-details
+          @update:model-value="value => selectGateway(String(value || ''))"
+        >
+          <template #item="{ props: itemProps }">
+            <v-list-item v-bind="itemProps" />
+          </template>
+          <template #selection="{ item }">
+            <span class="text-truncate">{{ item.raw.title }}</span>
+          </template>
+        </v-select>
+      </div>
       <v-spacer />
       <div class="topbar-actions">
-        <span v-if="hasUnsavedChanges" class="dirty-hint">有未保存的修改</span>
+        <span v-if="store.saveState === 'confirming'" class="dirty-hint">{{ t("保存结果待确认") }}</span>
+        <span v-else-if="hasUnsavedChanges" class="dirty-hint">{{ t("有未保存的修改") }}</span>
         <LocaleSwitcher />
         <v-chip class="manager-chip" :color="managerConnected ? 'success' : 'error'" variant="tonal" size="small">
           <v-icon start size="14">mdi-circle</v-icon>
@@ -419,9 +430,14 @@ function selectGateway(id: string): void {
       </div>
     </v-app-bar>
 
-    <v-main>
+    <v-main :class="{ 'navigation-collapsed': !drawer }">
       <v-alert v-if="store.error" type="error" variant="tonal" class="ma-4">{{ store.error }}</v-alert>
-      <router-view v-slot="{ Component, route: activeRoute }">
+      <v-btn v-if="store.saveState === 'conflict'" class="ma-4" @click="store.reloadSelectedGateway().catch(error => { store.error = String(error); })">{{ t("重新加载当前路线") }}</v-btn>
+      <v-alert v-else-if="store.saveMessage" :type="store.saveState === 'saved' ? 'success' : 'info'" variant="tonal" class="ma-4" role="status">{{ t(store.saveMessage) }}</v-alert>
+      <v-alert v-if="store.routeSelectionMissing" type="error" variant="tonal" class="ma-4">
+        {{ t("未找到当前路由") }}：<span data-no-i18n>{{ store.requestedRouteKey }}</span>
+      </v-alert>
+      <router-view v-if="!store.routeSelectionMissing" v-slot="{ Component, route: activeRoute }">
         <KeepAlive>
           <component
             :is="Component"

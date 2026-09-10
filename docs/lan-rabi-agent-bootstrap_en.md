@@ -1,107 +1,80 @@
 <!-- docs-language-switch -->
-<div align="center">
-<a href="./lan-rabi-agent-bootstrap.md">简体中文</a> | English
-</div>
+<div align="center"><a href="./lan-rabi-agent-bootstrap.md">简体中文</a> | English</div>
 <!-- /docs-language-switch -->
 
-# LAN Rabi Agent bootstrap and updates
+# Remote Agent setup and updates
 
-> Status: **Experimental integration**. Manager APIs, Rabi Web, signed releases, node connections, and update requests are implemented. The current worker only delivers to a configured Codex Desktop task owner and has not passed a real multi-computer acceptance run.
->
-> Audience: maintainers, LAN operators, and the existing Agent that bootstraps Rabi Agent.
+> Status: experimental integration. Bootstrap prompts, signed downloads, local/remote instance catalogs, multiple Agents, stable route bindings and shared management operations are implemented. Real two-computer installation and host acceptance remain pending.
 
-## What this provides
+## Three user steps
 
-RabiRoute remains on the Manager computer. Other computers do not install full RabiRoute or run a Gateway, and they do not use a pairing code or device password. An execution computer keeps only headless Rabi Agent. It opens an outbound connection to Manager, receives work, delivers it to an already-open Codex Desktop task on that computer, and returns acceptance, completion, or failure state.
+1. Open **Remote Agent** (`#/lan-agents`) and select **Copy setup prompt**. The page uses the current Manager LAN address and pinned release public-key fingerprint. A loopback page selects a current LAN address. Enable LAN access first.
+2. Start Codex or DSH on the target computer and paste the prompt into the task that should receive messages. That Agent checks Node.js 22.13+, discovers its current task and workspace, downloads and verifies the worker, writes private configuration, registers login startup and starts the background connection. Full RabiRoute installation and manual task IDs are unnecessary.
+3. In the Route, open **Message adapters → Add AGENT**, choose **RemoteAgent(<IP address>)**, and save. With no nodes, the menu links to setup. The displayed IP is observed by Manager; the persisted identity is instanceId + agentId.
 
-The Rabi Web **LAN Agents** page shows nodes, recent tasks, and the published version. It can request an update for an online node. Manager never overwrites remote files: the node downloads, verifies, and switches itself. If the replacement does not reconnect within 30 seconds, the old version remains active.
+Local and remote computers are represented as instances in a two-level **instance → Agent** view. The local instance appears automatically. Remote instances display **RemoteAgent(<IP address>)** and contain multiple Agents. Codex and DSH describe execution capabilities rather than separate remote-instance types. Address changes do not change route identity.
 
-## Implemented scope
+The shared instance editor provides names, enablement, workspace, task names and IDs, model, reasoning effort, explicit environment scans, opening tasks and Hook installation. Hook policies remain in the current Manager's persona automation settings.
 
-| Item | Current behavior |
+The prompt contains the connection credential. Paste it only into a private task on the target computer; never put it in a repository, group chat, logs, screenshots or command history. Clipboard fallback supports LAN HTTP pages.
+
+## Ownership and execution
+
+| Object | Owner | Behavior and acceptance |
+| --- | --- | --- |
+| Nodes, IP, connections and task states | Manager node registry | Both HTTP management and WebSocket connections require explicit authentication; offline delivery fails. |
+| Route binding | Route `agentInstanceBindings[provider]` | UI saves a node reference, not another credential. Gateway receives its endpoint and credential from the current Manager generation. |
+| Task, model, tools and permissions | Existing remote Codex/DSH host | Bind the installation task. No fallback Runtime or host startup modification. The host remains independent when Manager stops. |
+| Background connection | Current-user Rabi Agent | Owns outbound connection, downloads, verification, login startup and updates. |
+| Message path | Route → Agent adapter → Manager registry → remote worker → bound task | Codex uses Desktop IPC; DSH uses local `session.prompt` with `mode=queue`. Each host has one execution path. |
+
+An unavailable Codex owner fails without `codex app-server`. An unavailable DSH endpoint or binding fails without switching to Codex. A busy Codex task rejects new work rather than overwriting its task association. Accepted duplicate tasks are not submitted again.
+
+Online means the worker is connected. Task records distinguish delivery, acknowledgement, progress, completion and failure. DSH currently reports queue acceptance; read its actual reply in the bound session. Codex completion comes from Desktop broadcasts; read replies in the corresponding task. Cross-computer local image paths, remote persona-file synchronization and complete remote plan-management parity are not supported yet.
+
+## Installation and releases
+
+| Platform | Private directory |
 | --- | --- |
-| Authentication | Reuses `webguiLan.accessToken`. Node listing, task assignment, and update requests require the explicit Token even from loopback; no pairing code, UDP discovery, device password, or second Token is added. |
-| Release publishing | `GET /api/lan-agent/releases/manifest` returns an Ed25519-signed Node release manifest with a SHA-256 for every file. |
-| Downloads | Agent uses `Authorization: Bearer <LAN connection Token>` for manifests and files. |
-| Persistent connection | Agent connects to `/api/lan-agent/connect`, sends `authenticate`, waits for `authenticated`, then sends `hello`. Browser WebSocket clients cannot reliably supply an Authorization Header, so connection authentication is the first message; HTTP download still uses the Bearer Header. |
-| Nodes and tasks | Manager persists the latest 500 node states and tasks. Reconnects do not execute the same `taskId` twice. |
-| Local handler | Only `codex-desktop`. Work is delivered through Codex Desktop IPC to the configured task owner. If Desktop or the owner is unavailable, the task fails closed; Rabi Agent never starts `codex app-server` or another fallback runtime. |
-| Restart | `--bootstrap` creates a current-user startup entry. It contains no Token and restores the headless worker after login. |
-
-Rabi Agent requires Node.js 22 or newer. It does not request administrator rights or write system-wide environment variables.
-
-## Rabi Web operation
-
-1. Enable LAN Web access in Manager and generate the LAN connection Token.
-2. Open Rabi Web from the full access URL that contains that Token.
-3. Open **LAN Agents** and copy the displayed release public-key SHA-256. A connected node reports its version, platform, Codex Desktop capability, and last-seen time.
-4. Supply that fingerprint to the new computer as `RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256` during first bootstrap.
-5. Select **Update to current version** on an online node. The node receives `updateAvailable`, downloads and verifies the release, and reports `requested`, `updated`, or `failed`.
-
-An offline node cannot be updated until it reconnects.
-
-## First connection
-
-The new computer needs Node.js 22+, Codex/ChatGPT Desktop, and an already-open target task owner. Its existing Agent follows the prompt below to download, verify, install, and launch Rabi Agent. The person using the computer does not manually install RabiRoute or enter a pairing code.
-
-The current-user data directory is:
-
-| Platform | Directory |
-| --- | --- |
-| Windows | `%LOCALAPPDATA%\RabiAgent\` |
+| Windows | `%LOCALAPPDATA%/RabiAgent/` |
 | macOS | `~/Library/Application Support/RabiAgent/` |
 | Linux | `~/.local/share/RabiAgent/` |
 
-The private configuration contains the Manager URL, LAN connection Token, stable `nodeId`, release public-key SHA-256 fingerprint, allowed workspaces, and Codex Desktop task ID. Do not place the Token in a repository, logs, command history, task body, or screenshots.
+WebGUI owns the single prompt template; this document does not duplicate it. The prompt contains the full Manager URL, existing LAN Token and pinned SHA-256 public-key fingerprint. Verify the Ed25519 manifest signature and every file's SHA-256 and size. Reject escaping paths and cross-origin downloads. Preserve Manager's private signing key across upgrades; rotation requires trusted redistribution of the fingerprint.
 
-## Bootstrap prompt
+Process variables: `RABI_MANAGER_URL`, `RABI_LAN_LINK_TOKEN`, `RABI_NODE_ID`, `RABI_AGENT_DEFAULT_CWD`, `RABI_AGENT_ALLOWED_CWDS`, `RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256`. Codex uses `RABI_AGENT_TYPE=codex-desktop` and `RABI_AGENT_CODEX_THREAD_ID`; DSH uses `RABI_AGENT_TYPE=dsh`, `RABI_AGENT_DSH_URL`, `RABI_AGENT_DSH_SESSION_ID`. The remote Agent discovers and privately stores these values without asking the user to type IDs.
 
-Replace the placeholders and send this prompt privately to the existing Agent on the new computer.
+`node rabi-agent.mjs --bootstrap` stays running; launch it hidden and detached from the installation terminal. Refresh the node page after setup. Online nodes can request updates; the worker downloads, verifies and switches itself, retaining the old version if the new one does not reconnect within 30 seconds. If Manager's address changes, copy a fresh prompt to update the connection; do not guess ports.
 
-```text
-Connect this computer to the LAN Rabi Manager by installing and starting the current headless Rabi Agent. Do not install full RabiRoute, do not use a pairing code, and do not start a fallback Codex runtime.
+## Instance ownership and management
 
-Rabi Manager URL: <RABI_MANAGER_URL>
-LAN connection Token: <RABI_LAN_LINK_TOKEN>
-Stable node ID: <RABI_NODE_ID>
-Allowed workspace: <RABI_AGENT_DEFAULT_CWD>
-Existing Codex Desktop task owner ID: <RABI_AGENT_CODEX_THREAD_ID>
-Release public key SHA-256: <RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256>
+The local instance ID is persisted in private `agent-instance-id.json`; remote instances retain their private nodeId. Existing single-task configuration is projected as agentId=default; new Agents receive UUIDs. Each executing computer owns its configuration. Manager keeps a catalog projection, while local Agents keep their existing route configuration as the source of truth, with the existing concurrent-version guard on saves.
 
-1. Require Node.js 22 or newer and an already-open Codex/ChatGPT Desktop task owner with the ID above. Stop with the failed prerequisite if either is unavailable.
-2. Request GET <RABI_MANAGER_URL>/api/lan-agent/releases/manifest with Authorization: Bearer <RABI_LAN_LINK_TOKEN>.
-3. Derive SHA-256 from the manifest Ed25519 public key in canonical SPKI DER form and require it to equal <RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256> and manifest.publicKeySha256. Then verify the signature over exactly { version, platform, minNodeVersion, files }; verify every downloaded file's SHA-256 and byte size. Reject paths containing ., .., empty segments, or absolute paths.
-4. Download every file in the manifest into the current user's RabiAgent releases/<version> directory. Do not put the Token in the package, logs, repository, screenshots, command history, or task text.
-5. Set only this process environment for bootstrap: RABI_MANAGER_URL, RABI_LAN_LINK_TOKEN, RABI_NODE_ID, RABI_AGENT_DEFAULT_CWD, RABI_AGENT_ALLOWED_CWDS, RABI_AGENT_CODEX_THREAD_ID, and RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256.
-6. From the verified release directory, run: node rabi-agent.mjs --bootstrap. This writes current-user-only configuration, registers the current-user startup entry, and starts the Rabi Agent.
-7. Wait for Manager to return connected. Report only: Rabi Agent connected: <RABI_NODE_ID>, version: <version>.
-8. On failure, report only the failed step and error. Do not retry indefinitely, skip verification, create another token, use UDP discovery, use a device password, or launch codex app-server.
-```
+Both transports use `instanceManagement.ts` for scans, tasks and Hook installation. WebSocket RPC responses must belong to the requesting connection. Disconnection fails immediately; refresh after an ambiguous timeout before retrying a change. Hooks validate the registered session and associate an isolated instance identity with the current Manager persona.
 
-The signing key lives in Manager private runtime data. Replacing or losing it changes the fingerprint, and existing nodes reject subsequent updates. A rotation must redistribute the new fingerprint through a trusted channel and update `releasePublicKeySha256` in each node private configuration. Explicit key provisioning, permission verification, and a controlled rotation procedure remain required before real two-host acceptance.
+Each instance links to its bound route's shared complete Agent settings, including message processing, dedicated memory consolidation and plan assistants. Worker state is scoped by instanceId, agentId and primary task ID. Moving computers or rebinding the primary never reuses workers from the previous owner. Resolved or created assistant tasks register under their owning Agent; Manager followups dispatch by that ownership and fail on offline or ambiguous identities without local fallback.
 
-## Protocol
+Installed Manager reads connector assets, the shared management runtime and Hook packages from its immutable release, while signing keys remain in private data. Reconnecting preserves instance identity, the Agent catalog and permitted workspaces. Disabled local task bindings remain visible and can be enabled again; a route assigned to a remote provider must first be switched back to local in route settings.
 
-```text
-GET  /api/lan-agent/releases/manifest
-GET  /api/lan-agent/releases/<version>/node/<assetPath>
-GET  /api/lan-agent/nodes
-POST /api/lan-agent/nodes/<nodeId>/update
-POST /api/lan-agent/nodes/<nodeId>/tasks
-WS   /api/lan-agent/connect
-```
+## API
 
-```text
-authenticate -> authenticated -> hello -> connected -> heartbeat
-assignTask  -> ackTask -> progress -> taskResult
-updateAvailable -> updateResult
-```
+- `GET /api/lan-agent/releases/manifest` and `GET /api/lan-agent/releases/<version>/node/<assetPath>`: manifest and files.
+- `GET /api/lan-agent/instances`: local and remote instances with their Agents.
+- `POST /api/lan-agent/instances/<instanceId>/agents`: add an Agent.
+- `POST /api/lan-agent/instances/<instanceId>/agents/<agentId>/<operation>`: configure, scan, threads, hooks, context and tasks.
+- `GET /api/lan-agent/nodes`: nodes and recent tasks.
+- `POST /api/lan-agent/nodes/<nodeId>/tasks`: delivery, defaulting to the node's declared host when `targetAgent` is omitted; deduplicate with `idempotencyKey`.
+- `POST /api/lan-agent/nodes/<nodeId>/update`: update request.
+- `WS /api/lan-agent/connect`: `authenticate → authenticated → hello → connected → heartbeat`.
 
-Every task has `taskId` and `idempotencyKey`. Manager deduplicates per node. Rabi Agent accepts only `codex-desktop` and verifies that the requested workspace is inside the allowed workspace list declared during bootstrap. After Codex Desktop accepts a task, Rabi Agent waits for the Desktop task-state broadcast; a completion result means the owner completed, while the actual response remains in that Desktop task.
+The existing `lan-agent` connection and release API paths remain available for installed connectors to update. The unreleased `lanAgent` provider and `lanAgentNodeId` setting have been removed; the user-facing feature is Remote Agent. Old Remote Agent v3 is a separate experimental protocol, not a delivery path or installation dependency of this adapter. Migrating it is outside this change.
 
-## Remaining acceptance
+## Remaining device acceptance
 
-- First bootstrap, Token revocation, network loss, and login restore on two real computers.
-- Correlation between Codex Desktop task-state broadcasts and the actual response.
-- Startup entry behavior on Windows, macOS, and Linux.
-- Remote Agent v3 remains a separate experimental path and is not removed before migration and acceptance.
+- Two-computer installation, Token revocation, disconnect recovery and login startup.
+- Repeated messages in existing Codex/DSH tasks, absent hosts and visible actual replies.
+- Startup and failed-update recovery on Windows, macOS and Linux.
+
+## Capability boundary
+
+The implementation unifies instance identity, catalogs, Agent management and remote transport. Instances link to their bound routes' shared complete settings. Advanced task dispatch, state isolation and Hook ownership have implementation and local contract coverage; plan responses, the message-processing board and full workflows still require acceptance with real remote hosts. A connected node or passing local fixture does not prove two-computer or complete advanced-feature parity.

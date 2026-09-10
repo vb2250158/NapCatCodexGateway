@@ -80,6 +80,7 @@ const QA_STEP_ID = /^(?:qa|verify)(?:[-_:].*)?$/i;
 
 function isQaVerdictFeedback(feedback: PlanFeedbackRecord): boolean {
   return feedback.kind === "approval_suggestion"
+    && feedback.deliveryStatus !== "record_only"
     && feedback.author === "user"
     && feedback.source !== "agent";
 }

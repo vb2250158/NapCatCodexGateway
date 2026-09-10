@@ -1,6 +1,7 @@
 import type http from "node:http";
 import type { LanAgentRegistry } from "./lanAgentRegistry.js";
 import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
+import type { InstanceAgent } from "../shared/agentInstance.js";
 
 export type LanAgentRoutesContext = {
   readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
@@ -9,6 +10,9 @@ export type LanAgentRoutesContext = {
   isManagementRequestAuthorized: (request: http.IncomingMessage, requestUrl: URL) => boolean;
   registry: LanAgentRegistry;
   releases: LanAgentReleaseStore;
+  localAgents?: () => InstanceAgent[];
+  handleInstanceHook?: (instanceId: string, agentId: string, body: Record<string, unknown>, request: http.IncomingMessage) => Promise<unknown>;
+  manageLocalAgent?: (agentId: string, operation: string, body: Record<string, unknown>) => Promise<unknown>;
 };
 
 function errorMessage(error: unknown): string {
@@ -45,6 +49,37 @@ export function handleLanAgentApi(
   response: http.ServerResponse,
   context: LanAgentRoutesContext
 ): boolean {
+  if (requestUrl.pathname === "/api/lan-agent/instances" && request.method === "GET") {
+    if (!context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED"); return true; }
+    context.jsonResponse(response, 200, { code: 0, instances: context.registry.listInstances(context.localAgents?.()) });
+    return true;
+  }
+  const instanceAction = requestUrl.pathname.match(/^\/api\/lan-agent\/instances\/([^/]+)\/agents(?:\/([^/]+)\/(tasks|configure|scan|threads|hooks|context))?$/);
+  if (instanceAction && request.method === "POST") {
+    if (!context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED"); return true; }
+    void context.readJsonBody<Record<string, unknown>>(request).then(async body => {
+      const instanceId = decodeURIComponent(instanceAction[1]!);
+      const agentId = instanceAction[2] ? decodeURIComponent(instanceAction[2]) : undefined;
+      if (instanceId === context.registry.localInstanceId) {
+        if (!agentId || !context.manageLocalAgent) throw new Error("Local Agent management is unavailable.");
+        return context.manageLocalAgent(agentId, instanceAction[3] || "configure", body);
+      }
+      if (instanceAction[3] === "context") {
+        if (!agentId || !context.handleInstanceHook) throw new Error("Instance Hook handler is unavailable.");
+        return context.handleInstanceHook(instanceId, agentId, body, request);
+      }
+      if (instanceAction[3] === "tasks") {
+        const agent = context.registry.listInstances().find(instance => instance.instanceId === instanceId)?.agents.find(agent => agent.agentId === agentId);
+        if (!agent) throw new Error("Instance Agent was not found. Refresh the instance catalog.");
+        if (body.provider && body.provider !== agent.provider) throw new Error("Route provider does not match the bound instance Agent.");
+        const task = context.registry.assignTask({ nodeId: instanceId, agentId, targetAgent: agent.provider, message: String(body.message || ""), idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined });
+        return context.registry.waitForTaskAcceptance(task.taskId);
+      }
+      return context.registry.manageAgent(instanceId, instanceAction[3] || "configure", { ...body, agentId }, instanceAction[3] === "hooks" ? 90_000 : 30_000);
+    }).then(result => context.jsonResponse(response, 200, { code: 0, result, ...(instanceAction[3] === "context" ? { data: result } : {}) }))
+      .catch(error => context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) }));
+    return true;
+  }
   if (request.method === "GET" && requestUrl.pathname === "/api/lan-agent/releases/manifest") {
     if (!context.isReleaseRequestAuthorized(request)) {
       agentUnauthorized(response, context);
@@ -102,21 +137,22 @@ export function handleLanAgentApi(
     const nodeId = decodeURIComponent(nodeMatch[1] ?? "");
     const action = nodeMatch[2] ?? "";
     void context.readJsonBody<Record<string, unknown>>(request)
-      .then(body => {
+      .then(async body => {
         if (action === "update") {
           const version = typeof body.version === "string" && body.version.trim()
             ? body.version.trim()
             : context.releases.manifest().version;
           return context.registry.requestUpdate(nodeId, version);
         }
-        return context.registry.assignTask({
+        const task = context.registry.assignTask({
           nodeId,
-          targetAgent: String(body.targetAgent ?? ""),
+          targetAgent: String(body.targetAgent || context.registry.listNodes().find(node => node.nodeId === nodeId)?.agentTypes?.[0] || ""),
           message: String(body.message ?? ""),
           cwd: typeof body.cwd === "string" ? body.cwd : undefined,
           taskId: typeof body.taskId === "string" ? body.taskId : undefined,
           idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined
         });
+        return context.registry.waitForTaskAcceptance(task.taskId);
       })
       .then(result => context.jsonResponse(response, 202, { code: 0, result }))
       .catch(error => context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) }));

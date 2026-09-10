@@ -248,6 +248,7 @@ export type MetaPayload = {
 };
 
 export type RolePlanStep = {
+  questions?: import("@shared/planQuestions").PlanQuestion[];
   id: string;
   title: string;
   detail?: string;
@@ -317,6 +318,7 @@ export type RolePlan = {
   attachments: PlanAttachmentPresentation[];
   steps: RolePlanStep[];
   project?: { name?: string; path?: string };
+  messageChannels?: import("@shared/agentHookAutomation").AgentHookDestination[];
   source?: { kind?: string; summary?: string };
   secretaryBinding?: {
     agentType: "codex" | "dsh";

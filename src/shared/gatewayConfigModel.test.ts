@@ -423,7 +423,8 @@ test("Codex Hook settings default enabled and preserve explicit opt-out", () => 
     planTaskCompletionEnabled: true,
     agentCommunicationEnforcementEnabled: true,
     onlyPrimaryPersonaCanSendMessages: false,
-    completionDeliveries: []
+    completionDeliveries: [],
+    planFollowup: { enabled: false, cooldownSeconds: 300, rules: [] }
   });
   const normalized = normalizeGatewayDefinition(gateway({
     codexHooks: {
@@ -440,7 +441,8 @@ test("Codex Hook settings default enabled and preserve explicit opt-out", () => 
     planTaskCompletionEnabled: false,
     agentCommunicationEnforcementEnabled: false,
     onlyPrimaryPersonaCanSendMessages: true,
-    completionDeliveries: []
+    completionDeliveries: [],
+    planFollowup: { enabled: false, cooldownSeconds: 300, rules: [] }
   });
 });
 

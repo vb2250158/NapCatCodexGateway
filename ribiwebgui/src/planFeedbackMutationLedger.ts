@@ -85,7 +85,9 @@ export class PlanFeedbackMutationLedger {
     if (existing) {
       throw new Error("Plan feedback is still unresolved; retry the same content before submitting edited feedback.");
     }
-    const feedbackId = this.cryptoProvider.randomUUID();
+    const feedbackId = typeof this.cryptoProvider?.randomUUID === "function"
+      ? this.cryptoProvider.randomUUID()
+      : `feedback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     const pending = Object.freeze({ roleId: normalizedRoleId, planId: normalizedPlanId, signature, feedbackId });
     snapshot.set(key, pending);
     this.persist(snapshot);

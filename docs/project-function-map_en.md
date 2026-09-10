@@ -6,6 +6,10 @@ English | <a href="./project-function-map.md">简体中文</a>
 
 # RabiRoute Project Function Map
 
+See [mobile recording UI](rabilink-mobile-recording-ui_en.md) for daily navigation, capture modes, offline WAV, video sessions and replay. Local recording does not require Relay; existing conversation speech processing remains advanced compatibility.
+
+See [Cross-PC calls and target grants](rabilink-peer-rpc_en.md) for discovery, plan summaries and persona file manifests. LAN preference, P2P attempts and Relay fallback share an encrypted contract. Public-network and sustained dual-PC acceptance remain pending.
+
 See [Direct-video integration and acceptance](rabilink-direct-video_en.md) for the experimental phone-to-PC path. Android owns SDK capture and sending, the RabiLink plugin owns PC reception, and Relay exchanges SDP only. Data-channel transfer is verified; glasses capture and cross-network connectivity remain unverified.
 
 > Status: current fact map. Manager has 29 independent built-in plugin packages. External-system acceptance still follows [Current Capabilities](current-capabilities_en.md).
@@ -73,6 +77,8 @@ The central HTTP chain is limited to LAN authentication, the read-only write gat
 Trusted built-in plugins run in the Manager process. Unknown, untrusted, or high-risk extensions use a separate process and a least-capability protocol as additional RabiRoute hardening. Ordinary DSH plugins also run in the main process; Cordis scope/isolate is not a process sandbox.
 
 ## Current function index
+
+Source hot patches discover and register new catalog modules, then apply code and resource updates through a common host service without changing the hot-patch core. See [source hot patches](source-hot-patches_en.md) for integration, state-migration boundaries, and acceptance scope.
 
 | Function | Maturity | Source / trigger | Side effects | API / UI | Main code |
 | --- | --- | --- | --- | --- | --- |
@@ -147,7 +153,7 @@ Trusted built-in plugins run in the Manager process. Unknown, untrusted, or high
 - Persistent plan-secretary control uses one writer per `planId` and allows different plans to proceed in parallel. Shared ledgers merge under a short lock with atomic replacement. Complete lock metadata is atomically published; stale or corrupt locks fail closed and require quiescent maintenance repair. Same-key claims and clarifications persist a reservation before delivery and never auto-resend an uncertain result. Audit compares before/after snapshots to distinguish stable invalid data from concurrent incomplete observations, so one active cycle never becomes a global barrier for audit or reconciliation.
 - Tencent Sheet sources, direct or generic user requests, and work-group issues with a verified quoted claim all use the managed `register-external` action before secretary `begin → finish`. Work-group registration is restricted to the configured work group `<WORK_GROUP_ID>` and requires the real `sourceMessageId` plus a matching claim receipt with `status=sent` and `sentMessageId`; it also validates unique plan/task bindings, at least two deduplication passes, and the same workspace across the input, plan, and task's current execution before producing a `governanceVersion=3` mapping. A Codex task's saved default cwd does not participate. Tencent stable-row keys and user-request canonical signatures keep their existing semantics, and `issue-threads.json` must not be edited manually.
 - When a legacy claim used the unified Outbox but did not populate the dedicated receipt ledger, registration recovers it only if both the local outbound conversation record and a live NapCat message readback prove the same group, sent message, and quoted source. Input alone or one-sided logs cannot create a receipt, and recovery never resends the group message.
-- Work-group `begin` identifies the business task through the registration mapping, plan binding, and full Desktop task ID, while the plan workspace supplies the current execution directory. PangHu accepts `[PangHu][explicit task type] ...`; RabiRoute governance tasks currently accept only `[RabiRoute][Bug] ...`. New registrations reject an invalid live title. An invalid legacy title is migrated atomically under the issue-ledger lock only when the live title is valid for the same task and current execution workspace. Neither titles nor the task's saved default cwd replace stable identity, source, claim-receipt, deduplication, or uniqueness checks.
+- Work-group `begin` identifies the business task through the registration mapping, plan binding, and full Desktop task ID, while the plan workspace supplies the current execution directory. Project workflows define title conventions; titles do not determine routing identity. New registrations reject an invalid live title. An invalid legacy title is migrated atomically under the issue-ledger lock only when the live title is valid for the same task and current execution workspace. Neither titles nor the task's saved default cwd replace stable identity, source, claim-receipt, deduplication, or uniqueness checks.
 - WebGUI locale is only a browser UI preference. Route/persona IDs, rule names, templates, regexes, task names, paths, tokens, logs, and runtime values are not translated; User Guide selects the matching file under `docs/user-guide/`.
 
 ## Runtime data
@@ -219,3 +225,9 @@ The conversation ledger is the automatic recent-context source. It is scoped by 
 - reply / outbound / approval: Outbox and Action Gate.
 - memory / plan / skill / consolidation: Role Knowledge.
 - replay / logs / delivery: evidence and runtime diagnostics.
+
+See the [message template inventory](message-delivery-templates_en.md) for delivery scenarios and entry points.
+
+### Local and remote instances
+
+Entry `#/lan-agents`: setup prompt, instance → Agent management, tasks, models and Hook installation. Routes use `instanceId + agentId`. Shared contract: `src/shared/agentInstance.ts`; operations: `src/agentAdapters/instanceManagement.ts`. See [setup boundaries](lan-rabi-agent-bootstrap_en.md).

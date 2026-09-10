@@ -133,6 +133,7 @@ export class MemoryConsolidationScheduler {
     if (this.stopped) return;
     this.cancelDeadline();
     const targets = this.uniqueTargets();
+    this.failureCircuits.retain(targets.map(target => target.roleKey));
     const pendingByRole = new Map<string, DueMemoryConsolidationRun>();
     const nextTriggerByRole = new Map<string, number | undefined>();
     let retryAt: number | undefined;

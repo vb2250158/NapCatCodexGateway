@@ -1,5 +1,6 @@
 import path from "node:path";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
+import { configuredInstanceBinding, readBoundInstanceAgent, requestInstanceThread, instanceWorkerStateDirectory } from "./agentAdapters/instanceClient.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
@@ -139,6 +140,8 @@ export type ForwardMessageOptions = {
 let messageAgentPool: MessageAgentPool | undefined;
 let memoryConsolidationAgent: MemoryConsolidationAgent | undefined;
 let messageGroupingQueue: MessageGroupingQueue | undefined;
+let messageAgentPoolScope = "";
+let memoryConsolidationAgentScope = "";
 
 /** Clears process-local grouping workers so tests and runtime reconfiguration do not reuse stale gateway settings. */
 export function resetMessageProcessingRuntime(): void {
@@ -146,6 +149,8 @@ export function resetMessageProcessingRuntime(): void {
   messageGroupingQueue = undefined;
   messageAgentPool = undefined;
   memoryConsolidationAgent = undefined;
+  messageAgentPoolScope = "";
+  memoryConsolidationAgentScope = "";
 }
 
 function primaryManagedAgentBinding(): {
@@ -154,6 +159,7 @@ function primaryManagedAgentBinding(): {
   sessionName: string;
   workspace: string;
 } | undefined {
+  if (configuredInstanceBinding(config.primaryAgentAdapter || "")) return undefined;
   if (config.primaryAgentAdapter === "dsh" && config.dshSessionId && config.dshSessionName && config.dshCwd) {
     return {
       agentAdapter: "dsh",
@@ -174,17 +180,31 @@ function primaryManagedAgentBinding(): {
 }
 
 function messageAgentModeEnabled(): boolean {
-  return Boolean(primaryMessageProcessingAgentAdapter(config) && primaryManagedAgentBinding());
+  return Boolean(primaryMessageProcessingAgentAdapter(config) && (configuredInstanceBinding(config.primaryAgentAdapter || "") || primaryManagedAgentBinding()));
 }
 
-function activeMessageAgentPool(): MessageAgentPool {
-  if (messageAgentPool) return messageAgentPool;
-  const binding = primaryManagedAgentBinding();
+async function managedAgentExecution() {
+  const instanceBinding = configuredInstanceBinding(config.primaryAgentAdapter || "");
+  if (!instanceBinding) return { binding: primaryManagedAgentBinding(), dataDir: config.dataDir, dependencies: {} };
+  const agent = await readBoundInstanceAgent(instanceBinding);
+  const adapter = agent.provider === "codex-desktop" ? "codex" : agent.provider;
+  if ((adapter !== "codex" && adapter !== "dsh") || adapter !== config.primaryAgentAdapter) throw new Error("The instance task provider does not match the configured primary Agent.");
+  return {
+    binding: { agentAdapter: adapter as "codex" | "dsh", sessionId: agent.sessionId!, sessionName: agent.name, workspace: agent.workspace! },
+    dataDir: instanceWorkerStateDirectory(config.dataDir, instanceBinding, agent.sessionId!),
+    dependencies: { request: (payload: Record<string, unknown>) => requestInstanceThread(instanceBinding, payload) }
+  };
+}
+
+async function activeMessageAgentPool(): Promise<MessageAgentPool> {
+  const execution = await managedAgentExecution();
+  const { binding } = execution;
+  if (messageAgentPool && messageAgentPoolScope === execution.dataDir) return messageAgentPool;
   const adapter = primaryMessageProcessingAgentAdapter(config);
   const policy = adapter ? config.messageProcessingAgents[adapter] : undefined;
   if (!binding || !adapter || !policy?.enabled) throw new Error("Primary Agent Message Agent mode is not enabled.");
   messageAgentPool = new MessageAgentPool({
-    statePath: messageAgentPoolStatePath(config.dataDir),
+    statePath: messageAgentPoolStatePath(execution.dataDir),
     managerBaseUrl: managerBaseUrl(),
     sourceThreadName: binding.sessionName,
     sourceThreadId: binding.sessionId,
@@ -195,18 +215,20 @@ function activeMessageAgentPool(): MessageAgentPool {
     model: policy.model || DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL,
     reasoningEffort: policy.reasoningEffort || DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT,
     maxAgents: policy.maxAgents
-  });
+  }, execution.dependencies);
+  messageAgentPoolScope = execution.dataDir;
   return messageAgentPool;
 }
 
-function activeMemoryConsolidationAgent(): MemoryConsolidationAgent {
-  if (memoryConsolidationAgent) return memoryConsolidationAgent;
-  const binding = primaryManagedAgentBinding();
+async function activeMemoryConsolidationAgent(): Promise<MemoryConsolidationAgent> {
+  const execution = await managedAgentExecution();
+  const { binding } = execution;
+  if (memoryConsolidationAgent && memoryConsolidationAgentScope === execution.dataDir) return memoryConsolidationAgent;
   if (!binding) {
     throw new Error("Primary Agent session id and workspace are required for the dedicated memory consolidation Agent.");
   }
   memoryConsolidationAgent = new MemoryConsolidationAgent({
-    statePath: memoryConsolidationAgentStatePath(config.dataDir),
+    statePath: memoryConsolidationAgentStatePath(execution.dataDir),
     managerBaseUrl: managerBaseUrl(),
     sourceThreadName: binding.sessionName,
     sourceThreadId: binding.sessionId,
@@ -214,7 +236,8 @@ function activeMemoryConsolidationAgent(): MemoryConsolidationAgent {
     workspace: binding.workspace,
     roleId: config.agentRoleId,
     model: config.codexMemoryConsolidationAgentModel
-  });
+  }, execution.dependencies);
+  memoryConsolidationAgentScope = execution.dataDir;
   return memoryConsolidationAgent;
 }
 
@@ -321,7 +344,7 @@ async function deliverPacketToMessageAgent(
     try {
       await measurePerformanceOperation(
         `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.message_agent`,
-        () => activeMessageAgentPool().deliver(group, messageGroupPrompt(group, packetContent), { messageSource })
+        async () => (await activeMessageAgentPool()).deliver(group, messageGroupPrompt(group, packetContent), { messageSource })
       );
       return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
     } catch (error) {
@@ -390,7 +413,7 @@ async function deliverPacketToMessageAgent(
     const referencedSenders = await referencedAgentSendersForMessageGroup(routeId, group);
     const worker = await measurePerformanceOperation(
       `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.message_agent`,
-      () => activeMessageAgentPool().deliver(
+      async () => (await activeMessageAgentPool()).deliver(
         group,
         messageGroupPrompt(group, packetContent, canonicalRequirementId, sourceEvidence),
         {
@@ -657,7 +680,7 @@ async function deliverPacketToMemoryConsolidationAgent(
   try {
     const binding = await measurePerformanceOperation(
       `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.memory_agent`,
-      () => activeMemoryConsolidationAgent().deliver(content, messageSource)
+      async () => (await activeMemoryConsolidationAgent()).deliver(content, messageSource)
     );
     return [{ routeId, ruleId, adapter: binding.agentAdapter, status: "delivered" }];
   } catch (error) {
@@ -1072,11 +1095,7 @@ async function forwardMessageToRoute(
           roleContext.roleId,
           messageAgentGroup
         )
-        : await deliverPacketToPrimaryAgentAdapter(route.id, rule.id, {
-            messageSource: packet.messageSource,
-            messageContent: packet.content,
-            escapeMessageContentHeaders: false
-          }, undefined, imagePaths)));
+        : await deliverPacketToPrimaryAgentAdapter(route.id, rule.id, packet.delivery, undefined, imagePaths)));
   }
 
   const failed = adapterOutcomes.some((outcome) => outcome.status === "failed");

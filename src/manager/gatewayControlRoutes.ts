@@ -2,7 +2,7 @@ import type http from "node:http";
 import type { AgentDeliveryTestResult } from "../agentDeliveryTest.js";
 import type { AgentAdapterType } from "../agentAdapters/types.js";
 import type { DeliveryReplayRequest } from "../deliveryReplay.js";
-import type { GatewayConfigFile } from "../shared/gatewayConfigModel.js";
+import type { GatewayConfigFile, GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import type { ManualTriggerLaunchResult } from "./manualTriggerProcess.js";
 
 export type GatewayAgentDeliveryTestRequest = {
@@ -38,6 +38,8 @@ export type GatewayControlRoutesContext = {
     expectedContentHash: string | undefined,
     operationId: string
   ) => Promise<GatewayConfigFile>;
+  writeGatewayConfig: (id: string, definition: GatewayDefinition, hash: string, operationId: string) => Promise<void>;
+  resolveRouteMutation: (operationId: string) => Promise<{ state: "committed" | "not_committed" }>;
   loadRuntimes: () => Promise<void>;
   syncRunningGateways: () => void;
   runtimeStatuses: () => unknown[];
@@ -398,6 +400,38 @@ export function handleGatewayControlApi(
   response: http.ServerResponse,
   context: GatewayControlRoutesContext
 ): boolean {
+  const mutationMatch = requestUrl.pathname.match(/^\/gateways\/mutations\/([A-Za-z0-9%:._-]+)$/);
+  if (request.method === "GET" && mutationMatch) {
+    const operationId = decodeURIComponent(mutationMatch[1]);
+    runTrackedOperation(context, context.resolveRouteMutation(operationId).then(result => {
+      context.jsonResponse(response, 200, {
+        ...withRouteCatalogVersion(context, context.gatewayPayload({ includeDiagnostics: false, includeConfigDefinitions: true })),
+        receipt: { ...result, operationId, routeConfigHash: context.routeCatalogVersion().routeConfigHash }
+      });
+    }).catch(error => {
+      const failure = publicRouteMutationError(error);
+      context.jsonResponse(response, failure.statusCode, { code: -1, ...failure });
+    }));
+    return true;
+  }
+  const configMatch = requestUrl.pathname.match(/^\/gateways\/([^/]+)\/config$/);
+  if (request.method === "PUT" && configMatch) {
+    runTrackedOperation(context, context.readJsonBody<GatewayDefinition>(request).then(async definition => {
+      const operationId = routeMutationOperationId(request);
+      await context.writeGatewayConfig(decodeURIComponent(configMatch[1]), definition, expectedContentHash(request, context), operationId);
+      // Persistence has its own result; runtime activation cannot turn a committed write into a failed save.
+      let activationError: string | undefined;
+      try { context.syncRunningGateways(); } catch (error) { activationError = errorMessage(error); }
+      context.jsonResponse(response, 200, {
+        ...withRouteMutationReceipt(context, operationId, context.gatewayPayload({ includeDiagnostics: false, includeConfigDefinitions: true })),
+        activation: activationError ? { state: "failed", message: activationError } : { state: "requested" }
+      });
+    }).catch(error => {
+      const failure = publicRouteMutationError(error);
+      context.jsonResponse(response, failure.statusCode, { code: -1, ...failure });
+    }));
+    return true;
+  }
   if (request.method === "GET" && requestUrl.pathname === "/gateways") {
     context.jsonResponse(response, 200, withRouteCatalogVersion(context, context.gatewayPayload({
       includeDiagnostics: requestUrl.searchParams.get("summary") !== "1",

@@ -35,12 +35,16 @@ test("persona Hook migration preserves settings across Agent changes and removes
         { type: "exclude_sessions", sessions: [{ id: "session-b", name: "Task B" }] }],
       destination: { channel: "napcat", gatewayId: "main", params: { target: "group", instanceId: "qq", targetId: "12345" } } };
     config.gateways[0].codexHooks!.completionDeliveries = [completionRule];
+    const followup = { enabled: true, cooldownSeconds: 90, rules: [{ id: "review", enabled: true, statusKeys: ["custom-review"], prompt: "Check remaining work" }] };
+    config.gateways[0].codexHooks!.planFollowup = followup;
     config.gateways[0].agentAdapters = ["copilotCli"];
     repo.writeConfig(config);
     const saved = repo.readConfig().gateways[0];
     assert.equal(saved.codexHooks?.sessionContextEnabled, false);
     assert.equal(saved.codexHooks?.onlyPrimaryPersonaCanSendMessages, true);
     assert.deepEqual(saved.codexHooks?.completionDeliveries, [completionRule]);
+    assert.deepEqual(saved.codexHooks?.planFollowup, followup);
+    assert.deepEqual(JSON.parse(fs.readFileSync(personaPath, "utf8")).codexHooks.planFollowup, followup);
     assert.deepEqual(JSON.parse(fs.readFileSync(personaPath, "utf8")).codexHooks.completionDeliveries, [completionRule]);
     assert.equal(JSON.parse(fs.readFileSync(adapterPath, "utf8")).codexHooks, undefined);
   } finally { fs.rmSync(rootDir, { recursive: true, force: true }); }

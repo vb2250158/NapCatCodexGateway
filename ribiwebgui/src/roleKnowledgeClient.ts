@@ -135,6 +135,10 @@ type RolePlanSummary = Pick<
 };
 
 type ManagerEnvelope<T> = {
+  errorMessages?: { "zh-CN"?: string; en?: string };
+  reason?: string;
+  commitState?: string;
+  nextAction?: string;
   code: number;
   message?: string;
   data?: T;
@@ -148,8 +152,8 @@ export type ManagerResource<T> = {
 export class ManagerRequestError extends Error {
   readonly status: number;
 
-  constructor(message: string, status: number) {
-    super(message);
+  constructor(message: string, status: number, readonly details?: { reason?: string; commitState?: string; nextAction?: string; causeCode?: string; errorMessages?: { "zh-CN"?: string; en?: string } }) {
+    super(details?.nextAction ? `${message}\n${details.nextAction}` : message);
     this.name = "ManagerRequestError";
     this.status = status;
   }
@@ -240,7 +244,7 @@ async function managerResource<T>(
     const response = await boundedManagerFetch(path, init);
     const body = await response.json().catch(() => ({})) as ManagerEnvelope<T>;
     if (!response.ok || body.code !== 0 || body.data == null) {
-      throw new ManagerRequestError(body.message || `Manager request failed (HTTP ${response.status}).`, response.status);
+      throw new ManagerRequestError(body.message || `Manager request failed (HTTP ${response.status}).`, response.status, body);
     }
     const etag = strongEtag(response);
     if (etag && lifecycleKey) managerResourceEtags.set(managerResourceEtagKey(lifecycleKey, path), etag);
@@ -618,7 +622,7 @@ export async function loadRoleMemoryPage(
 export async function submitPlanFeedback(input: {
   roleId: string;
   planId: string;
-  gatewayId: string;
+  gatewayId?: string;
   stepId?: string;
   feedbackId: string;
   text: string;
@@ -626,6 +630,7 @@ export async function submitPlanFeedback(input: {
   planAttachmentIds: string[];
   source: "webgui" | "tray";
   kind: "guidance" | "approval_suggestion";
+  notifyAgent?: boolean;
   expectedRevision: string;
 }): Promise<PlanFeedbackMutationResult> {
   const expectedRevision = String(input.expectedRevision || "").trim();
@@ -661,13 +666,15 @@ export async function submitPlanFeedback(input: {
         source: input.source,
         kind: input.kind,
         author: "user",
-        notifyAgent: true
+        notifyAgent: input.notifyAgent !== false
       })
     }
   );
   const body = await response.json().catch(() => ({})) as ManagerEnvelope<RolePlanFeedback>;
   if (!response.ok || body.code !== 0 || !body.data) {
-    throw new ManagerRequestError(body.message || `Manager request failed (HTTP ${response.status}).`, response.status);
+    throw new ManagerRequestError(body.message || `Manager request failed (HTTP ${response.status}).`, response.status, {
+      errorMessages: body.errorMessages, reason: body.reason, commitState: body.commitState, nextAction: body.nextAction, causeCode: (body as ManagerEnvelope<unknown> & { causeCode?: string }).causeCode
+    });
   }
   if (String(body.data.id || "").trim() !== feedbackId
     || String(body.data.planId || "").trim() !== String(input.planId || "").trim()) {

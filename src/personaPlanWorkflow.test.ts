@@ -52,6 +52,14 @@ test("default persona plan workflow defines the ten current statuses and legacy 
     completed: "完成",
     closed: "关闭"
   });
+  const waitingQa = workflow.statuses.find((status) => status.key === workflow.roles.waitingQa);
+  assert.equal(waitingQa?.label, "等待 QA 验收");
+  assert.equal(waitingQa?.labelEn, "Awaiting QA acceptance");
+  assert.deepEqual(waitingQa?.palette, {
+    accent: "#7c3aed",
+    background: "#f3e8ff",
+    foreground: "#6d28d9"
+  });
   assert.equal(resolvePersonaPlanStatus(workflow, "进行中")?.key, "分析中");
   assert.equal(resolvePersonaPlanStatus(workflow, "已完成")?.key, "完成");
   assert.equal(resolvePersonaPlanStatus(workflow, "已归档")?.key, "关闭");

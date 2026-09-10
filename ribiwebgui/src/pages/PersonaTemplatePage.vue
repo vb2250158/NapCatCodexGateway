@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
+import PlanFollowupSettings from "../components/PlanFollowupSettings.vue";
+import type { PlanFollowupSettings as PlanFollowupConfig } from "@shared/planFollowup";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import PersonaDesktopPetPanel from "../components/PersonaDesktopPetPanel.vue";
 import PersonaIdentityRelationsCard from "../components/PersonaIdentityRelationsCard.vue";
@@ -45,7 +47,7 @@ import { isSpeechRouteVariableKey } from "@shared/speechControlContract";
 import { PERSONA_AVATAR_ACCEPT } from "@shared/personaAvatarContract";
 import { copyTextToClipboard } from "../clipboard";
 import { markdownPreviewExcerpt } from "../markdownPreview";
-import { routeScopedPersonaDocumentPath, routeScopedPersonaPath } from "../routeScopedNavigation";
+import { routeScopedPersonaDocumentPath } from "../routeScopedNavigation";
 import {
   adapterLabel,
   automationRulesForGateway,
@@ -65,8 +67,6 @@ import { personaOptionDisplayName } from "../personaPresentation";
 
 const store = useGatewayStore();
 const speech = useSpeechStore();
-const route = useRoute();
-const router = useRouter();
 const { t } = useI18n();
 const ruleDialog = ref(false);
 const automationDialog = ref(false);
@@ -526,7 +526,7 @@ async function uploadAvatar(event: Event): Promise<void> {
     await personaAvatarClient.upload(gateway.value.agentRoleId, file);
     await Promise.all([store.load({ replaceDirtyConfig: !store.dirty }), speech.refreshPersonas()]);
   } catch (error) {
-    avatarError.value = error instanceof Error ? error.message : String(error);
+    avatarError.value = userFacingError(error);
   } finally {
     avatarSaving.value = false;
   }
@@ -540,7 +540,7 @@ async function removeAvatar(): Promise<void> {
     await personaAvatarClient.remove(gateway.value.agentRoleId);
     await Promise.all([store.load({ replaceDirtyConfig: !store.dirty }), speech.refreshPersonas()]);
   } catch (error) {
-    avatarError.value = error instanceof Error ? error.message : String(error);
+    avatarError.value = userFacingError(error);
   } finally {
     avatarSaving.value = false;
   }
@@ -559,11 +559,11 @@ function setLanguageStyleSkillUrl(value: unknown): void {
   store.touch();
 }
 
-function codexHookEnabled(key: Exclude<keyof CodexHookSettings, "completionDeliveries">): boolean {
+function codexHookEnabled(key: Exclude<keyof CodexHookSettings, "completionDeliveries" | "planFollowup">): boolean {
   return gateway.value?.codexHooks?.[key] !== false;
 }
 
-function setCodexHookSetting(key: Exclude<keyof CodexHookSettings, "completionDeliveries">, enabled: boolean | null): void {
+function setCodexHookSetting(key: Exclude<keyof CodexHookSettings, "completionDeliveries" | "planFollowup">, enabled: boolean | null): void {
   if (!gateway.value) return;
   gateway.value.codexHooks = {
     ...gateway.value.codexHooks,
@@ -576,6 +576,15 @@ function setCodexHookSetting(key: Exclude<keyof CodexHookSettings, "completionDe
   };
   for (const other of store.gateways) {
     if (other.agentRoleId === gateway.value.agentRoleId) other.codexHooks = { ...gateway.value.codexHooks };
+  }
+  store.touch();
+}
+
+function setPlanFollowup(planFollowup: PlanFollowupConfig): void {
+  if (!gateway.value) return;
+  const hooks = { ...normalizeCodexHookSettings(gateway.value.codexHooks), planFollowup };
+  for (const other of store.gateways) {
+    if (other.agentRoleId === gateway.value.agentRoleId) other.codexHooks = { ...hooks };
   }
   store.touch();
 }
@@ -608,7 +617,7 @@ async function refreshVoiceProfile(): Promise<void> {
   try {
     await speech.refreshPersonas();
   } catch (error) {
-    voiceProfileError.value = error instanceof Error ? error.message : String(error);
+    voiceProfileError.value = userFacingError(error);
   } finally {
     voiceProfileRefreshing.value = false;
   }
@@ -620,7 +629,7 @@ async function copyVoiceProfilePath(): Promise<void> {
     await copyTextToClipboard(voiceProfilePath.value);
     voiceProfileCopyResult.value = "voice-profile.json 路径已复制";
   } catch (error) {
-    voiceProfileCopyResult.value = error instanceof Error ? error.message : String(error);
+    voiceProfileCopyResult.value = userFacingError(error);
   }
 }
 
@@ -644,7 +653,7 @@ async function loadPersonaMarkdown(): Promise<void> {
     }
   } catch (loadError) {
     if (requestVersion === personaMarkdownRequestVersion) {
-      personaMarkdownLoadError.value = loadError instanceof Error ? loadError.message : String(loadError);
+      personaMarkdownLoadError.value = userFacingError(loadError);
     }
   } finally {
     if (requestVersion === personaMarkdownRequestVersion) personaMarkdownLoading.value = false;
@@ -700,7 +709,7 @@ async function refreshVoiceIdentityReview(observeConfirmation = false): Promise<
       }
     } while (voiceIdentityRefreshQueued);
   } catch (error) {
-    voiceIdentityError.value = error instanceof Error ? error.message : String(error);
+    voiceIdentityError.value = userFacingError(error);
   } finally {
     voiceIdentityLoading.value = false;
     voiceIdentityRefreshRunning = false;
@@ -820,7 +829,7 @@ async function setVoiceIdentity(
     if (voiceConfirmation.value.candidateKeys.includes(key)) cancelVoiceConfirmation();
     await refreshVoiceIdentityReview();
   } catch (error) {
-    voiceIdentityError.value = error instanceof Error ? error.message : String(error);
+    voiceIdentityError.value = userFacingError(error);
   } finally {
     voiceIdentityBusyKey.value = "";
   }
@@ -948,18 +957,6 @@ onBeforeUnmount(() => {
   managerEventsReady = false;
 });
 
-// URL ↔ gateway 双向同步（放最后避免 TDZ）
-watch([() => route.params.id as string, () => store.gateways], ([id]) => {
-  if (!id || !store.gateways.length) return;
-  const found = store.gateways.find(g => configNameFor(g) === id || g.id === id);
-  if (found && found.id !== store.selectedGatewayId) store.selectGateway(found.id);
-}, { immediate: true });
-
-watch(() => store.selectedGatewayId, (id) => {
-  const gw = store.gateways.find(g => g.id === id);
-  const name = gw ? configNameFor(gw) : id;
-  if (name && route.params.id !== name) router.replace(routeScopedPersonaPath(name));
-});
 </script>
 
 <template>
@@ -1683,6 +1680,8 @@ watch(() => store.selectedGatewayId, (id) => {
                       </div>
                     </div>
                   </div>
+            <PlanFollowupSettings :model-value="gateway.codexHooks?.planFollowup" :role-id="gateway.agentRoleId || ''"
+              @update:model-value="setPlanFollowup" />
             <AgentCompletionDeliveryRules :model-value="gateway.codexHooks?.completionDeliveries ?? []"
               :gateways="store.gateways" @update:model-value="setCompletionDeliveries" />
           </v-window-item>

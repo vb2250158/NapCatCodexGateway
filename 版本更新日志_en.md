@@ -6,6 +6,17 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.0 - 2026-09-10
+
+- Submission validation: the exported staged source builds successfully. WebGUI (291/291), hot patches (80/80), screenshots (60 tests), video (25/25), Windows Host contracts, and isolated built-Manager hot-patch integration pass. Full backend test and retry outcomes are retained in the commit record.
+
+- This source release brings together plan approval and follow-up, knowledge search, cross-PC Agent access, RabiLink recording, and Windows screenshot improvements. It retains the media canvas persistence and H3 workflow updates from 0.2.6.
+- Migration: integrate 0.2.6 before rebuilding; installed versions switch through Host. Preserve local personas, routes, and credentials rather than replacing runtime data with public examples. Device interaction and installed-runtime acceptance remain separately tracked.
+
+- Source hot patches discover new modules, source files, resources, and relative TypeScript dependencies through one catalog. Plugins call `host.manager.source-patches@1`; new modules require no hot-patch core changes. Compatible updates retain state; unsupported structural changes keep the previous version running.
+- Dynamic registrations persist `preparing/active` states and restore confirmed code after restart. Interrupted initialization is not replayed; dependency seed changes and packaged baseline conflicts require explicit migration.
+- Developer Channel fully replaces documentation, plugins, Skills, and source patch catalogs to remove retired entrypoints and include current development guides. See [source hot patches](docs/source-hot-patches_en.md) for capability boundaries and acceptance steps.
+
 ## 0.2.6 - 2026-09-10
 
 - Add image, video, audio and text canvas cards with selection, dragging, zoom, minimap, duplication, asset references and parameter reuse. Server revisions and atomic replacement persist projects; refresh restores cards, parameters and generated audio, while save failures and conflicts are visible.
@@ -25,6 +36,18 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Validation: all 10 video job/model tests, full build and configuration checks pass. Actual H3 text and first/last-frame generation previously passed locally; one-click runtime installation has not been accepted on a fresh machine without Python. Inherited 0.2.3 speech-directory delivery limits remain documented under Unreleased and are not claimed fixed here.
 
 ## Unreleased
+
+- Rabi mobile 0.3.22 opens on recording Home with three capture modes, four-page navigation and a fixed capture button. Adds offline WAV recording, capture exclusion, video session manifests and consecutive segment replay. Historical audio queue recovery now runs off the UI thread, and capture status updates after saving. Automatic glasses streaming still lacks installation acceptance. See [usage and compatibility](docs/rabilink-mobile-recording-ui_en.md).
+
+- RabiLink adds an experimental glasses recorder and automatic phone connection entry. Builds pass, but glasses installation remains unaccepted; native streaming stays available for compatibility. Added a Rokid development skill and bilingual troubleshooting sources, explicitly excluding CXR-M.
+
+- Device discovery exposes `deviceKind`, type/online filters and categorized counts. PCs report their type explicitly; untyped legacy entries remain `unknown`, and registration totals are not presented as PC counts.
+
+- Plans awaiting approval or information support Agent-authored questions, choices and free-text answers through existing plan feedback and task notification. Information requests must record inspected sources, findings and the exact analysis blocker.
+
+- Experimental cross-PC read RPC shares device discovery, prefers LAN, attempts WebRTC P2P, and falls back to bounded Relay transit. Targets grant persona-scoped plan summaries and file manifests. See [Cross-PC API calls](docs/rabilink-peer-rpc_en.md).
+
+- Manager plan DTOs now display QA as `等待 QA 验收` / `Awaiting QA acceptance` while preserving the `等待 QA` status key and purple palette; WebGUI and the Qt tray continue to consume Manager presentation only. The implementation/package/QA four-stage flow applies only to project-content changes such as code, prefabs, assets, or configuration; other plans keep their real flow.
 
 ### 0.2.4 source update
 
@@ -106,7 +129,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ### Plan status and archival
 
-- Each persona's `personaConfig.json.planWorkflow` is now the single configuration source for its plan workflow. `plan.status` stores only an enabled status key; labels, descriptions, colors, order, views, step constraints, approval behavior, completion behavior, and archive eligibility come from configuration. The default template supplies Analyzing, Awaiting information, Awaiting approval, Executing, Awaiting package, Awaiting QA, Awaiting discussion, Paused, Completed, and Closed, but code and clients keep no second enum. Awaiting information is used after analysis has established that the goal, scope, acceptance criteria, or implementation evidence is still insufficient.
+- Each persona's `personaConfig.json.planWorkflow` is now the single configuration source for its plan workflow. `plan.status` stores only an enabled status key; labels, descriptions, colors, order, views, step constraints, approval behavior, completion behavior, and archive eligibility come from configuration. The default template supplies Analyzing, Awaiting information, Awaiting approval, Executing, Awaiting package, Awaiting QA acceptance, Awaiting discussion, Paused, Completed, and Closed; the stable key remains `等待 QA`, but its default display label is `Awaiting QA acceptance`. Code and clients keep no second enum. Awaiting information is used after analysis has established that the goal, scope, acceptance criteria, or implementation evidence is still insufficient.
 - `planWorkflow.schemaVersion=2` adds a distinct role mapping for Awaiting information. The first read of an existing v1 persona configuration preserves custom statuses and relative order while upgrading once; startup does not restore statuses an Agent later removes through the catalog API.
 - Manager adds status-catalog APIs protected by `Idempotency-Key` and revision preconditions. Agents can add or update statuses; removal requires a replacement key, migrates unarchived plans first, and retains a retired definition for archived plans and history. Startup migration rewrites legacy aliases to current keys and removes retired step-phase fields.
 - Archival remains independent through `archiveStatus=未归档 | 已归档`. The persona workflow config determines eligible statuses and delay, archival preserves the plan status, and archived plans are excluded from keyword recall while remaining available by explicit ID or the Archived view.
@@ -223,7 +246,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 ### Offline continuation when the plan control plane is unavailable
 
 - `plan-task-orchestration` now makes one controlled recovery attempt after a Manager availability failure and searches only bounded RabiRoute source candidates. Authorized project work continues when recovery fails or no source checkout exists.
-- PangHu can record intended plan changes, modified files, validation evidence, SVN revisions, and remaining work in the versioned `RabiPlanCache/pending/` queue. After Manager recovers, the agent semantically deduplicates and updates the real plan, then writes a `synced` receipt only after obtaining the real `planId` and a successful reread. The cache never replaces Manager plan state.
+- project-specific can record intended plan changes, modified files, validation evidence, SVN revisions, and remaining work in the versioned `RabiPlanCache/pending/` queue. After Manager recovers, the agent semantically deduplicates and updates the real plan, then writes a `synced` receipt only after obtaining the real `planId` and a successful reread. The cache never replaces Manager plan state.
 
 ### Agent model selection
 
@@ -329,7 +352,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - System screenshots now support moving and resizing the selection with eight handles, rectangle and arrow marks, editable multiline text, color selection, font-size changes, and `Ctrl+Z` undo. Copy, pin, and send bake annotations into the image. Tray and screenshot tests cover annotation bounds, history, clipboard behavior, and actions queued until the image is ready.
 - Message-processing `maxAgents` now defaults to `1`. Route APIs expose worker/affinity readback, cleanup of stale helper tasks scoped to the Route and workspace, and controlled limit changes.
-- For formal PangHu workspaces, the Codex `Stop` Hook sends group progress only for effective progress and deduplicates by plan/progress fingerprint. Completion notification proceeds only after Outbox returns a `sentMessageId` and platform-reference readback succeeds; missing group mapping or platform receipt keeps the task incomplete.
+- For formal project-specific workspaces, the Codex `Stop` Hook sends group progress only for effective progress and deduplicates by plan/progress fingerprint. Completion notification proceeds only after Outbox returns a `sentMessageId` and platform-reference readback succeeds; missing group mapping or platform receipt keeps the task incomplete.
 
 ## 0.2.0 - 2026-08-22
 
@@ -438,16 +461,16 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - XinghaiBuilder's managed issue registration now accepts work-group issues with a verified quoted claim. It restricts the source to the configured work group `<WORK_GROUP_ID>`, verifies the source message and a matching claim receipt with `status=sent` plus `sentMessageId`, enforces unique plan/task bindings, two deduplication passes, and three-way workspace agreement, and idempotently produces a `governanceVersion=3` mapping. Tencent Sheet and direct user-request registration semantics are unchanged.
 - A legacy unified-Outbox claim that was really sent but missed the dedicated receipt ledger can now be recovered only after the local outbound record and the live NapCat reply segment agree. Forged input, one-sided logs, and non-sent records remain rejected, and recovery does not resend the group message.
-- Work-group `begin` no longer limits business-task types to a fixed legacy list. Structurally valid formal tasks such as `[PangHu][只读调查] ...` are validated through full task ID, workspace, plan binding, and registration mapping, while Plan Secretary titles and unstructured impersonation remain rejected.
+- Work-group `begin` no longer limits business-task types to a fixed legacy list. Structurally valid formal tasks such as `[project-specific][只读调查] ...` are validated through full task ID, workspace, plan binding, and registration mapping, while Plan Secretary titles and unstructured impersonation remain rejected.
 
-### PangHu Main development no longer waits for an exclusive Unity workstation
+### project-specific Main development no longer waits for an exclusive Unity workstation
 
-- PangHu plans no longer freeze because the formal Main Unity Editor is open, importing, temporarily unavailable through MCP, or using a shared test queue. The original business task continues implementation, narrow SVN work, static asset and serialization contracts, non-Unity runners, and CLI validation; remaining GameView or interaction checks become human or later runtime acceptance.
-- Plan orchestration, Plan Secretary, closure Skills, completion-message templates, and the PangHu package/QA contract now use the same rule. The Editor and another task's tests remain undisturbed, while unrelated full-suite failures are recorded without blocking matched validation or feature development.
+- project-specific plans no longer freeze because the formal Main Unity Editor is open, importing, temporarily unavailable through MCP, or using a shared test queue. The original business task continues implementation, narrow SVN work, static asset and serialization contracts, non-Unity runners, and CLI validation; remaining GameView or interaction checks become human or later runtime acceptance.
+- Plan orchestration, Plan Secretary, closure Skills, completion-message templates, and the project-specific package/QA contract now use the same rule. The Editor and another task's tests remain undisturbed, while unrelated full-suite failures are recorded without blocking matched validation or feature development.
 
 ### Package and QA use a four-stage delivery lifecycle
 
-- Non-terminal plans expose only green `In progress`, blue `Awaiting package`, purple `Awaiting QA`, gray `Paused`, red `Awaiting approval`, and orange `Awaiting manual verification`. External decisions, permissions, information, assets, accounts, devices, owners, and receipts remain internal gap details; `manual-verify-*` appears only after development closure when a visual or interaction check remains.
+- Non-terminal plans expose only green `In progress`, blue `Awaiting package`, purple `Awaiting QA acceptance`, gray `Paused`, red `Awaiting approval`, and orange `Awaiting manual verification`. The stable QA status key remains `等待 QA`; external decisions, permissions, information, assets, accounts, devices, owners, and receipts remain internal gap details; `manual-verify-*` appears only after development closure when a visual or interaction check remains.
 - Awaiting package reads revisions, applicability, matching-test results, submission, and conflict-free readback from the plan's completed delivery steps. A later delivery-verification step does not return a plan to In progress when those five requirements are complete and only package identity or inclusion proof is missing; a missing requirement continues the original task.
 - QA sending and `sentMessageId` no longer create a `package complete, send QA` main stage. Inside green QA, a missing receipt selects `send_qa_request`; a real receipt with only the verdict outstanding selects `wait_for_qa_result`. Strict audit rejects contradictory structured steps and wait text.
 - QA feedback is consumed only for a structured QA step when a user or external source states an explicit QA verdict. Guidance responses, approval responses, Agent-reported test counts, and bare `passed / verified` prose cannot complete a plan.
@@ -1513,7 +1536,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - `node --check scripts/rabilink-relay-server.mjs` passed.
 - `:app:assembleDebug` passed, the mobile phone APK was successfully installed, and the glasses APK was successfully installed after retrying and the CustomApp was started.
 - `ar-glasses-gui-design` skill verification passed.
-- Online Relay has been deployed and verified that `https://rabiroute.cottongame.com/health` and `/manage` are accessible, and the console page has been updated with "copy complete token at any time" logic.
+- Online Relay has been deployed and verified that `/health` and `/manage` are accessible, and the console page has been updated with "copy complete token at any time" logic.
 
 ## 0.1.5 - 2026-07-07
 
@@ -2004,3 +2027,22 @@ This update organizes the configuration structure of RabiRoute from the old sing
 - `npm run check:config` passed.
 - The local manager has been restarted with the new build and confirmed that `8790`, `8789`, `8791` are listening properly.
 - A desensitization scan has been performed before release, public examples and documents use placeholder values, and no runtime `data/`, logs, tokens, cookies or real accounts have been submitted.
+
+
+### Delivery templates and receipt structure
+
+Unify provenance, body, context and reply parameters without generic collaboration blocks; retain complete identities, times and API fields. New receipt recovery uses durable structured results and prompt digests, with pending historical compatibility. Merged replay preserves original times; notifications report turn results. See [template architecture](docs/message-delivery-templates_en.md).
+
+### Remote Agent setup and Route binding
+
+- The Remote Agent page copies a prompt for the current Manager. The target Agent checks dependencies, downloads and verifies the worker, binds its current task and starts the connection.
+- Add AGENT lists RemoteAgent(<IP address>) nodes and saves a stable node reference, usable as the primary Route handler. Host types are hidden; this is an Agent adapter, not a message input.
+- Worker 0.1.1 supports Codex Desktop and DSH. Management authentication, acceptance receipts and developer package resources are fixed. Real two-computer installation and host acceptance remain pending.
+
+### Instance Agent architecture (connector 0.2.0)
+
+- Local and remote computers share the instance catalog. Routes use instanceId + agentId; the unreleased special lanAgent provider was removed.
+- Shared basic editor and remote multi-Agent configuration, scans, task operations, Hook installation and current-Manager context.
+- Instances link to their bound routes' complete settings. Message-processing and memory-consolidation state is isolated by instance and primary task; registered assistant tasks use their owning computer. Reinstallation preserves instance and Agent identities.
+- Fixed installed connector resource lookup, task-operation failure messages, and remote settings reading local task values.
+- Added a real connector/WebSocket two-Agent delivery fixture. Real two-computer and complete advanced-feature parity acceptance remain pending.

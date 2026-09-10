@@ -285,3 +285,20 @@ test("startup recovery replays a missing feedback, defers active work, and class
   assert.equal(unreadable.state, "failed");
   assert.equal(sends, 1);
 });
+
+
+test("startup recovery never wakes Agents for record-only feedback, including legacy post-commit metadata", async () => {
+  const fixture = createCandidateFixture();
+  const saved = { ...fixture.feedback, deliveryStatus: "record_only" as const };
+  appendPlanFeedback(fixture.roleDir, saved);
+  let work = 0;
+  const outcome = await recoverPlanFeedbackCandidate({ ...fixture, feedback: saved }, {
+    query: queryRecoveryForTest,
+    updateDelivery: updateDeliveryForTest,
+    inspect: async () => { work += 1; return "missing"; },
+    schedule: async () => { work += 1; },
+    postCommit: async () => { work += 1; return { outcome: "ignored", record: saved }; }
+  });
+  assert.equal(outcome.state, "deferred");
+  assert.equal(work, 0);
+});

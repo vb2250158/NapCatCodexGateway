@@ -53,7 +53,7 @@ export async function boundedRouteCatalogMutationFetch(
   }
 }
 
-function canonicalJson(value: unknown): string {
+export function canonicalJson(value: unknown): string {
   if (value === null) return "null";
   if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number") return Number.isFinite(value) ? JSON.stringify(value) : "null";
@@ -71,12 +71,32 @@ function canonicalJson(value: unknown): string {
   throw new TypeError(`Route catalog mutation contains a non-JSON value: ${typeof value}`);
 }
 
+// The signature only keys this page-session retry ledger; the Manager still
+// fences every write with its authoritative routeConfigHash. Some embedded
+// WebViews do not expose Web Crypto on an HTTP loopback origin, so retain a
+// deterministic, fixed-width fallback instead of making Save unavailable.
+function fallbackSignature(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const part = (hash >>> 0).toString(16).padStart(8, "0");
+  return part.repeat(8);
+}
+
+function fallbackOperationId(): string {
+  const entropy = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER).toString(36);
+  return `${Date.now().toString(36)}-${entropy}`;
+}
+
 export async function canonicalRouteCatalogMutationSignature(
   value: unknown,
   cryptoProvider: Crypto = globalThis.crypto
 ): Promise<string> {
-  if (!cryptoProvider?.subtle) throw new Error("Web Crypto SHA-256 is required for Route mutation idempotency.");
-  const digest = await cryptoProvider.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
+  const input = canonicalJson(value);
+  if (!cryptoProvider?.subtle) return fallbackSignature(input);
+  const digest = await cryptoProvider.subtle.digest("SHA-256", new TextEncoder().encode(input));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -153,7 +173,7 @@ export class RouteCatalogMutationLedger {
     if (!/^[a-f0-9]{64}$/.test(expectedContentHash)) {
       throw new Error("A current Route catalog routeConfigHash is required for a new mutation.");
     }
-    const operationId = `route-catalog:${kind}:${this.cryptoProvider.randomUUID()}`;
+    const operationId = `route-catalog:${kind}:${this.cryptoProvider?.randomUUID?.() ?? fallbackOperationId()}`;
     const pending = Object.freeze({ kind, signature, operationId, expectedContentHash });
     snapshot.set(key, pending);
     this.persist(snapshot);
@@ -165,6 +185,10 @@ export class RouteCatalogMutationLedger {
     const key = this.key(pending.kind, pending.signature);
     if (snapshot.get(key)?.operationId === pending.operationId) snapshot.delete(key);
     this.persist(snapshot);
+  }
+
+  unresolved(): PendingRouteCatalogMutation[] {
+    return [...this.snapshot().values()];
   }
 }
 

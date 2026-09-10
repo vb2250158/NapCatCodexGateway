@@ -13,6 +13,38 @@ type ConnectedClient = {
   waitFor: (type: string) => Promise<Record<string, unknown>>;
 };
 
+test("instance identity survives restart and management replies stay on their authenticated connection", async () => {
+  const statePath = temporaryStatePath();
+  const registry = new LanAgentRegistry({ statePath });
+  const server = http.createServer();
+  registry.attach(server, { enabled: () => true, getToken: () => "fixture" });
+  const port = await listen(server);
+  let alpha: ConnectedClient | undefined;
+  let beta: ConnectedClient | undefined;
+  try {
+    const agents = [{ agentId: "first", name: "Agent", provider: "codex-desktop", enabled: true }];
+    alpha = await connectNode(port, "fixture", "alpha", agents);
+    beta = await connectNode(port, "fixture", "beta", agents);
+    assert.equal(registry.listInstances()[0]?.local, true);
+    assert.equal(registry.listInstances()[1]?.agents[0]?.agentId, "first");
+    const pending = registry.manageAgent("alpha", "scan", {});
+    const request = await alpha.waitFor("manageAgent");
+    beta.socket.send(JSON.stringify({ type: "managementResult", requestId: request.requestId, result: "wrong-owner" }));
+    alpha.socket.send(JSON.stringify({ type: "managementResult", requestId: request.requestId, result: "right-owner" }));
+    assert.equal(await pending, "right-owner");
+    const restored = new LanAgentRegistry({ statePath });
+    assert.equal(restored.localInstanceId, registry.localInstanceId);
+    restored.close();
+    const disconnected = registry.manageAgent("alpha", "scan", {});
+    alpha.socket.close();
+    await assert.rejects(disconnected, /disconnected/);
+  } finally {
+    alpha?.socket.close(); beta?.socket.close(); registry.close();
+    await closeServer(server);
+    fs.rmSync(path.dirname(statePath), { recursive: true, force: true });
+  }
+});
+
 function temporaryStatePath(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-lan-agent-registry-"));
   return path.join(root, "state.json");
@@ -34,7 +66,7 @@ function closeServer(server: http.Server): Promise<void> {
   return new Promise(resolve => server.close(() => resolve()));
 }
 
-async function connectNode(port: number, token: string, nodeId: string): Promise<ConnectedClient> {
+async function connectNode(port: number, token: string, nodeId: string, agents?: Array<Record<string, unknown>>): Promise<ConnectedClient> {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/api/lan-agent/connect`);
   const messages: Array<Record<string, unknown>> = [];
   const waiters = new Map<string, Array<(message: Record<string, unknown>) => void>>();
@@ -56,7 +88,7 @@ async function connectNode(port: number, token: string, nodeId: string): Promise
   await new Promise<void>((resolve, reject) => { socket.once("open", () => resolve()); socket.once("error", reject); });
   socket.send(JSON.stringify({ type: "authenticate", token }));
   await waitFor("authenticated");
-  socket.send(JSON.stringify({ type: "hello", node: { nodeId, version: "0.1.0", platform: "win32-x64", agentTypes: ["codex-desktop"], allowedWorkspaces: ["C:/work"] } }));
+  socket.send(JSON.stringify({ type: "hello", node: { nodeId, version: "0.1.0", platform: "win32-x64", agentTypes: ["codex-desktop"], allowedWorkspaces: ["C:/work"], agents } }));
   await waitFor("connected");
   return { socket, messages, waitFor };
 }
@@ -84,15 +116,20 @@ test("LAN Agent registry authenticates, persists state, routes updates, and prot
 
     const task = registry.assignTask({ nodeId: "node-alpha", targetAgent: "codex-desktop", message: "Inspect the workspace", cwd: "C:/work", idempotencyKey: "task-key" });
     assert.equal(task.status, "delivered");
+    assert.throws(() => registry.assignTask({ nodeId: "node-alpha", targetAgent: "codex-desktop", message: "Different payload", cwd: "C:/work", idempotencyKey: "task-key" }), /different message/);
+    await assert.rejects(registry.waitForTaskAcceptance(task.taskId, 5), /not confirmed/);
     assert.equal(((await alpha.waitFor("assignTask")).task as { taskId?: unknown } | undefined)?.taskId, task.taskId);
     alpha.socket.send(JSON.stringify({ type: "ackTask", taskId: task.taskId }));
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(registry.listTasks()[0]?.status, "acknowledged");
+    const accepted = registry.waitForTaskAcceptance(task.taskId);
+    alpha.socket.send(JSON.stringify({ type: "progress", taskId: task.taskId, summary: "owner accepted" }));
+    assert.equal((await accepted).status, "progress");
 
     beta = await connectNode(port, "lan-token", "node-beta");
     beta.socket.send(JSON.stringify({ type: "taskResult", taskId: task.taskId, status: "completed", summary: "not allowed" }));
     await beta.waitFor("error");
-    assert.equal(registry.listTasks().find(item => item.taskId === task.taskId)?.status, "acknowledged");
+    assert.equal(registry.listTasks().find(item => item.taskId === task.taskId)?.status, "progress");
 
     alpha.socket.send(JSON.stringify({ type: "taskResult", taskId: task.taskId, status: "completed", summary: "done" }));
     await new Promise(resolve => setTimeout(resolve, 20));

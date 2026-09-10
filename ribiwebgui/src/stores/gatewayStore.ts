@@ -20,14 +20,10 @@ import {
 } from "../utils/gatewayHelpers";
 import { routeKeyFromWebguiHash } from "../routeScopedNavigation";
 import {
-  agentAdapterSupportsManagedTaskFeature,
   agentAdapterValues,
-  autoAssignGatewayPorts as sharedAutoAssignGatewayPorts,
-  resolvePrimaryAgentAdapter,
-  validateGatewayPortConflicts
+  resolvePrimaryAgentAdapter
 } from "@shared/gatewayConfigModel";
-import { bindAgentSessionsForSave } from "@shared/codexSessionBinding";
-import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL } from "@shared/codexMemoryConsolidationAgent";
+import { cloneGatewayValue, mergeGatewayDraft, sameGatewayValue } from "../gatewayDraft";
 import {
   boundedRouteCatalogMutationFetch,
   committedRouteCatalogRevision,
@@ -85,15 +81,6 @@ function normalizeAgentAdapterType(value: unknown): AgentAdapterType | null {
   return isAgentAdapterType(value) ? value : null;
 }
 
-function selectedGatewayIdFromLocation(items: GatewayDefinition[]): string {
-  const raw = routeKeyFromWebguiHash(window.location.hash);
-  if (!raw) return "";
-  return items.find(gateway =>
-    gateway.id === raw
-    || configNameFor(gateway) === raw
-  )?.id || "";
-}
-
 export const useGatewayStore = defineStore("gateway", () => {
   const gateways = ref<GatewayDefinition[]>([]);
   const managerRows = ref<RuntimeStatus[]>([]);
@@ -106,12 +93,21 @@ export const useGatewayStore = defineStore("gateway", () => {
   const networkOptions = ref<NetworkOptions>({ adapters: {}, localAddresses: [], httpServers: [], websocketClients: [] });
   const configFiles = ref<Record<string, string>>({});
   const selectedGatewayId = ref("");
+  const requestedRouteKey = ref(routeKeyFromWebguiHash(window.location.hash));
+  const routeConfigLoaded = ref(false);
   const loading = ref(false);
   const diagnosticsLoading = ref(false);
   const diagnosticsLoaded = ref(false);
   const saving = ref(false);
-  const dirty = ref(false);
-  const editVersion = ref(0);
+  const savedGateways = ref<GatewayDefinition[]>([]);
+  const dirty = computed(() => !sameGatewayValue(
+    [...gateways.value].sort((a, b) => a.id.localeCompare(b.id)),
+    [...savedGateways.value].sort((a, b) => a.id.localeCompare(b.id))
+  ));
+  const saveState = ref<"idle" | "saving" | "confirming" | "saved" | "conflict" | "error">("idle");
+  const saveMessage = ref("");
+  let saveFlight: Promise<void> | undefined;
+  const pendingSaveDrafts = new Map<string, { id: string; submitted: GatewayDefinition }>();
   const error = ref("");
   const quickSetupDialogOpen = ref(false);
   const pendingSelectedConfigName = ref("");
@@ -145,12 +141,22 @@ export const useGatewayStore = defineStore("gateway", () => {
     computerName: ""
   });
 
-  const selectedIndex = computed(() => {
-    const index = gateways.value.findIndex(gateway => gateway.id === selectedGatewayId.value);
-    return index >= 0 ? index : 0;
-  });
-
+  const selectedIndex = computed(() => gateways.value.findIndex(gateway => gateway.id === selectedGatewayId.value));
   const selectedGateway = computed(() => gateways.value[selectedIndex.value] || null);
+  const routeSelectionMissing = computed(() => routeConfigLoaded.value && Boolean(requestedRouteKey.value) && !selectedGateway.value);
+
+  function syncRouteSelection(hash = window.location.hash): void {
+    requestedRouteKey.value = routeKeyFromWebguiHash(hash);
+    if (requestedRouteKey.value) {
+      selectedGatewayId.value = gateways.value.find(gateway =>
+        configNameFor(gateway) === requestedRouteKey.value || gateway.id === requestedRouteKey.value
+      )?.id || "";
+      return;
+    }
+    if (!gateways.value.some(gateway => gateway.id === selectedGatewayId.value)) {
+      selectedGatewayId.value = gateways.value[0]?.id || "";
+    }
+  }
 
   function routeSummaryForKey(value: string): GatewayRouteSummary | null {
     const key = String(value || "").trim();
@@ -159,8 +165,7 @@ export const useGatewayStore = defineStore("gateway", () => {
   }
 
   const selectedRouteSummary = computed(() => {
-    const fromLocation = routeSummaryForKey(routeKeyFromWebguiHash(window.location.hash));
-    if (fromLocation) return fromLocation;
+    if (requestedRouteKey.value) return routeSummaryForKey(requestedRouteKey.value);
     const selected = selectedGateway.value;
     return selected ? routeSummaryForKey(selected.id) : null;
   });
@@ -184,8 +189,7 @@ export const useGatewayStore = defineStore("gateway", () => {
   }
 
   function touch(): void {
-    dirty.value = true;
-    editVersion.value += 1;
+    if (saveState.value === "saved") saveMessage.value = "";
   }
 
   function openQuickSetup(): void {
@@ -196,8 +200,8 @@ export const useGatewayStore = defineStore("gateway", () => {
     quickSetupDialogOpen.value = false;
   }
 
-  function normalizeGateways(): void {
-    gateways.value.forEach(gateway => {
+  function normalizeGateways(items = gateways.value): void {
+    items.forEach(gateway => {
       const agentAdapters = (Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : [])
         .map(normalizeAgentAdapterType)
         .filter((item): item is AgentAdapterType => Boolean(item));
@@ -332,19 +336,14 @@ export const useGatewayStore = defineStore("gateway", () => {
         gateways.value = body.data.config.gateways || [];
         configFiles.value = body.data.configFiles || {};
         normalizeGateways();
-        const routeSelectedGatewayId = selectedGatewayIdFromLocation(gateways.value);
-        if (pendingSelectedConfigName.value) {
+        if (!routeKeyFromWebguiHash(window.location.hash) && pendingSelectedConfigName.value) {
           const renamed = gateways.value.find(gateway => configNameFor(gateway) === pendingSelectedConfigName.value);
           if (renamed) selectedGatewayId.value = renamed.id;
-          pendingSelectedConfigName.value = "";
-        } else if (routeSelectedGatewayId) {
-          selectedGatewayId.value = routeSelectedGatewayId;
         }
-        if (!selectedGatewayId.value && gateways.value[0]) selectedGatewayId.value = gateways.value[0].id;
-        if (selectedGatewayId.value && !gateways.value.some(gateway => gateway.id === selectedGatewayId.value)) {
-          selectedGatewayId.value = gateways.value[0]?.id || "";
-        }
-        dirty.value = false;
+        pendingSelectedConfigName.value = "";
+        syncRouteSelection();
+        routeConfigLoaded.value = true;
+        savedGateways.value = cloneGatewayValue(gateways.value);
       }
     } catch (loadError) {
       error.value = loadError instanceof Error ? loadError.message : String(loadError);
@@ -375,152 +374,177 @@ export const useGatewayStore = defineStore("gateway", () => {
     }
   }
 
-  async function save(): Promise<void> {
-    normalizeGateways();
+  function acceptSavedGateway(id: string, submitted: GatewayDefinition, body: GatewayPayload): void {
+    const persisted = body.data?.config?.gateways;
+    if (!Array.isArray(persisted)) throw new Error("配置已提交，但未返回保存后的配置。请点击保存重新确认。");
+    const normalized = cloneGatewayValue(persisted);
+    normalizeGateways(normalized);
+    const saved = normalized.find(item => item.configName === submitted.configName || item.id === id);
+    if (!saved) throw new Error("配置已提交，但回读未找到当前路线。请点击保存重新确认。");
+    for (const item of normalized) {
+      if (item.id === saved.id) continue;
+      const old = savedGateways.value.find(row => row.id === item.id);
+      const localIndex = gateways.value.findIndex(row => row.id === item.id);
+      if (old && localIndex >= 0 && sameGatewayValue(gateways.value[localIndex], old)) {
+        gateways.value[localIndex] = cloneGatewayValue(item);
+        savedGateways.value = savedGateways.value.map(row => row.id === item.id ? cloneGatewayValue(item) : row);
+      }
+    }
+    const index = gateways.value.findIndex(item => item.id === id);
+    if (index >= 0) {
+      const local = gateways.value[index];
+      // Only replace the exact submitted draft. Later edits survive a delayed response.
+      if (sameGatewayValue(local, submitted)) gateways.value[index] = cloneGatewayValue(saved);
+      else gateways.value[index] = { ...local, id: saved.id };
+      if (selectedGatewayId.value === id) selectedGatewayId.value = saved.id;
+    }
+    savedGateways.value = [...savedGateways.value.filter(item => item.id !== id && item.id !== saved.id), cloneGatewayValue(saved)];
+    // Keep ordering stable: dirty compares values, not server enumeration order.
+    savedGateways.value.sort((a, b) => a.id.localeCompare(b.id));
+    pendingSelectedConfigName.value = "";
+    applyRouteCatalogVersion(body.routeCatalog);
+  }
+
+  async function recoverPendingMutation(pending: PendingRouteCatalogMutation): Promise<GatewayPayload & { receipt?: { state?: string } }> {
+    saveState.value = "confirming";
+    saveMessage.value = "正在确认上次保存结果";
+    const lifecycleKey = await loadMeta(true);
+    const response = await boundedRouteCatalogMutationFetch(`${apiBase}/gateways/mutations/${encodeURIComponent(pending.operationId)}`, {});
+    const body = await response.json() as GatewayPayload & { receipt?: { state?: string; operationId?: string } };
+    if (!response.ok || body.code !== 0 || body.receipt?.operationId !== pending.operationId
+      || !["committed", "not_committed"].includes(body.receipt?.state || "")) {
+      throw new Error("上次保存结果仍待确认，请稍后点击保存重试；当前修改已保留。");
+    }
+    if (await loadMeta(true) !== lifecycleKey) throw new Error("Manager 已重启，保存结果仍待确认，请重试。");
+    const draft = pendingSaveDrafts.get(pending.operationId);
+    if (body.receipt?.state === "committed" && draft) acceptSavedGateway(draft.id, draft.submitted, body);
+    routeCatalogMutationLedger.complete(pending);
+    pendingSaveDrafts.delete(pending.operationId);
+    applyRouteCatalogVersion(body.routeCatalog);
+    return body;
+  }
+
+  function save(routeId = selectedGateway.value?.id): Promise<void> {
+    if (saveFlight) return saveFlight;
+    if (saving.value) return Promise.reject(new Error("另一项配置操作正在执行，请稍后重试。"));
+    const flight = saveSelectedGateway(routeId).finally(() => {
+      if (saveFlight === flight) saveFlight = undefined;
+    });
+    saveFlight = flight;
+    return flight;
+  }
+
+  async function saveChangedRoutes(): Promise<void> {
+    const ids = gateways.value.filter(row => !sameGatewayValue(row, savedGateways.value.find(saved => saved.id === row.id))).map(row => row.id);
+    for (const id of ids) await save(id);
+  }
+
+  async function reloadSelectedGateway(): Promise<void> {
+    const id = selectedGateway.value?.id;
+    if (!id || saving.value) return;
+    if (!window.confirm("放弃当前路线的未保存修改，重新加载最新配置？其他路线的修改会保留。")) return;
+    const lifecycleKey = await loadMeta(true);
+    const response = await boundedRouteCatalogMutationFetch(`${apiBase}/gateways?summary=1&includeConfig=1`, {});
+    const body = await response.json() as GatewayPayload;
+    if (!response.ok || body.code !== 0 || !body.data?.config) throw new Error("读取最新配置失败，修改已保留。");
+    if (await loadMeta(true) !== lifecycleKey) throw new Error("Manager 已重启，请重试。");
+    const rows = cloneGatewayValue(body.data.config.gateways || []);
+    normalizeGateways(rows);
+    const saved = rows.find(row => row.id === id);
+    gateways.value = gateways.value.flatMap(row => row.id === id ? saved ? [cloneGatewayValue(saved)] : [] : [row]);
+    savedGateways.value = savedGateways.value.filter(row => row.id !== id);
+    if (saved) savedGateways.value.push(saved);
+    applyRouteCatalogVersion(body.routeCatalog);
+    saveState.value = "idle";
+    error.value = "";
+    saveMessage.value = "";
+  }
+
+  async function saveSelectedGateway(routeId: string | undefined): Promise<void> {
+    if (!routeId) return;
     saving.value = true;
     error.value = "";
+    saveState.value = "saving";
+    saveMessage.value = "正在保存当前路线";
+    let pending: PendingRouteCatalogMutation | undefined;
+    let submitted: GatewayDefinition | undefined;
+    let id = routeId;
     try {
-      if (selectedGateway.value) {
-        await bindAgentSessionsForSave(selectedGateway.value, async (request) => {
-          const response = await fetch("/api/agent/threads", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(request)
-          });
-          return {
-            statusCode: response.status,
-            data: await response.json().catch(() => ({})) as Record<string, unknown>
-          };
-        });
-      }
-      sharedAutoAssignGatewayPorts(gateways.value, Number(meta.value.managerPort || 0));
-      validateGatewayPortConflicts(gateways.value);
-      const expectedMessageAgentSettings = gateways.value.flatMap(gateway => {
-        const adapter = resolvePrimaryAgentAdapter(gateway.agentAdapters, gateway.primaryAgentAdapter);
-        if (!adapter || !agentAdapterSupportsManagedTaskFeature(adapter, "messageProcessingAgent")) return [];
-        const policy = gateway.messageProcessingAgents?.[adapter];
-        return [{ id: gateway.id, configName: gateway.configName, adapter, policy, enabled: policy?.enabled === true }];
-      });
-      const expectedPlanAssistantSettings = gateways.value
-        .filter(gateway => {
-          const adapter = resolvePrimaryAgentAdapter(gateway.agentAdapters, gateway.primaryAgentAdapter);
-          return Boolean(adapter && agentAdapterSupportsManagedTaskFeature(adapter, "planAssistantSessions"));
-        })
-        .map(gateway => ({
-          id: gateway.id,
-          configName: gateway.configName,
-          enabled: gateway.codexPlanAssistantEnabled === true,
-          model: gateway.codexPlanAssistantModel
-        }));
-      const expectedMemoryConsolidationAgentSettings = gateways.value
-        .filter(gateway => {
-          const adapter = resolvePrimaryAgentAdapter(gateway.agentAdapters, gateway.primaryAgentAdapter);
-          return Boolean(adapter && agentAdapterSupportsManagedTaskFeature(adapter, "memoryConsolidationAgent"));
-        })
-        .map(gateway => ({
-          id: gateway.id,
-          configName: gateway.configName,
-          enabled: gateway.codexMemoryConsolidationAgentEnabled === true,
-          model: gateway.codexMemoryConsolidationAgentModel || DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL
-        }));
-      const expectedPrimaryAgentSettings = gateways.value
-        .filter(gateway => Boolean(resolvePrimaryAgentAdapter(gateway.agentAdapters, gateway.primaryAgentAdapter)))
-        .map(gateway => ({
-          id: gateway.id,
-          configName: gateway.configName,
-          model: gateway.agentModel?.trim() || "",
-          reasoningEffort: gateway.agentReasoningEffort,
-          dshModelProvider: gateway.dshModelProvider?.trim() || "",
-          dshModel: gateway.dshModel?.trim() || "",
-          dshReasoningEffort: gateway.dshReasoningEffort?.trim() || ""
-        }));
-      const mutationLifecycleKey = await loadMeta(true);
-      const pendingMutation = await routeCatalogMutationLedger.retain(
-        "save",
-        { gateways: gateways.value },
-        routeCatalogRevisionHash.value
-      );
-      const savedEditVersion = editVersion.value;
-      const response = await boundedRouteCatalogMutationFetch(`${apiBase}/gateways`, {
-        method: "POST",
+      // v2 metadata from older pages is resolved through the durable receipt too.
+      // Do not copy configuration secrets into browser storage to support retries.
+      for (const previous of routeCatalogMutationLedger.unresolved()) await recoverPendingMutation(previous);
+      const target = gateways.value.find(row => row.id === routeId);
+      if (!target) throw new Error("当前路线已变化，请重新选择后保存。");
+      normalizeGateways([target]);
+      const draft = cloneGatewayValue(target);
+      id = draft.id;
+      const base = savedGateways.value.find(item => item.id === id);
+      const lifecycleKey = await loadMeta(true);
+      const response = await boundedRouteCatalogMutationFetch(`${apiBase}/gateways?summary=1&includeConfig=1`, {});
+      const latest = await response.json() as GatewayPayload;
+      if (!response.ok || latest.code !== 0 || !latest.data?.config) throw new Error("无法读取最新配置，当前修改已保留。");
+      if (await loadMeta(true) !== lifecycleKey) throw new Error("Manager 已重启，请重试保存。");
+      const currentItems = cloneGatewayValue(latest.data.config.gateways || []);
+      normalizeGateways(currentItems);
+      const current = currentItems.find(item => item.id === id);
+      if (base && !current) throw new Error("配置冲突：当前路线已被删除，请核对后重试。");
+      if (!base && current) throw new Error("配置冲突：当前路线名称已存在，请更换名称。");
+      const definition = base && current ? mergeGatewayDraft(base, draft, current) : draft;
+      // Freeze before any await: signature, body and acknowledgement describe the same request.
+      submitted = draft;
+      applyRouteCatalogVersion(latest.routeCatalog);
+      pending = await routeCatalogMutationLedger.retain("save", { id, definition }, routeCatalogRevisionHash.value);
+      pendingSaveDrafts.set(pending.operationId, { id, submitted });
+      saveState.value = "saving";
+      saveMessage.value = "正在保存当前路线";
+      const result = await boundedRouteCatalogMutationFetch(`${apiBase}/gateways/${encodeURIComponent(id)}/config`, {
+        method: "PUT",
         headers: {
           "content-type": "application/json",
-          "idempotency-key": pendingMutation.operationId,
-          "if-match": `"${pendingMutation.expectedContentHash}"`
+          "idempotency-key": pending.operationId,
+          "if-match": `"${pending.expectedContentHash}"`
         },
-        body: JSON.stringify({ gateways: gateways.value })
+        body: JSON.stringify(definition)
       });
-      const body = await response.json().catch(() => ({})) as GatewayPayload & { error?: string };
-      if (!response.ok || body.code !== 0) {
-        await retireRejectedRouteMutation(response, pendingMutation, mutationLifecycleKey);
-        throw new Error(body.message || body.error || "保存配置失败");
-      }
-      const committedRevision = committedRouteCatalogRevision(body, pendingMutation);
-      if (await loadMeta(true) !== mutationLifecycleKey) {
-        throw new Error("Manager lifecycle changed after the Route commit; retry the same saved operation.");
-      }
-      applyRouteCatalogVersion(body.routeCatalog);
-      routeCatalogRevisionHash.value = committedRevision;
-      routeCatalogMutationLedger.complete(pendingMutation);
-      const savedGateways = body?.data?.config?.gateways;
-      if (Array.isArray(savedGateways)) {
-        const messageAgentSettingWasDropped = expectedMessageAgentSettings.some(expected => {
-          const saved = savedGateways.find((gateway: GatewayDefinition) => (
-            gateway.id === expected.id || gateway.configName === expected.configName
-          ));
-          const policy = saved?.messageProcessingAgents?.[expected.adapter];
-          return (policy?.enabled === true) !== expected.enabled
-            || Boolean(expected.policy && (
-              policy?.model !== expected.policy.model
-              || policy?.reasoningEffort !== expected.policy.reasoningEffort
-              || policy?.maxAgents !== expected.policy.maxAgents
-            ));
-        });
-        if (messageAgentSettingWasDropped) {
-          throw new Error("Manager 版本过旧，未保存消息处理 Agent 设置。请重启 Manager 后再次保存。");
+      const body = await result.json().catch(() => ({})) as GatewayPayload & { error?: string; activation?: { state: string; message?: string } };
+      if (!result.ok || body.code !== 0) {
+        if (routeCatalogMutationFailureIsDefinitive(result.status)) {
+          routeCatalogMutationLedger.complete(pending);
+          pendingSaveDrafts.delete(pending.operationId);
+          pending = undefined;
         }
-        const planAssistantSettingWasDropped = expectedPlanAssistantSettings.some(expected => {
-          const saved = savedGateways.find((gateway: GatewayDefinition) => (
-            gateway.id === expected.id || gateway.configName === expected.configName
-          ));
-          return saved?.codexPlanAssistantEnabled !== expected.enabled
-            || saved?.codexPlanAssistantModel !== expected.model;
-        });
-        if (planAssistantSettingWasDropped) {
-          throw new Error("Manager 版本过旧，未保存计划秘书设置。请重启 Manager 后再次保存。");
-        }
-        const memoryConsolidationAgentSettingWasDropped = expectedMemoryConsolidationAgentSettings.some(expected => {
-          const saved = savedGateways.find((gateway: GatewayDefinition) => (
-            gateway.id === expected.id || gateway.configName === expected.configName
-          ));
-          return saved?.codexMemoryConsolidationAgentEnabled !== expected.enabled
-            || saved?.codexMemoryConsolidationAgentModel !== expected.model;
-        });
-        if (memoryConsolidationAgentSettingWasDropped) {
-          throw new Error("Manager 版本过旧，未保存独立记忆整理 Agent 设置。请重启 Manager 后再次保存。");
-        }
-        const primaryAgentSettingWasDropped = expectedPrimaryAgentSettings.some(expected => {
-          const saved = savedGateways.find((gateway: GatewayDefinition) => (
-            gateway.id === expected.id || gateway.configName === expected.configName
-          ));
-          return (saved?.agentModel?.trim() || "") !== expected.model
-            || saved?.agentReasoningEffort !== expected.reasoningEffort
-            || (saved?.dshModelProvider?.trim() || "") !== expected.dshModelProvider
-            || (saved?.dshModel?.trim() || "") !== expected.dshModel
-            || (saved?.dshReasoningEffort?.trim() || "") !== expected.dshReasoningEffort;
-        });
-        if (primaryAgentSettingWasDropped) {
-          throw new Error("Manager 版本过旧，未保存主人格模型或推理强度。请重启 Manager 后再次保存。");
-        }
+        if (result.status === 412) throw new Error("配置冲突：保存期间配置已变化，请再次保存以重新核对。");
+        throw new Error(body.message || body.error || "保存失败，当前修改已保留。");
       }
-      if (editVersion.value === savedEditVersion) {
-        dirty.value = false;
-        await load({ replaceDirtyConfig: true });
-      } else {
-        await load();
-      }
+      committedRouteCatalogRevision(body, pending);
+      acceptSavedGateway(id, submitted, body);
+      routeCatalogMutationLedger.complete(pending);
+      pendingSaveDrafts.delete(pending.operationId);
+      pending = undefined;
+      saveState.value = "saved";
+      saveMessage.value = body.activation?.state === "failed"
+        ? `已保存，运行生效失败：${body.activation.message || "请查看日志"}`
+        : "当前路线已保存";
     } catch (saveError) {
+      if (pending && submitted) {
+        try {
+          const recovered = await recoverPendingMutation(pending);
+          if (recovered.receipt?.state === "committed") {
+            saveState.value = "saved";
+            saveMessage.value = "已确认当前路线保存成功";
+            return;
+          }
+        } catch (recoveryError) {
+          error.value = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
+          saveState.value = "confirming";
+          saveMessage.value = "保存结果待确认，修改已保留";
+          throw recoveryError;
+        }
+      }
       error.value = saveError instanceof Error ? saveError.message : String(saveError);
+      saveState.value = routeCatalogMutationLedger.unresolved().length ? "confirming"
+        : error.value.includes("配置冲突") ? "conflict" : "error";
+      saveMessage.value = error.value;
       throw saveError;
     } finally {
       saving.value = false;
@@ -627,12 +651,14 @@ export const useGatewayStore = defineStore("gateway", () => {
   }
 
   async function deleteGateway(id: string): Promise<void> {
+    if (saving.value) throw new Error("另一项配置操作正在执行，请稍后重试。");
     const nextSelectedGatewayId = selectedGatewayId.value === id
       ? gateways.value.find(gateway => gateway.id !== id)?.id || ""
       : selectedGatewayId.value;
     saving.value = true;
     error.value = "";
     try {
+      for (const previous of routeCatalogMutationLedger.unresolved()) await recoverPendingMutation(previous);
       const mutationLifecycleKey = await loadMeta(true);
       const pendingMutation = await routeCatalogMutationLedger.retain(
         "delete",
@@ -668,7 +694,8 @@ export const useGatewayStore = defineStore("gateway", () => {
       routeCatalogRevisionHash.value = committedRevision;
       routeCatalogMutationLedger.complete(pendingMutation);
       selectedGatewayId.value = nextSelectedGatewayId;
-      dirty.value = false;
+      gateways.value = gateways.value.filter(item => item.id !== id);
+      savedGateways.value = savedGateways.value.filter(item => item.id !== id);
       await load();
       if (gateways.value.some(gateway => gateway.id === id)) {
         throw new Error("删除请求已返回成功，但 Manager 刷新后仍返回该路由；请重启 Manager 后再试。");
@@ -1000,6 +1027,9 @@ export const useGatewayStore = defineStore("gateway", () => {
     networkOptions,
     configFiles,
     selectedGatewayId,
+    requestedRouteKey,
+    routeSelectionMissing,
+    syncRouteSelection,
     selectedIndex,
     selectedGateway,
     selectedRuntime,
@@ -1007,6 +1037,8 @@ export const useGatewayStore = defineStore("gateway", () => {
     diagnosticsLoading,
     diagnosticsLoaded,
     saving,
+    saveState,
+    saveMessage,
     dirty,
     error,
     quickSetupDialogOpen,
@@ -1022,6 +1054,8 @@ export const useGatewayStore = defineStore("gateway", () => {
     load,
     ensureDiagnostics,
     save,
+    saveChangedRoutes,
+    reloadSelectedGateway,
     actionGateway,
     manualTriggerGateway,
     testAgentDelivery,

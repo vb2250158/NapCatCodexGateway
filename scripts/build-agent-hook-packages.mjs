@@ -13,3 +13,5 @@ for (const name of ['rabi-codex-context', 'rabi-dsh-context']) {
   });
 }
 console.log('Built Codex and DSH Hook installation packages.');
+
+await import("./build-instance-agent-runtime.mjs");

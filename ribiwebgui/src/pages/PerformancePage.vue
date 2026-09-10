@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import PerformanceTimelineChart from "../components/PerformanceTimelineChart.vue";
 import { managerEventSource } from "../managerApi";
@@ -121,7 +122,7 @@ async function refresh(): Promise<void> {
       configHydrating.value = false;
     }
   } catch (loadError) {
-    error.value = loadError instanceof Error ? loadError.message : String(loadError);
+    error.value = userFacingError(loadError);
   } finally {
     loading.value = false;
   }
@@ -142,7 +143,7 @@ async function saveConfig(): Promise<void> {
     await nextTick();
     configDirty.value = false;
   } catch (saveError) {
-    error.value = saveError instanceof Error ? saveError.message : String(saveError);
+    error.value = userFacingError(saveError);
     throw saveError;
   } finally {
     saving.value = false;

@@ -6,6 +6,8 @@
 
 # RabiRoute 文档
 
+- [眼镜离线录像与实时预览](rabilink-offline-recording.md)：把眼镜直播保存在手机并实时查看；真机验收进行中。
+
 这里同时包含现行使用说明、实验集成、设计方案、调研和历史交接。文件存在不代表功能已经完成；阅读前先看状态。
 
 ## 状态说明
@@ -39,10 +41,13 @@
 
 ## 路由、人格与处理端
 
+- [安装 Rabi 记忆与计划搜索](../skills/rabi-knowledge-search/README.md) — 项目维护者将技能安装到项目，在线时先查计划和记忆，离线时直接普通搜索。
+
 - [路由配置](routing-configuration.md) — **现行指南**。`personaConfig.json`、route kind、regex、schedule、pipeline 和模板变量。
 - [路由与人格](routing-and-personas.md) — **现行指南**。route 与 role 的边界、人格包和消息模板判断框架。
 - [Agent 上下文注入](agent-context-injection.md) — **现行指南**。人格级统一双向账本、分消息端/会话的最近消息额度、归档边界，以及 `AgentPacket` 中的人格目录、跨人格投递凭据、路径和回复上下文。
 - [Rabi Agent 接口](rabi-agent-interfaces.md) — **当前合同**。处理端如何回复、查询可联系人格、进行带幂等回执的单向跨人格投递，以及使用 thread bridge、计划、记忆、Remote Agent 和多实例 API。
+- [长期维护与自修复](rabi-maintenance.md) — **维护工作流**。固定故障受理任务、原计划归属、恢复验证与定期代码质量维护。
 - [计划和记忆机制](plan-and-memory-model.md) — **现行指南**。Role Knowledge 的文件真源、召回和整理副作用。
 - [动态整理记录统一规范](dynamic-record-lifecycle.md) — **现行指南**。统一归档、记忆沉淀、物理分卷、保留策略和 24/72 小时动态窗口的边界与验收。
 - [Pipeline presets](pipeline-presets.md) — Agent 会话、明确外部目标和 Outbox 状态；其中 FenneNote 输出章节仅为归档兼容说明。
@@ -54,10 +59,15 @@
 
 ## 架构与维护
 
+- [移动端记录界面](rabilink-mobile-recording-ui.md) — 四页导航、三档采集、离线保存、会话回看与兼容边界。
+
+- [乐奇开发依据与排障](rokid-development.md) — SDK 路线、官方资料读取状态、安装证据及对应开发 Skill；当前不采用 CXR-M。
+
 - [架构说明](architecture.md) — **当前事实**。项目边界、Codex Desktop owner 和现有 Outbox / 未来 Action Queue 已分开说明。
 - [从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md) — **调研与实施总结**。说明 28 个内置 Manager 插件迁移、WebGUI/Desktop 最小扩展宿主、贡献点、进程隔离边界和第三方表现 Extension Host 后续路线。
 - [DSH 如何使用 Cordis](dsh-cordis-runtime-analysis.md) — **实现调查**。说明 profile、Loader、Fiber、服务 realm、浏览器插件树、动态代码和进程沙箱的真实边界。
 - [RabiRoute 插件平台目标架构](manager-plugin-implementation-hot-swap.md) — **当前架构**。定义最小插件内核、独立能力包、统一 SDK、多宿主扩展、generation 原子切换、树外插件验收和一次性删除旧运行时。
+- [源码热补丁](source-hot-patches.md) — **开发中**。源码模式自动监听代码与声明资源，编译、校验、保留状态并不停服切换；安装版验收边界见文档状态。
 - [插件 Bundle 与热替换](plugin-bundles.md) — **当前实现说明**。单一 Profile、独立插件包、统一 SDK、generation 热替换和浏览器 revision 回滚。
 - [代码架构](code-architecture.md) — **当前事实**。后端、Manager、消息端、Role Knowledge、WebGUI 和桌面模块地图。
 - [项目功能手册](project-function-map.md) — **当前事实**。按功能、成熟度、副作用、API 和代码入口定位；成熟度仍与当前能力页交叉核对。
@@ -79,6 +89,7 @@
 - [Rabi 语音客户端](../desktop/rabi-voice-client/README.md) — 把会议室 Windows 电脑作为局域网远程麦克风和喇叭，切句与模型仍留在 RabiSpeech 主机。
 - [本地语音模型下载说明](local-speech-model-downloads.md) — 使用模型管理页按需下载，并查看每个 TTS/ASR 模型的来源、隔离环境与验证要求。
 - [RabiSpeech 性能与功能报告](rabispeech-performance-report.md) — 六个 TTS、五个主要 ASR 的冷/热态、效果、硬件与 CUDA 问题。
+- [跨电脑接口调用](rabilink-peer-rpc.md) — 按设备 ID 查询另一台 PC，配置目标授权并检查 LAN、P2P 或 Relay 的实际调用结果。
 - [RabiLink Relay](rabilink-relay-server.md) — Relay server、PC worker、远程 WebGUI、统一会话账本和下行流。
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker.md) — Relay 边缘代理实现。
 - [RabiLink 眼镜端三条路线对比](rabilink-glasses-route-comparison.md) — 原生灵珠智能体、AIUI 与原生 App 的宿主、生命周期、设备能力、发布成本和当前建议。
@@ -96,12 +107,13 @@
 
 ## 设计与历史
 
+
 - [主动智能系统设计总纲](../主动智能设计思路.md) — **设计中**。描述持续感知、用户性格与偏好、心理状态、情景识别、主动行动、记忆和设备分工；当前实现范围以“当前能力与成熟度”为准。
 - [对话消息收集、消息组与四类 Agent 协作](group-message-batching-and-triage-plan.md)（[HTML 架构预览](group-message-batching-and-triage-plan.html)）— **实验支持**。自然语言消息可先立即记录并等待合并，再综合引用消息对应的 Agent 会话、原消息组、会话、说话人和消息端熟悉度，交给动态 Codex 消息处理 Agent；真实群聊/私聊和四类 Agent 完整联调仍待验收。
 - [人格路由工作台计划](persona-route-workbench-plan.md) — **部分实现**。语音关键词和分端上下文控件已实现；Dry-run RouteDecision / AgentPacket 预览尚未实现。
 - [Windows 托盘任务窗口计划](rabiroute-windows-tray-task-window-plan.md) — 设计记录；实际实现以 `desktop/tray-task-window/` 和打包文档为准。
 - [UE/UX 审计与重构](rabiroute-ue-ux-audit-and-refactor.md) — 阶段性审计。
-- [局域网 Rabi Agent 接入与更新](lan-rabi-agent-bootstrap.md) — **实验集成**。查看无界面节点接入、局域网连接 Token、Rabi Web 更新请求和现有 Codex Desktop task owner 的限制。
+- [远端 Agent 接入与更新](lan-rabi-agent-bootstrap.md) — **实验集成**。复制提示词接入其他电脑，在当前 Manager 管理实例内 Agent，并在路由中选择处理端。
 - [手机 App Webhook 历史方案](mobile-app-webhook-integration.md) — **历史参考**，当前 RabiLink 主链不再以手机桥作为必经中转。
 
 归档材料位于 [`archive/`](../archive/README.md)，可构建客户端位于 [`apps/`](../apps/README.md)，共享 SDK 位于 [`packages/`](../packages/README.md)，可复制样板位于 [`examples/`](../examples/README.md)。
@@ -112,3 +124,7 @@
 2. 行为准确后再人工维护英文版本；不要把旧文档直接批量翻译。
 3. 设计稿必须明确写“设计中”或“历史参考”，不能混进当前能力表。
 4. 运行语义文件（`AGENTS.md`、`SKILL.md`、persona、prompt、memory、plan）不做机械翻译。
+
+- [消息投递模板与归属](message-delivery-templates.md)：开发者查看渲染入口、场景差异和历史回执退出条件。
+
+- [计划与记忆摘要搜索](knowledge-search.md)

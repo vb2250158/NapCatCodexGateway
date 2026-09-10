@@ -1,3 +1,4 @@
+import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import type http from "node:http";
 import { normalizePerformanceMonitoringConfig, type PerformanceSample } from "../shared/performanceContract.js";
 import type { RabiGlobalConfigStore } from "./globalConfig.js";
@@ -6,6 +7,7 @@ import { isLoopbackRemoteAddress } from "./webguiLanAccess.js";
 import type { ManagerReadWorkerPool } from "./managerReadWorkerPool.js";
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
+  body = errorResponsePresentation(body, statusCode);
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store"

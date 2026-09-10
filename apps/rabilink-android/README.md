@@ -1,5 +1,9 @@
 # RabiLink Android 应用
 
+[0.3.22 移动端记录界面](../../docs/rabilink-mobile-recording-ui.md)：首页三档切换，录音与录像互斥，记录、消息与设备分开导航。
+
+[眼镜离线录像与实时预览](../../docs/rabilink-offline-recording.md)：眼镜通过原生直播推到手机，手机本地预览、分段录像与回看；实现及真机验证进行中。
+
 <!-- docs-language-switch -->
 <div align="center">
 <a href="./README_en.md">English</a> | 简体中文
@@ -9,6 +13,8 @@
 > 状态：实验应用。这里是 RabiLink 手机伴侣与内嵌眼镜前端的正式 Android 工程，同时保留小米健康、Rokid 和 ADB 高级诊断能力；部分硬件链路仍需真机验收。
 
 这是 RabiLink 的 Android 端产品工程。用户只安装手机 APK；工程会同时构建随手机分发、由 CXR 工作流安装到眼镜的前端 APK。硬件探针保留在应用的高级诊断入口中，不再用 `examples/` 身份承载产品代码。
+
+新增 `glass-video-app/` 独立录像组件，随手机调试包携带；自动安装尚未真机通过。开发前阅读[乐奇接入依据与排障](../../docs/rokid-development.md)及其中的 Skill 入口。当前路线不采用 CXR-M，旧资料中的商务接入建议不再适用。
 
 当前手机 APK 包名为：
 
@@ -30,7 +36,7 @@ RabiLink Relay
 ```
 
 - 眼镜默认入口是 `GlassAudioClientActivity`；`glass-app/` 是眼镜应用模块，眼镜主链只负责音频、媒体、状态与 HUD，不在本地运行 ASR/TTS。
-- 手机日常首页是会话列表；所有已配置人格都会显示，未启用或尚无聊天能力的人格保留配置引导而不会消失。点一个已启用 RabiLink 消息端的人格进入聊天，返回后可继续选择其他人格；设置、健康和眼镜能力保持独立入口。
+- 手机日常首页提供暂停、录音和视频录像，原会话列表移到“消息”；所有已配置人格都会显示，未启用或尚无聊天能力的人格保留配置引导而不会消失。点一个已启用 RabiLink 消息端的人格进入聊天，返回后可继续选择其他人格；设置、健康和眼镜能力保持独立入口。
 - 手机后端通过受限 `audio-streams/rabilink/start|chunk|stop` 接口把手机/眼镜的连续 16 kHz mono PCM 送到所选 Rabi PC。Android 不做 VAD、切句、ASR 或声纹；RabiSpeech 在 PC 端切句和识别后自动写主机通用语音库，再按固定的 `routeProfileId` 投给 RabiLink/手机消息端。启动请求分别提交稳定 `source_device_id` 与临时 `stream_id`，普通回复只回稳定设备，不会发给带音频后缀的流 ID。`/api/rabilink/speech/messages` 只保留兼容与调试用途；需要播报时再由 Rabi PC TTS 合成并以 PCM 发回。
 - 眼镜 HUD 使用“连接 / 聆听 / 上传 / 播报 / 暂停 / 异常”状态角标。手机通过同一条有序 Classic BT 通道发送 `PLAYBACK_BEGIN → PCM → PLAYBACK_END`；眼镜必须先在主线程确认暂停采集，播放线程才接受 PCM，避免 TTS 开头被麦克风回录。它会核对消息 ID/PCM 长度，并且只有 `AudioTrack` 播放头到达 marker 后才回 `played` 并恢复聆听；Activity 销毁会把未完成播放明确回为 `playback_failed`。旧版没有 BEGIN/END 的 PCM 仍可兼容播放，但不会冒充已确认播放。
 - 照片已接入消息附件上行。视频新增 [手机到电脑直连接入](../../docs/rabilink-direct-video.md)：手机真机数据通道已验证，眼镜 Phone SDK 蓝牙连接仍失败、未出帧；普通精简包不含视频 SDK，显式视频构建才启用此入口。视频不经过 Relay，不启用 TURN 兜底。
@@ -73,7 +79,7 @@ RabiLink Relay
 
 ### 日常聊天与导航
 
-- 首页列出 Rabi PC 返回的全部已配置人格，不再按 Route 是否启用或是否已有 `rabilink` 聊天能力隐藏。智能手表/手环健康 Route 不会被误当成人格；未启用聊天的人格会给出原因和修复入口。
+- 消息页列出 Rabi PC 返回的全部已配置人格，不再按 Route 是否启用或是否已有 `rabilink` 聊天能力隐藏。智能手表/手环健康 Route 不会被误当成人格；未启用聊天的人格会给出原因和修复入口。
 - 会话行先从端点隔离的本机缓存显示人格名、最后消息、时间和未读数；头像独立异步加载。点击可聊天的人格进入独立聊天详情，系统返回和页内“返回”都回到原会话列表位置。
 - 每个会话独立保存草稿和已读位置。打开一个人格不会清除其他人格的未读；旧版无 Route 消息只迁移到一个确定会话。
 - 普通聊天不再放“人格下拉”和“配置助手模式”。知道字段时在设置/远程 WebGUI 的对应位置修改，不知道字段名时从设置进入独立配置助手。
@@ -94,7 +100,7 @@ Rokid ASR/TTS 的最新资料结论见 `docs/rokid-asr-tts-communication-researc
 
 ## 单手机 APK 原则
 
-Rabi Link 只让用户安装一个手机 APK，正式手机包名只有 `com.rabi.link`。小米、Rokid 和后续设备都作为 APK 内部模块接入；日常首页负责会话列表与聊天，设置页负责连接 Rabi PC、持续会话、健康消息端、眼镜入口和远程配置，高级接口测试集中在独立诊断中心，各模块把结果写成统一 `ProbeResult`。
+Rabi Link 只让用户安装一个手机 APK，正式手机包名只有 `com.rabi.link`。小米、Rokid 和后续设备都作为 APK 内部模块接入；日常首页负责本地采集，记录页负责回看，消息页负责会话与聊天；设备及高级设置负责连接 Rabi PC、持续会话、健康消息端、眼镜入口和远程配置，高级接口测试集中在独立诊断中心，各模块把结果写成统一 `ProbeResult`。
 
 `modules/rokid/`、`modules/xiaomi/` 只是源码目录和 Java package 边界，不是第二个手机应用包名。Rokid 的 Glass3 / CustomApp 验证存在一个内置眼镜端测试 APK，包名为 `com.rabi.link.glass`；它是随手机 APK 打包、运行时交给 Rokid SDK 安装到眼镜侧的测试负载，不是用户需要单独安装的第二个手机 APK。
 
@@ -145,7 +151,7 @@ Rokid SDK 要求 Android 12+，因此当前 APK 的 `minSdk` 已提升到 `31`�
 
 1. 安装 `Rabi Link 设备探针`。
 2. 手机安装 Rokid AI App 大陆版 1.9.0+ 或 Hi Rokid，并完成眼镜配对。
-3. 打开首页的 `Rokid 眼镜接口测试` 卡片，进入 `Rokid 眼镜模块`。
+3. 打开“设备”页的眼镜授权与诊断入口，进入 `Rokid 眼镜模块`。
 4. 点 `检查 Rokid 环境`，确认 CXR-L SDK 类可加载、配套 App 可见、相机/录音权限状态正常。
 5. 点 `请求 Android 权限`，授予录音和相机权限。
 6. 点 `请求 Rokid 授权`，完成 Rokid AI App 授权回跳。

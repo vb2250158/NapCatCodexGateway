@@ -125,7 +125,7 @@ export class ManagerStorageMutationError extends Error {
   constructor(
     message: string,
     readonly code: "busy" | "timeout" | "aborted" | "worker_failed" | "mutation_failed" | "revision_conflict"
-      | "idempotency_conflict" | "indeterminate" | "fence_mismatch" | "termination_unconfirmed" | "stopped"
+      | "idempotency_conflict" | "indeterminate" | "fence_mismatch" | "termination_unconfirmed" | "stopped" | "validation_rejected"
   ) {
     super(message);
     this.name = "ManagerStorageMutationError";
@@ -190,6 +190,9 @@ function cloneSerializable<T>(value: T): T {
 }
 
 function mutationResponseError(message: string): ManagerStorageMutationError {
+  if (message.startsWith("STORAGE_MUTATION_VALIDATION_REJECTED:")) {
+    return new ManagerStorageMutationError(message.slice("STORAGE_MUTATION_VALIDATION_REJECTED:".length).trim(), "validation_rejected");
+  }
   if (message.startsWith("STORAGE_MUTATION_REVISION_CONFLICT:")
     || message.startsWith("PERSONA_PLAN_WORKFLOW_REVISION_CONFLICT:")) {
     return new ManagerStorageMutationError(message, "revision_conflict");

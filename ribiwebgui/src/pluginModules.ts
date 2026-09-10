@@ -1,4 +1,5 @@
 import { h, type Component } from "vue";
+import { webReleaseQuery } from "./webRelease";
 import {
   beginTrustedWebPageReplacement,
   notifyTrustedWebPageReplacement,
@@ -89,7 +90,7 @@ export function sameWebPluginModuleInstances(
 }
 
 async function list(): Promise<readonly WebPluginModuleDescriptor[]> {
-  const response = await fetch("/api/plugins/modules", { cache: "no-store" });
+  const response = await fetch(`/api/plugins/modules${webReleaseQuery()}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`Unable to load Web plugin modules: ${response.status}.`);
   const body = await response.json() as { code?: unknown; data?: { modules?: unknown } };
   if (body.code !== 0 || !Array.isArray(body.data?.modules) || !body.data.modules.every(validDescriptor)) {

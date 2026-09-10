@@ -8,6 +8,14 @@ English | <a href="./personas-and-rules.md">简体中文</a>
 
 A Route decides how messages enter and which handler receives them. A persona supplies identity, background, and decision guidance. They are stored separately and can be reused independently.
 
+## Configure follow-ups when a task ends
+
+Open Persona → Automation → Agent Hook → Plan task follow-up. This is off by default. Add rules, select statuses from this persona's catalog, enter the follow-up text, and save. The first matching enabled rule wins; empty status selections or prompts never trigger.
+
+Only the uniquely bound Codex plan task receives the follow-up. It does not contact anyone else or change plan status. Configure a cooldown between follow-ups; each turn receives at most one, and unchanged steps, next actions, waiting details and rules do not trigger again. The cooldown does not schedule a wake-up. Terminal or archived plans are excluded. When Manager is unavailable, report diagnostics without inventing follow-ups from cached configuration.
+
+Install or update the Hook from the Agent page when first using this feature. Subsequent rule changes only require saving the persona. Independently installed local execution guards must use advisory output instead of fixed Stop blocks so they cannot override the persona switch.
+
 ## Route and persona boundaries
 
 | Content | Owner |
@@ -31,11 +39,11 @@ Open **Persona Configuration** and select an existing role under **Persona bindi
 - **Identity relations**: recognized identities, unrecognized accounts, and voiceprint classification.
 - **Message context**: recent-message limits per endpoint and Route variables.
 - **Automation**: message triggers, scheduled tasks, and available template variables.
-- **Chat log**: final replies captured by Hooks from this persona's tasks, newest received first. Load earlier replies, inspect source tasks, or refresh manually; new replies refresh the list automatically.
+- **Chat log**: final replies captured by Hooks from this persona's tasks and Agent-to-Agent messages sent through the managed thread interface, newest received first. Load earlier replies, see source task names and click to locate them in Codex, or refresh manually; new replies are inserted at the top while retaining loaded records, expanded details, and the reading position.
 
 When no persona is selected, **Expression & voice**, **Virtual avatar**, **Identity relations**, and **Chat log** are unavailable. Profile settings, Route variables, and default message rules remain accessible.
 
-History starts with Hook replies received after this feature becomes available; it does not import earlier conversations. Install Agent Hooks and bind the task to a persona or its Route/plan. Tasks without an unambiguous persona owner are not recorded under any persona. The complete body supplied by the Hook is retained. Replayed callbacks appear once, while different later replies in the same turn are retained. The plan-task completion notification switch only controls notifications; it does not disable recording received final replies.
+History starts with Hook replies received after this feature becomes available; it does not import earlier conversations. Install Agent Hooks and bind the task to a persona or its Route/plan. Tasks without an unambiguous persona owner are not recorded under any persona. The complete body supplied by the Hook is retained and displayed as a Markdown preview, including headings, emphasis, lists, code blocks, and tables. Web links can be opened; local-path links remain text, and embedded HTML is not executed. Replayed callbacks appear once, while different later replies in the same turn are retained. The plan-task completion notification switch only controls notifications; it does not disable recording received final replies.
 
 After selecting a persona, use the same configuration card to set or replace its avatar. PNG, JPEG, WebP, and GIF images up to 5 MB are supported. The avatar follows the persona into selectors, the Route overview, speech persona selection, and the local role panel; the first character of the persona ID is used as the fallback. Because the image belongs to the persona directory, it does not need to be uploaded again for each Route.
 
@@ -46,6 +54,10 @@ Use **Open persona configuration** to edit the full text. Do not mechanically tr
 Open **Virtual avatar**, select or import a GIF, PNG, or ZIP animation pack for the current persona, then turn on **Enable on this PC**. The switch stays unavailable until a runnable pack is selected, and no empty window is shown. Each enabled persona gets its own pet: enabling several personas displays several pets, while disabling one removes only that persona's pet. Window names use persona names.
 
 Animation assets live under the current persona's `desktop-pet/packs/` directory and can travel with persona-folder synchronization. Size, position, opacity, always-on-top, click-through, locking, fullscreen hiding, result bubbles, and frame rate remain display preferences for this PC and do not synchronize with the persona.
+
+After selecting a pack, the page lists the total number of actions, animation entries, and static images, grouped by idle and sleep, task and connection feedback, mouse interactions, random idle actions, and other actions. Each entry shows its trigger, format, and looping behavior; PNG sequences also show frame count and frame rate. Counts refer to available action entries. Single-frame PNG entries count as static images; GIF frame counts are not guessed.
+
+Click **Preview** beside an action, then **Play preview** to view, replay, or stop the asset on this page. PNG sequences follow the pack's frame rate and looping settings; GIF previews follow the file's own settings. Previewing never triggers the desktop pet or changes its binding, and closes when switching packs or personas. Actions without an automatic trigger are listed as manually played.
 
 ## Let personas contact each other
 

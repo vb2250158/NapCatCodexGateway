@@ -8,18 +8,12 @@ import { buildRoleKnowledgeContextView } from "../routing/roleKnowledgeContext.j
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { roleFolderPath } from "../shared/routePaths.js";
 import { agentCommunicationToolDenial } from "./agentCommunicationHookPolicy.js";
-import {
-  hasEffectiveProgress,
-  isCompletePangHuProgressReceipt,
-  isPangHuWorkspace,
-  stablePangHuProgressDeliveryId,
-  type PangHuProgressNotificationDelivery,
-  type PangHuProgressNotificationResult
-} from "./panghuProgressNotificationGate.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { appendPersonaChatReply } from "../personaChatHistory.js";
+import { readPersonaConfigFragment } from "./configMigration.js";
+import { decidePlanFollowup, type PlanFollowupReceipt } from "./planFollowup.js";
 
-const STORE_VERSION = 7;
+const STORE_VERSION = 8;
 const MAX_CONTEXT_CHARS = 6200;
 const CONTROL_PATTERN = /\[rabi:(use|bind)\s+([^\]\r\n]{1,80})\]|\[rabi:(status|refresh|off)\]/i;
 
@@ -42,20 +36,6 @@ export type PlanTaskCompletionResult = {
   planId?: string;
   turnId?: string;
   gatewayId?: string;
-  error?: string;
-};
-
-export type PangHuProgressNotificationState = {
-  sessionId: string;
-  roleId?: string;
-  planId?: string;
-  turnId?: string;
-  updatedAt: string;
-  fingerprint: string;
-  status: PangHuProgressNotificationResult["status"];
-  deliveryId?: string;
-  sentMessageId?: string;
-  platformReferenceReadback?: boolean;
   error?: string;
 };
 
@@ -112,10 +92,10 @@ export type ProjectFileChangeState = {
 };
 
 type CodexHookSessionStoreFile = {
+  planFollowups?: Record<string, PlanFollowupReceipt>;
   version: number;
   sessions: Record<string, CodexHookSessionBinding>;
   planTaskCompletions: Record<string, PlanTaskCompletionState>;
-  pangHuProgressNotifications: Record<string, PangHuProgressNotificationState>;
   projectFileChanges: Record<string, Record<string, ProjectFileChangeState>>;
   projectFileChangeReminders: Record<string, Record<string, string>>;
 };
@@ -138,13 +118,13 @@ export type CodexHookContextRequest = {
 };
 
 export type CodexHookContextResult = {
+  followup?: { decision: "block"; reason: string };
   completionDeliveries?: import("./agentCompletionDelivery.js").CompletionDeliveryResult[];
   action: "none" | "bind" | "status" | "refresh" | "off";
   binding: CodexHookSessionBinding | null;
   additionalContext: string;
   planTaskCompletion?: PlanTaskCompletionResult;
   projectFileChangeReminder?: ProjectFileChangeReminderResult;
-  pangHuProgressNotification?: PangHuProgressNotificationResult;
   agentRequestStop?: AgentRequestStopResult;
   toolDecision?: { permissionDecision: "deny"; reason: string };
 };
@@ -171,8 +151,6 @@ export type CodexHookContextServiceOptions = {
   hookEnabled?: (request: CodexHookContextRequest) => boolean;
   isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
   recordAgentRequestStop?: (request: CodexHookContextRequest) => Promise<AgentRequestStopResult> | AgentRequestStopResult;
-  findPangHuProgressIssue?: (plan: PlanItem) => PangHuProgressNotificationDelivery["issue"] | undefined;
-  deliverPangHuProgressNotification?: (delivery: PangHuProgressNotificationDelivery) => Promise<PangHuProgressNotificationResult>;
   planStorageReady?: () => boolean;
   chatHistoryRoleIds?: (request: CodexHookContextRequest) => readonly string[];
   onChatHistoryChanged?: (roleId: string) => void;
@@ -391,8 +369,6 @@ export class CodexHookContextService {
   private readonly hookEnabled?: (request: CodexHookContextRequest) => boolean;
   private readonly isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
   private readonly recordAgentRequestStop?: (request: CodexHookContextRequest) => Promise<AgentRequestStopResult> | AgentRequestStopResult;
-  private readonly findPangHuProgressIssue?: (plan: PlanItem) => PangHuProgressNotificationDelivery["issue"] | undefined;
-  private readonly deliverPangHuProgressNotification?: (delivery: PangHuProgressNotificationDelivery) => Promise<PangHuProgressNotificationResult>;
   private readonly planStorageReady?: () => boolean;
   private readonly chatHistoryRoleIds?: CodexHookContextServiceOptions["chatHistoryRoleIds"];
   private readonly onChatHistoryChanged?: CodexHookContextServiceOptions["onChatHistoryChanged"];
@@ -407,8 +383,6 @@ export class CodexHookContextService {
     this.hookEnabled = options.hookEnabled;
     this.isManagedAgentSession = options.isManagedAgentSession;
     this.recordAgentRequestStop = options.recordAgentRequestStop;
-    this.findPangHuProgressIssue = options.findPangHuProgressIssue;
-    this.deliverPangHuProgressNotification = options.deliverPangHuProgressNotification;
     this.planStorageReady = options.planStorageReady;
     this.chatHistoryRoleIds = options.chatHistoryRoleIds;
     this.onChatHistoryChanged = options.onChatHistoryChanged;
@@ -483,10 +457,12 @@ export class CodexHookContextService {
     }
     const enabled = !this.hookEnabled || this.hookEnabled(request);
     if (request.eventName === "Stop") {
+      const followup = this.planFollowup(request);
+      if (followup) return { action: "none", binding: this.getBinding(request.sessionId), additionalContext: "", followup };
       const result = await this.handleStop(request, enabled);
       if (!result.additionalContext.trim() && result.planTaskCompletion?.status !== "failed"
         && result.agentRequestStop?.status !== "failed" && result.projectFileChangeReminder?.status !== "failed"
-        && result.pangHuProgressNotification?.status !== "failed" && this.deliverAgentCompletion) {
+        && this.deliverAgentCompletion) {
         result.completionDeliveries = await this.deliverAgentCompletion(request);
       }
       return result;
@@ -601,7 +577,6 @@ export class CodexHookContextService {
       blocks.push(section("Rabi Codex 会话人格", [
         "当前 Codex 会话已由 Rabi PC Manager 显式绑定人格。绑定只对当前 session_id 生效。",
         `角色 ID：${role.roleId}`,
-        `Rabi Manager：${managerBaseUrl}`,
         "人格、计划、记忆、技能、召回、viewedAt、归档与整理均由 Rabi PC 管理；Codex Hook 只是触发器和注入器。"
       ]));
       blocks.push(section(focusedContext ? "人格核心指令" : "人格工作集", [
@@ -629,20 +604,22 @@ export class CodexHookContextService {
         `Rabi Manager API 基址：${managerBaseUrl}`,
         ...view.apiHintLines,
         "",
-        "可用技能：",
-        view.activeSkillIndex,
-        "",
-        "当前计划：",
-        view.activePlanIndex,
-        "",
-        "近期记忆：",
-        view.recentMemoryIndex,
-        "",
-        "命中技能：",
-        view.matchedSkillIndex,
-        "",
-        "命中召回：",
-        view.matchedIndex
+        ...(focusedContext ? [] : [
+          "可用技能：",
+          view.activeSkillIndex,
+          "",
+          "当前计划：",
+          view.activePlanIndex,
+          "",
+          "近期记忆：",
+          view.recentMemoryIndex,
+          "",
+          "命中技能：",
+          view.matchedSkillIndex,
+          "",
+          "命中召回：",
+          view.matchedIndex
+        ])
       ]));
       blocks.push(section("处理前上下文确认", [
         "下列 GET 路径均相对于上方 Rabi Manager API 基址。",
@@ -655,7 +632,7 @@ export class CodexHookContextService {
         `Rabi Manager API 基址：${managerBaseUrl}`,
         "本次只注入本轮新命中的增量；人格、计划、记忆、技能及 viewedAt 仍由同一 Rabi PC Manager 管理。"
       ]));
-      blocks.push(section("推理期命中召回", [
+      if (!focusedContext) blocks.push(section("推理期命中召回", [
         "命中技能：",
         view.matchedSkillIndex,
         "",
@@ -695,23 +672,6 @@ export class CodexHookContextService {
   private async handleStop(request: CodexHookContextRequest, planCompletionEnabled: boolean): Promise<CodexHookContextResult> {
     await this.recordChatReply(request);
     const agentRequestStop = await this.recordAgentRequestStopResult(request);
-    const progress = planCompletionEnabled ? await this.handlePangHuProgressStop(request) : undefined;
-    if (progress?.status === "failed") {
-      return {
-        action: "none",
-        binding: this.getBinding(request.sessionId),
-        additionalContext: "[Rabi PangHu 进度通知门禁]\n本轮产生了有效进展，但工作群同步没有取得完整回执；保持当前任务进行中，修复发送或回读后重试。",
-        pangHuProgressNotification: progress,
-        planTaskCompletion: {
-          status: "failed",
-          reason: "panghu_progress_notification_required",
-          planId: progress.planId,
-          turnId: progress.turnId,
-          error: progress.error || progress.reason
-        },
-        agentRequestStop
-      };
-    }
     const projectFileChangeReminder = await this.handleProjectFileChangeStop(request);
     if (projectFileChangeReminder.result.status === "delivered") {
       if (planCompletionEnabled) void this.handlePlanStop(request).catch(() => undefined);
@@ -725,7 +685,6 @@ export class CodexHookContextService {
           turnId: request.turnId
         },
         agentRequestStop,
-        ...(progress ? { pangHuProgressNotification: progress } : {}),
         projectFileChangeReminder: projectFileChangeReminder.result
       };
     }
@@ -746,7 +705,6 @@ export class CodexHookContextService {
       ...planResult,
       additionalContext,
       agentRequestStop,
-      ...(progress ? { pangHuProgressNotification: progress } : {}),
       projectFileChangeReminder: projectFileChangeReminder.result
     };
   }
@@ -837,47 +795,6 @@ export class CodexHookContextService {
     }))];
   }
 
-  private async handlePangHuProgressStop(request: CodexHookContextRequest): Promise<PangHuProgressNotificationResult | undefined> {
-    const sessionId = this.requireSessionId(request.sessionId);
-    const matches = this.listRoles().flatMap((roleId) => {
-      const role = this.requireRole(roleId);
-      const workflow = ensurePersonaPlanWorkflow(role.roleDir).workflow;
-      return listPlans(role.roleDir)
-        .filter((plan) => (planStatusDefinition(workflow, plan.status)?.views.includes("current") === true)
-          && plan.taskBinding?.agentType === "codex"
-          && plan.taskBinding.sessionId === sessionId
-          && isPangHuWorkspace(plan.taskBinding.workspace || request.cwd))
-        .map((plan) => ({ ...role, plan }));
-    });
-    if (matches.length === 0) return undefined;
-    if (matches.length > 1) return { status: "failed", reason: "multiple_panghu_plan_task_bindings", turnId: request.turnId, error: `Codex session ${sessionId} is bound to multiple PangHu plans: ${matches.map((match) => match.plan.id).join(", ")}` };
-    const { roleId, roleDir, plan } = matches[0];
-    const turnId = String(request.turnId || "").trim();
-    const finalMessage = String(request.lastAssistantMessage || "").trim();
-    if (!turnId) return { status: "failed", reason: "missing_turn_id", planId: plan.id, error: "PangHu progress notification requires turn_id." };
-    if (!hasEffectiveProgress(finalMessage)) return { status: "ignored", reason: "no_effective_progress", planId: plan.id, turnId };
-    const issue = this.findPangHuProgressIssue?.(plan);
-    if (!issue?.groupId || !issue.sourceMessageId) return { status: "failed", reason: "PANGHU_PROGRESS_NOTIFICATION_CONTEXT_REQUIRED", planId: plan.id, turnId, error: "PangHu progress notification requires a managed work-group issue mapping with groupId and sourceMessageId." };
-    const fingerprint = crypto.createHash("sha256").update(JSON.stringify({
-      message: finalMessage, currentStepId: plan.currentStepId || "", currentStep: plan.currentStep || "", nextAction: plan.nextAction || "", waitingFor: plan.waitingFor || ""
-    })).digest("hex");
-    const store = this.readStore();
-    const previous = store.pangHuProgressNotifications[plan.id];
-    if (previous?.status === "sent" && previous.fingerprint === fingerprint) return { status: "duplicate", reason: "same_progress_already_sent", planId: plan.id, turnId, deliveryId: previous.deliveryId, sentMessageId: previous.sentMessageId, platformReferenceReadback: previous.platformReferenceReadback };
-    if (!this.deliverPangHuProgressNotification) return { status: "failed", reason: "delivery_unavailable", planId: plan.id, turnId, deliveryId: stablePangHuProgressDeliveryId(plan.id, sessionId, turnId), error: "PangHu progress notification delivery is not configured." };
-    const deliveryId = stablePangHuProgressDeliveryId(plan.id, sessionId, turnId);
-    try {
-      const result = await this.deliverPangHuProgressNotification({ roleId, roleDir, plan, issue, sourceSessionId: sessionId, sourceTurnId: turnId, sourceCwd: request.cwd, finalMessage, gatewayId: plan.taskBinding?.completionHook?.gatewayId });
-      const complete = isCompletePangHuProgressReceipt(result);
-      const state: PangHuProgressNotificationState = { sessionId, roleId, planId: plan.id, turnId, updatedAt: nowIso(), fingerprint, status: complete ? "sent" : "failed", deliveryId: result.deliveryId || deliveryId, sentMessageId: result.sentMessageId, platformReferenceReadback: result.platformReferenceReadback, error: complete ? undefined : result.error || result.reason };
-      store.pangHuProgressNotifications[plan.id] = state;
-      this.writeStore(store);
-      return complete ? { ...result, status: "sent", planId: plan.id, turnId, deliveryId: result.deliveryId || deliveryId } : { ...result, status: "failed", planId: plan.id, turnId, deliveryId: result.deliveryId || deliveryId, error: result.error || result.reason };
-    } catch (error) {
-      return { status: "failed", reason: "delivery_failed", planId: plan.id, turnId, deliveryId, error: error instanceof Error ? error.message : String(error) };
-    }
-  }
-
   private async recordAgentRequestStopResult(request: CodexHookContextRequest): Promise<AgentRequestStopResult> {
     if (!this.recordAgentRequestStop) {
       return { status: "ignored", reason: "agent_request_stop_not_configured", turnId: request.turnId };
@@ -892,6 +809,30 @@ export class CodexHookContextService {
         error: error instanceof Error ? error.message : String(error)
       };
     }
+  }
+
+  private planFollowup(request: CodexHookContextRequest): CodexHookContextResult["followup"] {
+    if (request.stopHookActive || !request.turnId) return undefined;
+    const matches = this.listRoles().flatMap(roleId => {
+      const role = this.requireRole(roleId);
+      return listPlans(role.roleDir).filter(plan => plan.taskBinding?.agentType === "codex"
+        && plan.taskBinding.sessionId === request.sessionId && plan.archiveStatus !== "已归档")
+        .map(plan => ({ ...role, plan }));
+    });
+    if (matches.length !== 1) return undefined;
+    const { roleId, roleDir, plan } = matches[0];
+    const config = readPersonaConfigFragment(path.join(roleDir, "personaConfig.json")).codexHooks?.planFollowup;
+    if (!config?.enabled) return undefined;
+    const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
+    const store = this.readStore();
+    const key = fingerprint([roleId, plan.id, request.sessionId]);
+    const result = decidePlanFollowup({ config, workflow, plan, sessionId: request.sessionId,
+      turnId: request.turnId, stopHookActive: request.stopHookActive,
+      previous: store.planFollowups?.[key], now: Date.now() });
+    if (!result) return undefined;
+    store.planFollowups = { ...store.planFollowups, [key]: result.receipt };
+    this.writeStore(store);
+    return { decision: "block", reason: result.reason };
   }
 
   private async handlePlanStop(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
@@ -1104,19 +1045,17 @@ export class CodexHookContextService {
 
   private readStore(): CodexHookSessionStoreFile {
     if (!fs.existsSync(this.storePath)) {
-      const empty: CodexHookSessionStoreFile = { version: STORE_VERSION, sessions: {}, planTaskCompletions: {}, pangHuProgressNotifications: {}, projectFileChanges: {}, projectFileChangeReminders: {} };
+      const empty: CodexHookSessionStoreFile = { version: STORE_VERSION, sessions: {}, planTaskCompletions: {}, projectFileChanges: {}, projectFileChangeReminders: {} };
       this.writeStore(empty);
       return empty;
     }
     const raw = JSON.parse(fs.readFileSync(this.storePath, "utf8")) as Partial<CodexHookSessionStoreFile>;
     return {
       version: STORE_VERSION,
+      planFollowups: raw.planFollowups ?? {},
       sessions: raw.sessions && typeof raw.sessions === "object" ? raw.sessions : {},
       planTaskCompletions: raw.planTaskCompletions && typeof raw.planTaskCompletions === "object"
         ? raw.planTaskCompletions
-        : {},
-      pangHuProgressNotifications: raw.pangHuProgressNotifications && typeof raw.pangHuProgressNotifications === "object"
-        ? raw.pangHuProgressNotifications
         : {},
       projectFileChanges: raw.projectFileChanges && typeof raw.projectFileChanges === "object" ? raw.projectFileChanges : {},
       projectFileChangeReminders: raw.projectFileChangeReminders && typeof raw.projectFileChangeReminders === "object" ? raw.projectFileChangeReminders : {}
@@ -1126,9 +1065,9 @@ export class CodexHookContextService {
   private writeStore(store: CodexHookSessionStoreFile): void {
     writeJsonAtomic(this.storePath, {
       version: STORE_VERSION,
+      planFollowups: store.planFollowups ?? {},
       sessions: store.sessions,
       planTaskCompletions: store.planTaskCompletions,
-      pangHuProgressNotifications: store.pangHuProgressNotifications,
       projectFileChanges: store.projectFileChanges,
       projectFileChangeReminders: store.projectFileChangeReminders
     });

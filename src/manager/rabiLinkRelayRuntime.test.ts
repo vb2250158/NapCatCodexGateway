@@ -139,6 +139,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
   t.after(() => close(localWebgui));
 
   let claimCount = 0;
+  let speechClaimCount = 0;
   let claimedIdentity: Record<string, string> = {};
   const relayState: { finishedBody?: Record<string, unknown> } = {};
   const relay = http.createServer((request, response) => {
@@ -150,6 +151,12 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
       );
       return;
     }
+    if (request.method === "GET" && url.pathname === "/worker/speech-requests") {
+      speechClaimCount += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, requests: [] }));
+      return;
+    }
     if (request.method === "GET" && url.pathname === "/worker/webgui-requests") {
       claimCount += 1;
       if (claimCount === 1) {
@@ -157,6 +164,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
           token: String(request.headers["x-rabilink-token"] || ""),
           deviceId: url.searchParams.get("deviceId") || "",
           deviceGuid: url.searchParams.get("deviceGuid") || "",
+          deviceKind: url.searchParams.get("deviceKind") || "",
           deviceName: url.searchParams.get("deviceName") || "",
           waitMs: url.searchParams.get("waitMs") || "",
           capabilities: url.searchParams.get("capabilities") || "",
@@ -205,12 +213,12 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
   await waitForRelayRuntime(
     runtime,
     "the initial WebGUI proxy completion",
-    () => relayState.finishedBody !== undefined,
-    () => ({ claimCount, relayReceiptReceived: relayState.finishedBody !== undefined })
+    () => relayState.finishedBody !== undefined && speechClaimCount > 0,
+    () => ({ claimCount, speechClaimCount, relayReceiptReceived: relayState.finishedBody !== undefined })
   );
   const finishedBody = relayState.finishedBody;
   assert.ok(finishedBody);
-  assert.equal(runtime.status().state, "online");
+  assert.equal(runtime.status().state, "online", JSON.stringify(runtime.status()));
   assert.ok(relayEvents.some((event) => event.eventType === "ready"));
   assert.deepEqual(
     relayEvents.find((event) => event.eventType === "outbox_receipt")?.data,
@@ -220,9 +228,10 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
     token: "app-token",
     deviceId: "pc-a",
     deviceGuid: "guid-a",
+    deviceKind: "pc",
     deviceName: "Test PC",
     waitMs: "0",
-    capabilities: "webgui,video-direct,persona-sync,persona-sync-plan-package-v1",
+    capabilities: "webgui,video-direct,peer-rpc-v1,persona-sync,persona-sync-plan-package-v1",
     peerUrls: JSON.stringify(["http://192.168.1.10:24001"])
   });
   assert.equal(finishedBody?.deviceId, "pc-a");
@@ -657,7 +666,7 @@ test("global Relay runtime proxies the independent speech plugin without exposin
     () => relayState.finishedBody !== undefined,
     () => ({ declaredCapabilities, localMethod: localState.method, relayReceiptReceived: relayState.finishedBody !== undefined })
   );
-  assert.equal(declaredCapabilities, "webgui,video-direct,persona-sync,persona-sync-plan-package-v1,speech");
+  assert.equal(declaredCapabilities, "webgui,video-direct,peer-rpc-v1,persona-sync,persona-sync-plan-package-v1,speech");
   assert.equal(localState.method, "POST");
   assert.equal(localState.url, "/v1/audio/transcriptions?language=zh");
   assert.equal(localState.authorization, undefined);

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
@@ -514,7 +515,7 @@ async function copyText(text: string, message = "已复制"): Promise<void> {
   try {
     await copyTextToClipboard(text);
   } catch (error) {
-    result = `复制失败：${error instanceof Error ? error.message : String(error)}`;
+    result = `复制失败：${userFacingError(error)}`;
   }
   copyResult.value = result;
   window.setTimeout(() => {
@@ -551,7 +552,7 @@ async function testNapcatHealth(): Promise<void> {
     const body = await resp.json().catch(() => ({}));
     napcatHealthResult.value = { ok: Boolean(body.ok), ...body };
   } catch (e: unknown) {
-    napcatHealthResult.value = { ok: false, message: e instanceof Error ? e.message : String(e) };
+    napcatHealthResult.value = { ok: false, message: userFacingError(e) };
   } finally {
     testingNapcatHealth.value = false;
   }
@@ -573,7 +574,7 @@ async function openMarvis(): Promise<void> {
       message: body.message || (resp.ok ? "已尝试打开 Marvis。" : "打开 Marvis 失败。")
     };
   } catch (e: unknown) {
-    marvisOpenResult.value = { ok: false, message: e instanceof Error ? e.message : String(e) };
+    marvisOpenResult.value = { ok: false, message: userFacingError(e) };
   } finally {
     openingMarvis.value = false;
   }
@@ -636,7 +637,7 @@ async function testAstrbotLogin(): Promise<void> {
       message: body.message || (resp.ok ? "AstrBot 登录验证成功。" : "AstrBot 登录验证失败。")
     };
   } catch (e: unknown) {
-    astrbotLoginResult.value = { ok: false, message: e instanceof Error ? e.message : String(e) };
+    astrbotLoginResult.value = { ok: false, message: userFacingError(e) };
   } finally {
     testingAstrbotLogin.value = false;
   }
@@ -806,7 +807,7 @@ async function apply() {
     await store.save();
     open.value = false;
   } catch (error: unknown) {
-    applyError.value = error instanceof Error ? error.message : String(error);
+    applyError.value = userFacingError(error);
     activeStep.value = messageReady.value ? (agentReady.value ? 3 : 2) : 1;
   } finally {
     applySaving.value = false;
@@ -1163,7 +1164,7 @@ async function apply() {
                       <v-text-field
                         v-model="form.dshSessionName"
                         label="DSH 会话名称"
-                        placeholder="DSH CottonGame Luna Max"
+                        placeholder="DSH Example Agent"
                         hint="可选标识，只用于显示，不改变 Harness 的会话名"
                         persistent-hint
                         data-no-i18n

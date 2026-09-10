@@ -4,7 +4,16 @@ export type DesktopPetPackSummary = {
   id: string;
   name: string;
   personaId: string;
-  states: Record<string, unknown>;
+  states: Record<string, DesktopPetAnimation>;
+  idleBehavior?: { randomStates: string[]; sleepState?: string };
+};
+
+export type DesktopPetAnimation = {
+  type: "gif" | "png-sequence";
+  assets: string[];
+  fps: number;
+  loop: boolean;
+  next?: string;
 };
 
 async function responseData<T>(response: Response): Promise<T> {

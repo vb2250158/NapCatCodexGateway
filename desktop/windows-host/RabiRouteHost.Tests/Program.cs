@@ -14,6 +14,8 @@ void Check(bool condition, string message)
     if (!condition) failures.Add(message);
 }
 
+await SourcePatchTests.RunAsync(Check);
+
 Check(NativeChildProcess.QuoteWindowsArgument("plain") == "plain", "plain argument quoting");
 Check(NativeChildProcess.QuoteWindowsArgument("two words") == "\"two words\"", "space argument quoting");
 Check(NativeChildProcess.QuoteWindowsArgument("C:\\trailing slash\\") == "\"C:\\trailing slash\\\\\"", "trailing slash quoting");
@@ -333,6 +335,10 @@ Check(!restartWindow.IsOpen(failureStart.AddSeconds(4)), "restart circuit remain
 restartWindow.Record(failureStart.AddSeconds(5));
 Check(restartWindow.IsOpen(failureStart.AddSeconds(5)), "restart circuit opens for a failure storm");
 Check(!restartWindow.IsOpen(failureStart.AddMinutes(3)), "restart circuit ages out unrelated historical failures");
+var slowRestartWindow = new RestartFailureWindow(5, RestartFailureWindow.DefaultWindow);
+for (var index = 0; index < 5; index++) slowRestartWindow.Record(failureStart.AddSeconds(index * 90));
+Check(slowRestartWindow.IsOpen(failureStart.AddMinutes(6)), "restart circuit also bounds minute-long startup failure loops");
+Check(!slowRestartWindow.IsOpen(failureStart.AddMinutes(22)), "slow failure history expires after a stable interval");
 
 await using (var unavailableLog = new HostLog("invalid\0host-log-root"))
 {
@@ -476,6 +482,7 @@ var lifecycleServer = Task.Run(async () =>
                 string.Equals(requestPath, "/health", StringComparison.Ordinal))
             {
                 lifecycleHealthRequest ??= requestText;
+                await Task.Delay(TimeSpan.FromSeconds(3), requestDeadline.Token);
                 status = "200 OK";
                 bodyBytes = Encoding.UTF8.GetBytes(
                     $"{{\"applicationGenerationId\":\"{generation}\",\"managerInstanceId\":\"manager-a\"," +
@@ -513,7 +520,7 @@ try
     using (var lifecycleClient = new ManagerLifecycleClient())
     {
         var probe = await lifecycleClient.ProbeAsync(lifecycleReady, generation, CancellationToken.None);
-        Check(probe.State == ManagerProbeState.Healthy, "probe Manager health on an OS-assigned dynamic port");
+        Check(probe.State == ManagerProbeState.Healthy, "probe Manager health survives a three-second scheduling delay on an OS-assigned port");
         Check(
             await lifecycleClient.RequestShutdownAsync(lifecycleReady, "host-secret", CancellationToken.None),
             "request protected Manager graceful shutdown");

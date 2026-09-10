@@ -1092,7 +1092,7 @@ function formatTime(value: number): string {
   return value ? new Date(value * 1_000).toLocaleString("zh-CN", { hour12: false }) : "-";
 }
 
-function formatItem(item: MessageContextRecord): string {
+export function formatMessageContextItem(item: MessageContextRecord): string {
   const direction = item.direction === "outbound" ? "出站" : item.direction === "system" ? "系统" : "入站";
   const participants = [item.sender, item.target ? `→ ${item.target}` : ""].filter(Boolean).join(" ");
   const ids = [item.messageId == null ? "" : `messageId=${item.messageId}`, item.replyToMessageId == null ? "" : `replyTo=${item.replyToMessageId}`].filter(Boolean).join(" | ");
@@ -1116,7 +1116,7 @@ export function recentMessageContextText(dataDirs: string[], limitOrQuery: numbe
   const maxChars = Math.max(1, Math.floor(query.maxChars ?? DEFAULT_MESSAGE_CONTEXT_MAX_CHARS));
   const items = recentMessageContextItems(dataDirs, query);
   if (!items.length) return "- 暂无";
-  const formatted = items.map(formatItem);
+  const formatted = items.map(formatMessageContextItem);
   const selected: string[] = [];
   let chars = 0;
   for (let index = formatted.length - 1; index >= 0; index -= 1) {

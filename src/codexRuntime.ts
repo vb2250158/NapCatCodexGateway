@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { currentEnvelopeDeliveryId, withoutLegacyTransportSuffix } from "./shared/deliveryIdentity.js";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
@@ -415,8 +416,17 @@ export function ensureCodexDesktopDeliveryMarkerForTest(
   prompt: string,
   requestedDeliveryId?: string
 ): { prompt: string; deliveryId: string } {
+  const historicalPrefix = withoutLegacyTransportSuffix(prompt);
+  if (historicalPrefix && currentEnvelopeDeliveryId(historicalPrefix)) {
+    throw new Error("Desktop prompt contains a historical transport suffix; reconcile instead of resending.");
+  }
   const existingDeliveryId = agentDeliveryMarkerForTest(prompt);
-  if (existingDeliveryId) return { prompt, deliveryId: existingDeliveryId };
+  if (existingDeliveryId) {
+    if (requestedDeliveryId && existingDeliveryId.toLowerCase() !== requestedDeliveryId.toLowerCase()) {
+      throw new Error("Desktop delivery ID conflicts with the message envelope.");
+    }
+    return { prompt, deliveryId: existingDeliveryId };
+  }
   const deliveryId = requestedDeliveryId || randomUUID();
   return {
     prompt: `${prompt.trimEnd()}\n\n[投递编号]\ndeliveryId: ${deliveryId}`,

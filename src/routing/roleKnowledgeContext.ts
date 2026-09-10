@@ -1,7 +1,6 @@
 import {
   indexLines,
   type RoleContextInjectionMode,
-  type RoleKnowledgeIndexItem,
   type RoleKnowledgeItemType,
   type RoleKnowledgeSnapshot
 } from "../roleKnowledge.js";
@@ -50,16 +49,12 @@ export function planMemoryApiHint(roleId: unknown): string[] {
   ];
 }
 
-function focusedApiHint(roleId: unknown): string[] {
+function focusedApiHint(roleId: unknown, interfaceDocPath: string): string[] {
   const base = roleApiBase(roleId);
   return [
-    "计划、记忆和技能默认只注入与当前输入高相关的摘要；长历史与完整内容按需查询。",
-    `按需查询/维护：${base}/plans、${base}/memory、${base}/skills；执行写入前仍须遵守对应接口校验与 Action Gate。`,
-    `先 GET ${base}/plan-statuses。plan.status 只保存当前人格启用状态的 key；展示和行为来自 planWorkflow 配置。分析中、分析完成但无法形成可审批具体方案、待审批和获批执行分别使用 roles.analysis、roles.informationNeeded、roles.approval、roles.execution 所指的 key；缺目标包或纳入证明用 roles.waitingPackage，缺 QA 结论用 roles.waitingQa，无效或历史已修复且无需验收用 roles.closed。`,
-    "archiveStatus 独立使用未归档或已归档；只有配置为 archiveEligible 的终态可归档。已归档计划不参与关键词召回，只能按明确 planId 或归档视图读取。",
-    "需要联系其它人格时，先 GET /api/personas?addressable=true，再 POST /api/personas/{personaId}/messages；请求带唯一 deliveryId，sourceRouteId 使用当前 replyContext.runtimeRouteId，sourceCapability 原样使用 personaMessagingCapability。多目标 Route 必须明确选择；回复沿用会话 ID、引用当前消息并增加 hopCount，不得超过注入上限。",
-      "待审批计划如果已有实际效果图、演示视频、设计稿、报告或其它文件，应写入计划 attachments；可传本机 path 或 name/mimeType/contentBase64，页面会展示附件并支持图片、视频预览。",
-    ...roleStorageMutationContractLines(base)
+    `按需读取：${base}/plans、${base}/memory、${base}/skills；长历史不自动加载。`,
+    `操作说明：${interfaceDocPath}。涉及计划、记忆写入、跨人格投递或远端任务前，必须读取对应章节；无法读取时停止该操作。`,
+    "写入必须遵守 Action Gate、动态 Manager 身份核验、Idempotency-Key、适用的强 ETag / If-Match 和写后回读合同；不得猜测状态 key、发送目标或重试参数。"
   ];
 }
 
@@ -75,14 +70,6 @@ export function skillIndexLines(roleId: unknown, items: Array<{ id: string; titl
   if (items.length === 0) return "- 暂无";
   const base = roleApiBase(roleId);
   return items.map((item) => `- ${item.id}：${item.title} - ${item.summary}（GET ${base}/skills/${encodeURIComponent(item.id)}）`).join("\n");
-}
-
-function summarizedIndexLines(items: RoleKnowledgeIndexItem[], empty = "- 暂无高相关项"): string {
-  if (items.length === 0) return empty;
-  return items.map((item) => {
-    const summary = String(item.summary || "").trim();
-    return `- [${requiredReadTypeLabel(item.type)}] ${item.id}：${item.title}${summary ? ` — ${summary}` : ""}`;
-  }).join("\n");
 }
 
 export function requiredReadLines(
@@ -112,24 +99,15 @@ export function requiredReadLines(
 export function buildRoleKnowledgeContextView(roleId: unknown, knowledge: RoleKnowledgeSnapshot): RoleKnowledgeContextView {
   const mode = knowledge.contextInjection?.mode ?? "legacy";
   if (mode === "focused") {
-    const base = roleApiBase(roleId);
-    const requiredSkillIds = new Set(
-      knowledge.requiredReadItems
-        .filter((item) => item.type === "role_skill")
-        .map((item) => item.id)
-    );
     return {
       mode,
-      activePlanIndex: `- 默认不注入全量计划索引；按需查询 GET ${base}/plans`,
-      activeSkillIndex: `- 默认不注入全量技能索引；按需查询 GET ${base}/skills`,
-      recentMemoryIndex: `- 默认不注入全量记忆索引；按需查询 GET ${base}/memory`,
-      matchedIndex: summarizedIndexLines(knowledge.requiredReadItems.filter((item) => item.type !== "role_skill")),
-      matchedSkillIndex: skillIndexLines(
-        roleId,
-        knowledge.matchedSkills.filter((item) => requiredSkillIds.has(item.id))
-      ),
+      activePlanIndex: "",
+      activeSkillIndex: "",
+      recentMemoryIndex: "",
+      matchedIndex: "",
+      matchedSkillIndex: "",
       requiredReadLines: requiredReadLines(knowledge.requiredReadItems, mode),
-      apiHintLines: focusedApiHint(roleId)
+      apiHintLines: focusedApiHint(roleId, knowledge.agentInterfaceDocPath || "docs/rabi-agent-interfaces.md")
     };
   }
   return {

@@ -392,7 +392,7 @@ test("AgentPacket injects processing-time context confirmation protocol", () => 
   assert.match(packet.message, /\[处理前上下文确认\]/);
   assert.match(packet.message, /回复、发布任务、更新计划、写入记忆或执行外部动作之前/);
   assert.match(packet.message, /GET \/api\/roles\/Rabi\/memory\/recent\/memory-required/);
-  assert.match(packet.message, /\[近期记忆\] memory-required：任务发布上下文/);
+  assert.match(packet.message, /memory-required：任务发布上下文 — 任务发布上下文（近期记忆，score=20）/);
 });
 
 test("AgentPacket injects skill indexes without embedding skill bodies", () => {
@@ -428,8 +428,8 @@ SECRET BODY SHOULD NOT BE IN PACKET
     dataDir: "data/route/main"
   });
 
-  assert.match(packet.message, /可用技能/);
-  assert.match(packet.message, /routing-guide：Routing guide - Explain route kind and policy router concepts/);
+  assert.match(packet.message, /\[处理前上下文确认\]/);
+  assert.match(packet.message, /routing-guide：Routing guide — Explain route kind and policy router concepts.（角色技能，score=25）/);
   assert.match(packet.message, /GET \/api\/roles\/Rabi\/skills\/routing-guide/);
   assert.doesNotMatch(packet.message, /SECRET BODY SHOULD NOT BE IN PACKET/);
 });

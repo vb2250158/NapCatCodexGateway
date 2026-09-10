@@ -1,11 +1,20 @@
+import { errorResponsePresentation } from "../shared/errorPresentation.js";
+import { KnowledgeSearchService } from "./knowledgeSearchService.js";
+import { handleKnowledgeSearch } from "./knowledgeSearchRoutes.js";
+import type { AgentInstanceBinding } from "../shared/agentInstance.js";
+import { manageInstanceAgent } from "../agentAdapters/instanceManagement.js";
+import { agentRequestReminderPrompt } from "../agentRequests/replyParameters.js";
 import fs from "node:fs";
 import { createVideoRuntime } from "./videoRuntime.js";
+import { createRabiPeerRuntime } from "./rabiPeerRoutes.js";
+import { readRabiPeerAccess } from "./rabiPeerAccess.js";
+import { discoverRabiPeers } from "../rabiPeerDiscovery.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { NapcatLifecycleOwner, validateNapcatBindings, type NapcatBinding } from "./napcatLifecycleOwner.js";
 import { createNapcatProcessDriver } from "./napcatProcessDriver.js";
 import {
@@ -15,13 +24,17 @@ import {
 } from "../agentDeliveryTest.js";
 import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
 import { agentAdapterManifest } from "../shared/agentAdapterCapabilities.js";
-import { agentThreadRequestFailureData, handleAgentThreadRequest, type AgentThreadRequest, type AgentThreadRequestOptions } from "../agentThreads.js";
+import { agentThreadRequestFailureData, handleAgentThreadRequest as handleLocalAgentThreadRequest, type AgentThreadRequest, type AgentThreadRequestOptions } from "../agentThreads.js";
+import { routeInstanceThread, type InstanceThreadTransport } from "./instanceThreadRouting.js";
+import { instanceWorkerStateDirectory } from "../agentAdapters/instanceClient.js";
+import { recordPersonaAgentDelivery } from "./personaAgentDeliveryHistory.js";
 import { agentIdentityForMessageSource, type RabiAgentMessageSource, type RabiDeliveryEnvelope, type RabiMessageSource } from "../shared/rabiMessage.js";
 import { AgentRequestStore, type AgentRequestRecord } from "../agentRequests/store.js";
+import { recoverAgentResponseDeliveryFromRollout } from "../agentRequests/deliveryRecovery.js";
 import { agentRequestStatePath } from "../agentRequests/persistence.js";
 import { projectDirectoryLayout } from "../shared/projectDirectoryLayout.js";
 import { resolveRuntimeLayout } from "../shared/runtimeLayout.js";
-import { listCodexDesktopThreads, readCodexDesktopThread } from "../codexDesktopBridge.js";
+import { listCodexDesktopWorkspaces, readCodexDesktopThread } from "../codexDesktopBridge.js";
 import { isDshSessionId } from "../dshSessionBridge.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { selectAgentThreadRouteId } from "./agentThreadRouteSelection.js";
@@ -33,7 +46,6 @@ import {
   type AgentManagerApiContext
 } from "../agentAdapters/managerApi.js";
 import type { MessageAdapterType } from "../adapters/messageAdapter.js";
-import { getMessage } from "../napcat.js";
 import type { ForwardRouteKind } from "../forwarding.js";
 import { appendAdapterLogToDir } from "../history.js";
 import {
@@ -107,7 +119,7 @@ import {
   type IdentityRelationPatch
 } from "../identityRelations.js";
 import { listConversationSituations } from "../conversationSituationStore.js";
-import { AgentCompletionDeliveryService, completionTaskContextFromPlans, deliverCompletionToEndpoint } from "./agentCompletionDelivery.js";
+import { AgentCompletionDeliveryService, completionTaskContextFromPlans, deliverCompletionToEndpoint, planCompletionDeliveryRules } from "./agentCompletionDelivery.js";
 import type { ReviewedReplySourceEvidence } from "../replyImageDescriptions.js";
 import {
   handleAgentSend,
@@ -237,15 +249,15 @@ import {
   type CodexHookContextRequest,
   type PlanTaskCompletionDelivery,
 } from "./codexHookContext.js";
-import { handleCodexHookApi } from "./codexHookRoutes.js";
-import {
-  pangHuProgressMessage,
-  stablePangHuProgressDeliveryId,
-  type PangHuProgressNotificationDelivery,
-  type PangHuProgressNotificationResult
-} from "./panghuProgressNotificationGate.js";
+import { handleCodexHookApi, hookContextRequest } from "./codexHookRoutes.js";
 import { handleLanguageStyleApi } from "./languageStyleRoutes.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
+import { createSourcePatchHostService, ManagerSourcePatchService } from "./sourcePatchService.js";
+import { SourcePatchWatcher } from "./sourcePatchWatcher.js";
+import { handleSourcePatchApi } from "./sourcePatchRoutes.js";
+import { WebPatchService } from "./webPatchService.js";
+import { WebPatchWatcher } from "./webPatchWatcher.js";
+import { handleWebPatchApi } from "./webPatchRoutes.js";
 import {
   GenerationRuntime,
   loadPluginProfile,
@@ -318,6 +330,7 @@ import { createPlanTaskCompletionDelivery } from "./planTaskCompletionDelivery.j
 import {
   deliverPlanApprovalFeedback,
   PlanFeedbackDeliveryPendingError,
+  requireConfirmedPlanDelivery,
   type PlanApprovalFeedbackPersonaRequest,
   type PlanApprovalFeedbackSecretaryTarget,
   type PlanApprovalFeedbackTaskRequest
@@ -667,6 +680,7 @@ type GatewayDefinition = {
   copilotCwd?: string;
   copilotCliBin?: string;
   marvisAppId?: string;
+  agentInstanceBindings?: Record<string, AgentInstanceBinding>;
   astrbotUrl?: string;
   astrbotUsername?: string;
   astrbotPassword?: string;
@@ -804,11 +818,13 @@ function planMessageSource(
 }
 
 function primaryAgentWorkspace(definition: GatewayDefinition): string | undefined {
+  definition = effectiveInstanceDefinition(definition);
   const adapter = definition.primaryAgentAdapter || normalizeAgentAdapters(definition.agentAdapters)[0];
   return adapter === "dsh" ? definition.dshCwd : adapter === "codex" ? definition.codexCwd : undefined;
 }
 
 function primaryAgentSessionId(definition: GatewayDefinition): string | undefined {
+  definition = effectiveInstanceDefinition(definition);
   const adapter = definition.primaryAgentAdapter || normalizeAgentAdapters(definition.agentAdapters)[0];
   return adapter === "dsh" ? definition.dshSessionId : adapter === "codex" ? definition.codexThreadId : undefined;
 }
@@ -816,6 +832,7 @@ function primaryAgentSessionId(definition: GatewayDefinition): string | undefine
 function runtimeOwnsAgentSession(runtime: GatewayRuntime, sessionId: string): boolean {
   const id = sessionId.trim();
   if (!id) return false;
+  if (Object.values(runtime.definition.agentInstanceBindings || {}).some(binding => instanceAgentSessions(binding).includes(id))) return true;
   if (String(runtime.definition.codexThreadId || "").trim() === id) return true;
   if (String(runtime.definition.dshSessionId || "").trim() === id) return true;
   if ((runtime.definition.codexPlanAssistantSessions ?? []).some((session) => session.threadId === id)) return true;
@@ -830,6 +847,30 @@ function runtimeOwnsAgentSession(runtime: GatewayRuntime, sessionId: string): bo
     return false;
   }
   return plans.some((plan) => plan.taskBinding?.sessionId === id || plan.secretaryBinding?.sessionId === id);
+}
+
+let instanceThreadTransport: InstanceThreadTransport | undefined;
+function effectiveInstanceDefinition(definition: GatewayDefinition): GatewayDefinition {
+  const adapter = definition.primaryAgentAdapter || definition.agentAdapters?.[0];
+  const binding = adapter ? definition.agentInstanceBindings?.[adapter] : undefined;
+  if (!binding) return definition;
+  const agent = instanceThreadTransport?.instances().find(instance => instance.instanceId === binding.instanceId)?.agents.find(agent => agent.agentId === binding.agentId);
+  return adapter === "dsh" ? { ...definition, dshSessionId: agent?.sessionId, dshSessionName: agent?.name, dshCwd: agent?.workspace, dshBaseUrl: agent?.dshBaseUrl }
+    : { ...definition, codexThreadId: agent?.sessionId, codexThreadName: agent?.name, codexCwd: agent?.workspace };
+}
+function messageWorkerDataDir(definition: GatewayDefinition): string {
+  const adapter = definition.primaryAgentAdapter || definition.agentAdapters?.[0];
+  const binding = adapter ? definition.agentInstanceBindings?.[adapter] : undefined;
+  return binding ? instanceWorkerStateDirectory(dataDirFor(definition), binding, primaryAgentSessionId(definition) || "unavailable") : dataDirFor(definition);
+}
+async function handleAgentThreadRequest(request: AgentThreadRequest, options: AgentThreadRequestOptions) {
+  const remote = instanceThreadTransport ? await routeInstanceThread(request, instanceThreadTransport) : undefined;
+  if (!remote) return handleLocalAgentThreadRequest(request, options);
+  if (request.action === "send" && ["delivered", "delivered_tracking_failed", "delivery_unconfirmed"].includes(String(remote.data.status))) {
+    try { await options.onChatHistoryDelivery?.(request, remote); }
+    catch (error) { remote.data.chatHistoryWarning = error instanceof Error ? error.message : String(error); }
+  }
+  return remote;
 }
 
 function runtimeForAgentThreadRequest(request: AgentThreadRequest): GatewayRuntime | undefined {
@@ -871,6 +912,19 @@ function agentThreadRequestOptions(
   return {
     allowedWorkspaces: agentThreadAllowedWorkspaces(),
     defaultWorkspace: rootDir,
+    onChatHistoryDelivery: (body, result) => recordPersonaAgentDelivery(body, result, {
+      roleForTask: (sessionId, workspace) => {
+        const binding = codexHookContextService.getBinding(sessionId);
+        if (binding?.cwd && workspace && !hookWorkspaceMatches(binding.cwd, workspace)) return undefined;
+        const roleIds = new Set([...gatewayIdsForManagedSession(sessionId, workspace)]
+          .map(id => sanitizeRoleId(runtimes.get(id)?.definition.agentRoleId))
+          .filter((id): id is string => Boolean(id)));
+        if (binding) roleIds.add(binding.roleId);
+        return roleIds.size === 1 ? [...roleIds][0] : undefined;
+      },
+      roleDir: roleDirForApi,
+      changed: roleId => publishManagerEvent("persona_chat_history_changed", { roleId })
+    }),
     ...(explicitDshBaseUrl
       ? { dshBaseUrl: explicitDshBaseUrl }
       : runtime?.definition.dshBaseUrl
@@ -1193,6 +1247,7 @@ let routeRoot = configRepository.routeRoot;
 let routeCatalogConfig: GatewayConfigFile = { gateways: [] };
 let routeCatalogPersonaPresentations: readonly RouteCatalogPersonaPresentation[] = Object.freeze([]);
 let roleKnowledgeCatalogsReady = false;
+let knowledgeSearchService: KnowledgeSearchService | undefined;
 let personaMessageAuthority: PersonaMessageAuthority | undefined;
 const messageProcessingSendContextReview = new MessageProcessingSendContextReview({
   getRequirement: (requirementId) => messageProcessingBoard.getRequirement(requirementId),
@@ -1214,13 +1269,16 @@ function currentPersonaMessageAuthority(): PersonaMessageAuthority {
   return personaMessageAuthority;
 }
 const agentCompletionDelivery = new AgentCompletionDeliveryService({
-  rules: () => {
+  rules: request => {
     const roles = new Set<string>();
     return [...runtimes.values()].flatMap(runtime => {
       const roleId = sanitizeRoleId(runtime.definition.agentRoleId);
       if (!roleId || roles.has(roleId) || runtime.definition.enabled === false) return [];
       roles.add(roleId);
-      return (runtime.definition.codexHooks?.completionDeliveries ?? []).map(rule => ({ roleId, rule }));
+      return [
+        ...(runtime.definition.codexHooks?.completionDeliveries ?? []).map(rule => ({ roleId, rule })),
+        ...planCompletionDeliveryRules(roleId, listPlans(roleDirForApi(roleId)), request.sessionId)
+      ];
     });
   },
   taskContext: ({ roleId }, request) => {
@@ -1264,8 +1322,6 @@ const codexHookContextService = new CodexHookContextService({
   hookEnabled: codexHookEnabled,
   isManagedAgentSession,
   recordAgentRequestStop,
-  findPangHuProgressIssue,
-  deliverPangHuProgressNotification,
   chatHistoryRoleIds: request => [...gatewayIdsForManagedSession(request.sessionId, request.cwd)]
     .map(id => sanitizeRoleId(runtimes.get(id)?.definition.agentRoleId))
     .filter((roleId): roleId is string => Boolean(roleId)),
@@ -1367,7 +1423,40 @@ function personaSyncRouteContext(controlPlaneAuthorized = false): PersonaSyncRou
     }
   };
 }
+let activePeerRuntime: ReturnType<typeof createRabiPeerRuntime> | undefined;
+function createManagerPeerRuntime() {
+  const access = () => readRabiPeerAccess(path.join(rootDir, "data", "rabilink", "peer-access.json"));
+  const role = (input: unknown) => {
+    const roleId = (input as { roleId?: unknown })?.roleId;
+    if (typeof roleId !== "string" || !access().roleIds.includes(roleId)) throw new Error("peer_role_denied");
+    return roleId;
+  };
+  const runtime = createRabiPeerRuntime({
+    identity: () => ({ deviceId: rabiLinkRelayConfigForMeta().deviceId,
+      generation: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, instanceId: managerInstanceId }),
+    token: () => rabiLinkRelayConfigForMeta().token,
+    allowed: () => access().operations,
+    peers: () => discoverRabiPeers(personaSyncRouteContext().relay()),
+    relay: () => personaSyncRouteContext().relay(),
+    readJson: readJsonBody, json: jsonResponse,
+    onResult: event => publishManagerEvent("peer_rpc_completed", event),
+    operations: [
+      { capability: "plans", operation: "list", execute: async input => {
+        const roleId = role(input);
+        const plans = await listPlansAsync(roleDirForApi(roleId));
+        return { roleId, plans: plans.map(({ id, title, status, updatedAt }) => ({ id, title, status, updatedAt })) };
+      } },
+      { capability: "persona", operation: "manifest", execute: input => personaSyncService.manifest(role(input)) }
+    ]
+  });
+  activePeerRuntime = runtime;
+  return { handler: runtime.handler, async stop() {
+    if (activePeerRuntime === runtime) activePeerRuntime = undefined;
+    await runtime.stop();
+  } };
+}
 const personaSyncLanServer = new PersonaSyncLanServer(personaSyncRouteContext(), {
+  peerHandler: (request, url, response) => activePeerRuntime?.handler(request, url, response) ?? false,
   port: Number(process.env.RABILINK_PERSONA_SYNC_LAN_PORT ?? 0),
   onStatus: status => publishManagerEvent("persona_sync_lan_status", status)
 });
@@ -1450,10 +1539,11 @@ function webguiLanRequestAllowed(request: http.IncomingMessage, requestUrl: URL)
   ) return true;
   if (isPublicWebguiStaticRequest(request.method, requestUrl.pathname)) return true;
   if (remoteRequestUsesIndependentAuthorization(request, requestUrl)) return true;
-  if (requestUrl.pathname.startsWith("/api/lan-agent/releases/") && request.method === "GET") {
+  if (requestUrl.pathname.startsWith("/api/lan-agent/") && request.headers.authorization) {
     const authorization = Array.isArray(request.headers.authorization) ? request.headers.authorization[0] ?? "" : request.headers.authorization ?? "";
     const token = authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? "";
-    return webguiTokenMatches(token, rabiGlobalConfig.read().webguiLan.accessToken);
+    const lan = rabiGlobalConfig.read().webguiLan;
+    return lan.enabled && webguiTokenMatches(token, lan.accessToken);
   }
   return isWebguiLanRequestAuthorized(request, requestUrl, rabiGlobalConfig.read().webguiLan);
 }
@@ -1559,6 +1649,30 @@ async function writeConfig(
   }
 }
 
+async function writeGatewayConfig(id: string, definition: GatewayDefinition, hash: string, operationId: string): Promise<void> {
+  validateNapcatRouteCardinality(definition);
+  const normalized = normalizeDefinition(definition);
+  // The worker merges only this Route with its authoritative catalog inside the CAS transaction.
+  try {
+    await requireRouteCatalogLifecycle().upsert(normalized, hash, operationId, id);
+    pendingManagedConfigWatchEchoes += 1;
+  } catch (error) {
+    throw routeCatalogMutationFailure(error);
+  }
+}
+
+async function resolveRouteMutation(operationId: string): Promise<{ state: "committed" | "not_committed" }> {
+  if (!/^[A-Za-z0-9:._-]{1,256}$/.test(operationId)) {
+    throw Object.assign(new Error("Invalid Route operation id."), { statusCode: 400 });
+  }
+  const lifecycle = requireRouteCatalogLifecycle();
+  // A queue barrier finishes/recover-fences earlier writes before absence is reported.
+  const snapshot = await lifecycle.resolveMutation(operationId);
+  if (requireRouteCatalogLifecycle() !== lifecycle) throw new Error("Route catalog lifecycle changed during recovery.");
+  if (snapshot.resolvedMutation?.operationId !== operationId) throw new Error("Route mutation resolution is unavailable.");
+  return { state: snapshot.resolvedMutation.state };
+}
+
 function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
   return sharedNormalizeGatewayDefinition(definition, {
     managerPort,
@@ -1660,6 +1774,7 @@ export function adapterConfigItem(definition: GatewayDefinition): Record<string,
     codexThreadId: definition.codexThreadId,
     codexThreadName: definition.codexThreadName,
     codexCwd: configPathValue(definition.codexCwd),
+    agentInstanceBindings: definition.agentInstanceBindings,
     dshSessionId: definition.dshSessionId,
     dshSessionName: definition.dshSessionName,
     dshCwd: configPathValue(definition.dshCwd),
@@ -2390,6 +2505,8 @@ function envFor(
       : (definition.codexThreadId?.trim() || ""),
     CODEX_THREAD_NAME: resolveCodexThreadName(definition),
     CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? normalizeCodexCwd(process.env.CODEX_CWD) ?? rootDir,
+    AGENT_INSTANCE_BINDINGS: JSON.stringify(definition.agentInstanceBindings || {}),
+    LAN_AGENT_ACCESS_TOKEN: Object.keys(definition.agentInstanceBindings || {}).length ? globalConfig.webguiLan.accessToken : "",
     DSH_SESSION_ID: definition.dshSessionId?.trim() || "",
     DSH_SESSION_NAME: definition.dshSessionName?.trim() || "",
     DSH_BASE_URL: definition.dshBaseUrl?.trim() || "",
@@ -3958,6 +4075,7 @@ export function buildGatewayDiagnosticsWorkerSnapshot(
 }
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
+  body = errorResponsePresentation(body, statusCode);
   if (statusCode >= 400) {
     const context = managerRequestContexts.get(response);
     const responseBody = body as { message?: unknown; error?: unknown } | null;
@@ -4502,6 +4620,12 @@ function gatewayIdsForManagedSession(sessionId: string, cwd?: string): Set<strin
   const exactSessionId = String(sessionId || "").trim();
   const gatewayIds = new Set<string>();
   for (const runtime of runtimes.values()) {
+    if (Object.values(runtime.definition.agentInstanceBindings ?? {}).some(binding => {
+      return instanceAgentSessions(binding).some(sessionId => instanceHookSessionId(binding.instanceId, binding.agentId, sessionId) === exactSessionId);
+    })) {
+      gatewayIds.add(runtime.definition.id);
+      continue;
+    }
     if (
       (String(runtime.definition.codexThreadId || "").trim() === exactSessionId
         && hookWorkspaceMatches(runtime.definition.codexCwd, cwd))
@@ -4526,6 +4650,11 @@ function gatewayIdsForManagedSession(sessionId: string, cwd?: string): Set<strin
     }
   }
   return gatewayIds;
+}
+
+let instanceAgentSessions: (binding: AgentInstanceBinding) => string[] = () => [];
+function instanceHookSessionId(instanceId: string, agentId: string, sessionId: string): string {
+  return `instance-${createHash("sha256").update(JSON.stringify([instanceId, agentId, sessionId])).digest("hex")}`;
 }
 
 function codexHookSettingsForSession(sessionId: string, cwd?: string): CodexHookSettings {
@@ -4592,26 +4721,26 @@ function recordAgentRequestStop(request: CodexHookContextRequest): AgentRequestS
   };
 }
 
-function agentRequestReminderPrompt(request: AgentRequestRecord): string {
-  const sourceWorkspace = request.source.workspace || "<原请求任务工作目录>";
-  return [
-    "[Rabi Agent 请求回复提醒]",
-    `requestId：${request.id}`,
-    `原请求任务：${request.source.threadName || request.source.threadId}`,
-    `原请求任务 ID：${request.source.threadId}`,
-    `需要回答：${request.responseInstruction}`,
-    "上一轮迭代结束时没有检测到通过 RabiRoute 接口提交的正式回复。普通 Codex 最终文字不算回复。",
-    "请完成判断后调用 POST /api/agent/threads，并填写：",
-    `action=send、threadId=${request.source.threadId}、cwd=${sourceWorkspace}、messageSource={type=agent，agentAdapter=当前 Agent 端，sessionId=当前任务完整 ID，sessionName=当前任务名称}、sourceThreadId=当前任务完整 ID、sourceAgentType=当前 Agent 类型、inReplyToRequestId=${request.id}、result=结果或决定、nextAction=下一步、responsePolicy=required 或 none、prompt=重新编写的回复内容。`,
-    "如果下一步仍要求原请求方处理完再返回，填写 responsePolicy=required 和 responseInstruction；如果本次回复结束往返，填写 responsePolicy=none。"
-  ].join("\n");
-}
 
 function scheduleAgentRequestReminder(request: AgentRequestRecord): void {
   messageProcessingAutomationService?.schedule(request);
 }
 
 async function deliverAgentRequestReminder(request: AgentRequestRecord): Promise<void> {
+  const current = agentRequests.get(request.id);
+  if (!current || current.status !== "awaiting_response") return;
+  if (current.pendingResponseDeliveryId) {
+    const recovery = await recoverAgentResponseDeliveryFromRollout(agentRequests, current.source.threadId, current.pendingResponseDeliveryId);
+    agentRequests.recordPendingResponseCheck(current.id, current.pendingResponseDeliveryId, recovery.status);
+    if (recovery.status === "receipt_recovered" && current.messageProcessingRequirementId) {
+      messageProcessingBoard.recordHandoffReturned(current.messageProcessingRequirementId, current.target.threadId);
+    }
+    managerOperationalLog.record("info", "agent_response_receipt_reconciled", {
+      result: recovery.status, requestId: current.id
+    });
+    publishManagerEvent("agent_requests_changed", recovery);
+    return;
+  }
   const requestId = request.id;
   const messageProcessingTarget = currentMessageProcessingTargetByThreadId(request.target.threadId)
     ?? ((request.target.agentType === "message_processing" || request.target.agentType === "primary_persona")
@@ -4689,9 +4818,7 @@ function refreshAgentRequestReminderTimers(): void {
 function agentThreadAllowedWorkspaces(): string[] {
   let desktopWorkspaces: string[] = [];
   try {
-    desktopWorkspaces = listCodexDesktopThreads({ limit: 10_000 })
-      .map((thread) => thread.cwd?.trim())
-      .filter((value): value is string => Boolean(value));
+    desktopWorkspaces = listCodexDesktopWorkspaces();
   } catch {
     // Keep configured workspaces available when Desktop state is temporarily unreadable.
   }
@@ -4977,7 +5104,7 @@ function currentMessageProcessingTarget(requirement: MessageProcessingRequiremen
   const messageAgentModeEnabled = Boolean(managedAdapter);
   const managedWorker = messageAgentModeEnabled
     ? resolveCurrentMessageAgentWorker(
-      messageAgentPoolStatePath(dataDirFor(runtime.definition)),
+      messageAgentPoolStatePath(messageWorkerDataDir(runtime.definition)),
       requirement.worker,
       maxAgents,
       {
@@ -4990,22 +5117,20 @@ function currentMessageProcessingTarget(requirement: MessageProcessingRequiremen
       primaryAgentWorkspace(runtime.definition)
     )
     : undefined;
-  return resolveMessageProcessingDeliveryTarget(runtime.definition, managedWorker);
+  return resolveMessageProcessingDeliveryTarget(effectiveInstanceDefinition(runtime.definition), managedWorker);
 }
 
 function runtimeForMessageProcessingTarget(target: MessageProcessingDeliveryTarget): GatewayRuntime | undefined {
   if (target.agentType === "primary_persona") {
     return [...runtimes.values()].find((runtime) =>
-      (String(runtime.definition.codexThreadId || "").trim() === target.worker.threadId
-        && String(runtime.definition.codexCwd || "").trim() === target.worker.workspace)
-      || (String(runtime.definition.dshSessionId || "").trim() === target.worker.threadId
-        && String(runtime.definition.dshCwd || "").trim() === target.worker.workspace)
+      primaryAgentSessionId(runtime.definition) === target.worker.threadId
+        && primaryAgentWorkspace(runtime.definition) === target.worker.workspace
     );
   }
   return [...runtimes.values()].find((runtime) => {
     const adapter = primaryMessageProcessingAgentAdapter(runtime.definition);
     return readCurrentMessageAgentWorkers(
-      messageAgentPoolStatePath(dataDirFor(runtime.definition)),
+      messageAgentPoolStatePath(messageWorkerDataDir(runtime.definition)),
       adapter ? runtime.definition.messageProcessingAgents?.[adapter]?.maxAgents : undefined,
       primaryAgentWorkspace(runtime.definition)
     ).some((worker) => worker.threadId === target.worker.threadId && worker.agentAdapter === target.worker.agentAdapter);
@@ -5087,7 +5212,7 @@ async function persistResolvedMessageProcessingTarget(
       await writeAdapterConfigFile(runtime.definition);
     }
   } else {
-    const statePath = messageAgentPoolStatePath(dataDirFor(runtime.definition));
+    const statePath = messageAgentPoolStatePath(messageWorkerDataDir(runtime.definition));
     const replaced = replacePersistedMessageAgentWorker(
       statePath,
       resolved.previousThreadId,
@@ -5134,7 +5259,7 @@ function currentMessageProcessingTargetByThreadId(threadId: string): MessageProc
     const managedAdapter = primaryMessageProcessingAgentAdapter(runtime.definition);
     const modeEnabled = Boolean(managedAdapter);
     const workers = readCurrentMessageAgentWorkers(
-      messageAgentPoolStatePath(dataDirFor(runtime.definition)),
+      messageAgentPoolStatePath(messageWorkerDataDir(runtime.definition)),
       managedAdapter ? runtime.definition.messageProcessingAgents?.[managedAdapter]?.maxAgents : undefined,
       primaryAgentWorkspace(runtime.definition)
     );
@@ -5416,9 +5541,7 @@ async function sendPlanFeedbackToTask(
     defaultWorkspace: rootDir,
     dshBaseUrl
   });
-  if (result.statusCode < 200 || result.statusCode >= 300) {
-    throw new Error(String(result.data.message || "Plan task continuation failed with HTTP " + result.statusCode + "."));
-  }
+  requireConfirmedPlanDelivery(result);
   const thread = result.data.thread as { id?: unknown; title?: unknown; cwd?: unknown } | undefined;
   const resolvedId = String(thread?.id || "").trim();
   if (!resolvedId || resolvedId === request.threadId) return;
@@ -5494,9 +5617,7 @@ async function sendPlanFeedbackToSecretary(
     defaultWorkspace: rootDir,
     dshBaseUrl: runtime.definition.dshBaseUrl
   });
-  if (result.statusCode < 200 || result.statusCode >= 300) {
-    throw new Error(String(result.data.message || "Plan secretary feedback delivery failed with HTTP " + result.statusCode + "."));
-  }
+  requireConfirmedPlanDelivery(result);
   if (resolved.initializationPrompt) {
     await markPlanSecretaryInitialized(runtime, resolved.target.threadId);
   }
@@ -5547,9 +5668,7 @@ async function sendPlanTaskCompletionToSecretary(
     dshBaseUrl: runtime.definition.dshBaseUrl,
     agentRequests
   });
-  if (result.statusCode < 200 || result.statusCode >= 300) {
-    throw new Error(String(result.data.message || "Plan task completion delivery to secretary failed with HTTP " + result.statusCode + "."));
-  }
+  requireConfirmedPlanDelivery(result);
   if (resolved.initializationPrompt) {
     await markPlanSecretaryInitialized(runtime, resolved.target.threadId);
   }
@@ -5679,102 +5798,6 @@ function runtimeForRoleDelivery(roleId: string, gatewayId: string): GatewayRunti
   if (matches.length === 0) throw new Error(`No gateway is bound to role ${roleId}.`);
   if (matches.length > 1) throw new Error(`Multiple gateways are bound to role ${roleId}; gatewayId is required.`);
   return matches[0];
-}
-
-type PangHuIssueLedgerItem = {
-  planId?: string;
-  signature?: {
-    groupId?: string;
-    sourceMessageId?: string;
-    module?: string;
-    summary?: string;
-  };
-};
-
-function pangHuIssueForPlan(planId: string): PangHuIssueLedgerItem | undefined {
-  const ledgerPath = path.join(rootDir, "data", "roles", "XinghaiBuilder", "state", "issue-threads.json");
-  try {
-    const raw = JSON.parse(fs.readFileSync(ledgerPath, "utf8")) as { items?: unknown };
-    const items = Array.isArray(raw.items) ? raw.items : [];
-    const item = items.find((candidate) => candidate && typeof candidate === "object" && String((candidate as Record<string, unknown>).planId || "") === planId);
-    return item && typeof item === "object" ? item as PangHuIssueLedgerItem : undefined;
-  } catch (error) {
-    managerOperationalLog.record("warn", "panghu_progress_issue_ledger_read_failed", {
-      action: planId,
-      error: managerOperationalError(error, rootDir)
-    });
-    return undefined;
-  }
-}
-
-function findPangHuProgressIssue(plan: PlanItem): PangHuProgressNotificationDelivery["issue"] | undefined {
-  const item = pangHuIssueForPlan(plan.id);
-  const groupId = String(item?.signature?.groupId || "").trim();
-  const sourceMessageId = String(item?.signature?.sourceMessageId || "").trim();
-  if (!groupId || !sourceMessageId) return undefined;
-  return {
-    groupId,
-    sourceMessageId,
-    module: String(item?.signature?.module || "").trim() || undefined,
-    summary: String(item?.signature?.summary || "").trim() || undefined
-  };
-}
-
-function pangHuRuntimeForDelivery(delivery: PangHuProgressNotificationDelivery): GatewayRuntime {
-  const gatewayId = String(delivery.gatewayId || "").trim();
-  if (gatewayId) return runtimeForRoleDelivery(delivery.roleId, gatewayId);
-  return runtimeForRoleDelivery(delivery.roleId, "");
-}
-
-async function deliverPangHuProgressNotification(delivery: PangHuProgressNotificationDelivery): Promise<PangHuProgressNotificationResult> {
-  const runtime = pangHuRuntimeForDelivery(delivery);
-  const routeId = runtime.definition.routeProfiles?.[0]?.id || runtime.definition.id;
-  const deliveryId = stablePangHuProgressDeliveryId(delivery.plan.id, delivery.sourceSessionId, delivery.sourceTurnId);
-  const sourceMessageId = String(delivery.issue.sourceMessageId || "").trim();
-  const groupId = String(delivery.issue.groupId || "").trim();
-  if (!groupId || !sourceMessageId) return { status: "failed", reason: "issue_source_incomplete", planId: delivery.plan.id, turnId: delivery.sourceTurnId, deliveryId, error: "PangHu issue source group/message identity is incomplete." };
-  const replyOptions = {
-    rootDir,
-    routeRoot,
-    rolesRoot,
-    speechServiceUrl: speechServiceUrl(),
-    publishEvent: publishManagerEvent,
-    runtimes: [...runtimes.values()].map((item) => ({
-      ...item.definition,
-      rabiLinkRelay: rabiLinkRelayConfigFor(item.definition),
-      napcatInstances: (item.definition.napcatInstances ?? sharedNormalizeNapCatInstances(item.definition)).map((instance) => ({ ...instance, accessToken: instance.accessToken ?? "" }))
-    }))
-  };
-  const napcatInstances = runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition);
-  const instance = napcatInstances.find((candidate) => candidate.enabled !== false) || napcatInstances[0];
-  const request: AgentSendRequest = {
-    deliveryId,
-    sender: { agentType: "codex_hook", sessionId: delivery.sourceSessionId },
-    routeId,
-    channel: "napcat",
-    params: {
-      target: "group",
-      groupId,
-      instanceId: instance?.id || "",
-      replyToMessageId: sourceMessageId
-    },
-    payload: { type: "text", text: pangHuProgressMessage(delivery) },
-    styleValidation: 0
-  };
-  const result = await handleAgentSend(request, replyOptions);
-  if (result.status !== "sent" || !String(result.sentMessageId || "").trim()) {
-    return { status: "failed", reason: "outbox_not_sent", planId: delivery.plan.id, turnId: delivery.sourceTurnId, deliveryId, error: result.reason || `Outbox status=${result.status}` };
-  }
-  const sentMessageId = String(result.sentMessageId).trim();
-  const sent = await getMessage(sentMessageId, { httpUrl: String(instance?.httpUrl || ""), accessToken: String(instance?.accessToken || "") });
-  const readbackId = String(sent.messageId || "").trim();
-  const rawMessage = String(sent.rawMessage || "");
-  const hasSourceQuote = rawMessage.includes(`[CQ:reply,id=${sourceMessageId}]`)
-    || (Array.isArray(sent.message) && sent.message.some((segment) => String(segment?.type || "").toLowerCase() === "reply" && String(segment?.data?.id ?? segment?.data?.message_id ?? "") === sourceMessageId));
-  if (readbackId !== sentMessageId || String(sent.groupId || "") !== groupId || !hasSourceQuote) {
-    return { status: "failed", reason: "platform_reference_readback_incomplete", planId: delivery.plan.id, turnId: delivery.sourceTurnId, deliveryId, sentMessageId, platformReferenceReadback: false, error: `NapCat get_msg readback did not prove sentMessageId=${sentMessageId}, groupId=${groupId}, and quote=${sourceMessageId}.` };
-  }
-  return { status: "sent", reason: "outbox_sent_and_napcat_reference_readback", planId: delivery.plan.id, turnId: delivery.sourceTurnId, deliveryId, sentMessageId, platformReferenceReadback: true };
 }
 
 function deliverPlanTaskCompletion(delivery: PlanTaskCompletionDelivery): Promise<void> {
@@ -5961,6 +5984,7 @@ async function processPlanFeedbackPostCommit(
 ): Promise<{ outcome: "handled" | "ignored"; record: PlanFeedbackRecord }> {
   let current = await currentPlanFeedback(application, roleId, inputRecord.planId, inputRecord.id, signal);
   let record = current.record;
+  if (record.deliveryStatus === "record_only") return { outcome: "ignored", record };
   if (record.postCommit?.status === "completed") {
     return { outcome: record.qaHandling ? "handled" : "ignored", record };
   }
@@ -6042,7 +6066,7 @@ function schedulePlanFeedbackPostCommit(
   inputRecord: PlanFeedbackRecord,
   application: RoleStorageApplication = currentRoleStorageApplication()
 ): void {
-  if (!inputRecord.postCommit || inputRecord.postCommit.status === "completed") return;
+  if (inputRecord.deliveryStatus === "record_only" || !inputRecord.postCommit || inputRecord.postCommit.status === "completed") return;
   const deliveryKey = planFeedbackDeliveryKey(roleId, inputRecord.planId, inputRecord.id);
   const postCommitKey = `postcommit:${deliveryKey}`;
   if (activePlanFeedbackDeliveryFlights.has(postCommitKey)) return;
@@ -7420,6 +7444,10 @@ function handleRoleKnowledgeApi(
   resolveRoleDir: (roleId: string) => string = roleDirForApi,
   resolveRoleStorageApplication: () => RoleStorageApplication = currentRoleStorageApplication
 ): boolean {
+  if (handleKnowledgeSearch(request, pathname, response, {
+    service: knowledgeSearchService, roleDirectory: resolveRoleDir,
+    readBody: request => readRoleStorageJsonBody<Record<string, unknown>>(request), json: jsonResponse
+  })) return true;
   if (handleWearableHealthApi(request, pathname, response)) return true;
   if (handlePersonaChatHistoryApi(request, new URL(request.url || pathname, "http://127.0.0.1"), response, resolveRoleDir)) return true;
   if (handlePersonaVoiceTranscriptApi(
@@ -8449,7 +8477,9 @@ async function prewarmRolePlanCatalogs(): Promise<boolean> {
     let fulfilled = 0;
     for (const roleDir of roleDirectories) {
       try {
+        knowledgeSearchService?.ensure(path.basename(roleDir), roleDir);
         await managerCatalogWorkerPool.queryRoleKnowledgeCatalogSnapshot(roleDir, { timeoutMs: 30_000 });
+        await knowledgeSearchService?.reload(path.basename(roleDir), roleDir);
         fulfilled += 1;
       } catch (error) {
         managerOperationalLog.record("warn", "role_plan_catalog_prewarm_failed", {
@@ -8739,6 +8769,19 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   };
   managerRuntimeOwner.register("operational_log_flush", () => managerOperationalLog.flush());
   managerRuntimeOwner.register("data_mutation_audit_sink", () => uninstallDataMutationAuditSink());
+  knowledgeSearchService = new KnowledgeSearchService({
+    readDelta: (roleDir, previous, signal) => managerCatalogWorkerPool.run({
+      type: "knowledge_search_delta", roleDir, previous
+    }, { signal, timeoutMs: 300_000 }),
+    onError: (roleId, error) => managerOperationalLog.record("warn", "knowledge_search_refresh_failed", {
+      action: roleId, error: managerOperationalError(error, rootDir)
+    })
+  });
+  const activeKnowledgeSearch = knowledgeSearchService;
+  managerRuntimeOwner.register("knowledge_search", async () => {
+    await activeKnowledgeSearch.close();
+    if (knowledgeSearchService === activeKnowledgeSearch) knowledgeSearchService = undefined;
+  });
   let signalExitScheduled = false;
   const shutdownManager = (reason: string): void => {
     console.log(`gateway-manager shutting down: ${reason}`);
@@ -8902,10 +8945,21 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   let stopActiveNapcatSupervisor = async (): Promise<void> => {};
   let activeNapcatControlContext: ReturnType<typeof napcatManagerCtx> | undefined;
   let startActivePlanFeedbackRecovery = (): void => {};
-  const managerPluginRoutes = new ManagerPluginRouteRegistry();
+  const managerPluginRoutes = new ManagerPluginRouteRegistry(() => new Set(
+    managerPluginKernel?.current().records.filter(record => record.status === "active")
+      .map(record => record.identity.activationId) ?? []
+  ));
   const lanAgentRegistry = new LanAgentRegistry({ statePath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json") });
+  instanceAgentSessions = binding => {
+    const agent = lanAgentRegistry.getInstanceAgent(binding.instanceId, binding.agentId);
+    return agent ? [agent.sessionId, ...agent.managedSessionIds || []].filter((id): id is string => Boolean(id)) : [];
+  };
+  instanceThreadTransport = {
+    instances: () => lanAgentRegistry.listInstances(),
+    manage: (instanceId, params) => lanAgentRegistry.manageAgent(instanceId, "threads", params, 30_000)
+  };
   managerRuntimeOwner.register("lan_agent_registry", () => lanAgentRegistry.close());
-  const lanAgentReleaseStore = new LanAgentReleaseStore({ rootDir });
+  const lanAgentReleaseStore = new LanAgentReleaseStore({ rootDir, agentRoot: path.join(packageRoot, "apps", "rabi-agent") });
   const webPluginModules = new WebPluginModuleRegistry();
   const wearableCompanionRuntimeIdentity = createWearableCompanionRuntimeIdentity({
     hostOwned: Boolean(managerHostIdentity),
@@ -8942,6 +8996,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         return registerManagerPluginHandlerRoutes(managerPluginRoutes, instanceId, handlerId, handlers, declarations);
       }
     }) }),
+    createSourcePatchHostService(() => managerSourcePatches),
     Object.freeze({ capability: "host.manager.core@1", value: Object.freeze({
       ManagerPluginRequestTracker,
       handleLanAgentApi,
@@ -8949,6 +9004,61 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       jsonResponse,
       lanAgentRegistry,
       lanAgentReleaseStore,
+      manageLocalAgent: async (agentId: string, operation: string, body: Record<string, unknown>) => {
+        const definition = routeCatalogConfig.gateways.find(definition => ["codex", "dsh", ...(definition.agentAdapters ?? ["codex"])].some(provider => `${definition.id}:${provider}` === agentId));
+        if (!definition) throw new Error("Local Agent was not found.");
+        const provider = agentId.slice(definition.id.length + 1) as AgentAdapterType;
+        if (operation === "configure") {
+          if (provider !== "codex" && provider !== "dsh") throw new Error("请从该 Agent 的完整路由设置中修改此处理端配置。");
+          const updated = structuredClone(definition);
+          if (body.enabled === false) updated.agentAdapters = (updated.agentAdapters ?? ["codex"]).filter(type => type !== provider);
+          if (body.enabled === true) {
+            updated.agentAdapters = [...new Set([...(updated.agentAdapters ?? ["codex"]), provider])];
+            if (updated.agentInstanceBindings?.[provider]) throw new Error("此路由已选择远端 Agent，请先在路由设置中切换到本机实例。");
+          }
+          if (provider === "codex") {
+            updated.codexThreadName = String(body.name || "");
+            updated.codexThreadId = String(body.sessionId || ""); updated.codexCwd = String(body.workspace || "");
+            updated.agentModel = String(body.model || ""); updated.agentReasoningEffort = body.reasoningEffort as GatewayDefinition["agentReasoningEffort"];
+          } else if (provider === "dsh") {
+            updated.dshSessionName = String(body.name || "");
+            updated.dshSessionId = String(body.sessionId || ""); updated.dshCwd = String(body.workspace || "");
+            updated.dshModel = String(body.model || ""); updated.dshReasoningEffort = String(body.reasoningEffort || "");
+            updated.dshBaseUrl = String(body.dshBaseUrl || definition.dshBaseUrl || "");
+          }
+          await writeGatewayConfig(definition.id, updated, String(body.configRevision || ""), randomUUID());
+          syncRunningGateways();
+          return { saved: true };
+        }
+        return manageInstanceAgent(operation, { ...body, provider, agentAdapter: provider }, { rootDir, defaultWorkspace: definition.codexCwd || definition.dshCwd || rootDir, allowedWorkspaces: [definition.codexCwd || definition.dshCwd || rootDir], dsh: definition.dshBaseUrl ? { baseUrl: definition.dshBaseUrl } : undefined });
+      },
+      handleInstanceHook: async (instanceId: string, agentId: string, body: Record<string, unknown>, request: http.IncomingMessage) => {
+        const agent = lanAgentRegistry.getInstanceAgent(instanceId, agentId);
+        const hook = hookContextRequest(body, request);
+        if (!agent?.enabled || (hook.sessionId !== agent.sessionId && !agent.managedSessionIds?.includes(hook.sessionId))) throw new Error("Hook does not belong to the bound instance Agent.");
+        const sessionId = instanceHookSessionId(instanceId, agentId, hook.sessionId);
+        const routes = routeCatalogConfig.gateways.filter(definition => Object.values(definition.agentInstanceBindings ?? {}).some(binding => binding.instanceId === instanceId && binding.agentId === agentId));
+        const roles = [...new Set(routes.map(definition => roleIdForDefinition(definition)))];
+        if (roles.length !== 1) throw new Error("Bind this instance Agent to one persona before using its Hooks.");
+        if (codexHookContextService.getBinding(sessionId)?.roleId !== roles[0]) codexHookContextService.bindSession(sessionId, roles[0]!);
+        return codexHookContextService.handleHook({ ...hook, sessionId });
+      },
+      localInstanceAgents: () => routeCatalogConfig.gateways.flatMap(definition => [...new Set<AgentAdapterType>([
+        ...(definition.agentAdapters ?? ["codex"]).filter(provider => !definition.agentInstanceBindings?.[provider]),
+        ...(definition.codexThreadId ? ["codex" as const] : []), ...(definition.dshSessionId ? ["dsh" as const] : [])
+      ])].map(provider => ({
+        agentId: `${definition.id}:${provider}`,
+        name: (provider === "codex" ? definition.codexThreadName : provider === "dsh" ? definition.dshSessionName : undefined) || definition.routeName || definition.id,
+        provider: provider === "codex" ? "codex-desktop" : provider,
+        enabled: (definition.agentAdapters ?? ["codex"]).includes(provider) && !definition.agentInstanceBindings?.[provider],
+        routeId: definition.id,
+        configRevision: routeCatalogVersion().routeConfigHash,
+        workspace: provider === "dsh" ? definition.dshCwd : definition.codexCwd,
+        sessionId: provider === "dsh" ? definition.dshSessionId : definition.codexThreadId,
+        model: provider === "dsh" ? definition.dshModel : definition.agentModel,
+        reasoningEffort: provider === "dsh" ? definition.dshReasoningEffort : definition.agentReasoningEffort,
+        dshBaseUrl: provider === "dsh" ? definition.dshBaseUrl : undefined
+      }))),
       managerPluginRoutes,
       rabiGlobalConfig,
       readJsonBody,
@@ -9056,6 +9166,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       ManagerPluginRequestTracker,
       dataDirFor,
       handleGatewayControlApi,
+      writeGatewayConfig,
+      resolveRouteMutation,
       jsonResponse,
       listGatewayDeliveryReplayAttempts,
       loadRuntimes,
@@ -9086,6 +9198,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       set managerServicesReady(value) { managerServicesReady = value; },
     }) }),
     Object.freeze({ capability: "host.manager.rabilink-relay@1", value: Object.freeze({
+      createPeerRuntime: createManagerPeerRuntime,
       createDirectVideoReceiver: () => new RabiDirectVideo(path.join(rootDir, "data", "rabilink", "video")),
       createDirectVideoRoutes: (receiver: RabiDirectVideo) => createDirectVideoRoutes(receiver, managerReadOnly, readJsonBody, jsonResponse),
       ManagerPluginRequestTracker,
@@ -9484,6 +9597,44 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     await failManagerStartup("manager_plugin_kernel_construction", error);
   }
   let managerPluginReconciliationTail: Promise<void> = Promise.resolve();
+  const managerSourcePatches = new ManagerSourcePatchService({
+    baselineRoot: path.join(packageRoot, "dist", "source-patches"),
+    stateRoot: path.join(rootDir, "data", ".runtime", "source-patches"),
+    bundleJournalRoot: path.join(rootDir, "data", ".runtime", "source-patches", "bundles"),
+    runtime: managerPluginKernel!,
+    audit: (event, fields) => managerOperationalLog.record("info", event, { result: JSON.stringify(fields) })
+  });
+  managerRuntimeOwner.register("manager_source_patches", () => managerSourcePatches.stop());
+  const managerWebPatches = new WebPatchService({
+    packageRoot, stateRoot: path.join(rootDir, "data/.runtime/web-patches"),
+    identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId, pluginGenerationId: managerPluginKernel!.current().id }),
+    serialize: (generation, operation) => managerPluginKernel!.publishSourcePatch(generation, operation),
+    audit: (event, fields) => managerOperationalLog.record("info", event, { result: JSON.stringify(fields) })
+  });
+  managerRuntimeOwner.register("manager_web_patches", () => managerWebPatches.stop());
+  if (process.env.RABIROUTE_HOT_PATCH_WATCH !== "0" && process.env.RABIROUTE_HOT_PATCH_SOURCE_ROOT) {
+    const webPatchWatcher = new WebPatchWatcher(process.env.RABIROUTE_HOT_PATCH_SOURCE_ROOT, managerWebPatches,
+      error => managerOperationalLog.record("error", "web_patch_watcher_failed", { result: String(error) }));
+    managerRuntimeOwner.register("manager_web_patch_watcher", () => webPatchWatcher.stop());
+  }
+  try {
+    const sourcePatchWatcher = await SourcePatchWatcher.start({
+      root: packageRoot,
+      sourceRoot: process.env.RABIROUTE_HOT_PATCH_SOURCE_ROOT || undefined,
+      service: managerSourcePatches,
+      runtime: managerPluginKernel!,
+      outputDirectory: path.join(rootDir, "data", ".runtime", "source-patches", "candidates"),
+      enabled: process.env.RABIROUTE_HOT_PATCH_WATCH !== "0",
+      onError: error => managerOperationalLog.record("error", "source_patch_watcher_failed", {
+        result: error instanceof Error ? error.message : String(error)
+      })
+    });
+    if (sourcePatchWatcher) managerRuntimeOwner.register("manager_source_patch_watcher", () => sourcePatchWatcher.stop());
+  } catch (error) {
+    await managerOperationalLog.record("error", "source_patch_watcher_start_failed", {
+      result: error instanceof Error ? error.message : String(error)
+    });
+  }
   const reconcileManagerPlugins = (
     reason: string,
     options: Readonly<{ readyOnly?: boolean }> = {}
@@ -9682,6 +9833,15 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         jsonResponse(response, 200, managerHealthPayload());
         return;
       }
+      if (handleSourcePatchApi(request, requestUrl, response, {
+        service: managerSourcePatches,
+        identity: managerHostIdentity,
+        readJson: readJsonBody,
+        json: jsonResponse
+      })) return;
+      if (handleWebPatchApi(request, requestUrl, response, {
+        service: managerWebPatches, identity: managerHostIdentity, readJson: readJsonBody, json: jsonResponse
+      })) return;
       const routeCatalogRejection = routeCatalogStartupUnavailable(
         request.method,
         requestUrl.pathname,
@@ -9723,6 +9883,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       }
       if (handlePluginCatalogApi(request, requestUrl, response, {
         runtime: managerPluginKernel!,
+        renderCatalog: (input, host) => managerSourcePatches.invoke("manager.plugin-catalog", "renderPluginCatalog", [input, host]),
         reconciliation: {
           diagnostics: () => managerPluginDiagnostics,
           reconcile: async () => {
@@ -9731,8 +9892,9 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           }
         },
         webModules: {
-          list: async () => webPluginModules.list(),
-          read: (id, rev, relativePath) => webPluginModules.read(id, rev, relativePath)
+          list: () => managerWebPatches.modules(webPluginModules.list(), requestUrl.searchParams.get("webRelease")),
+          read: async (id, rev, relativePath) => await managerWebPatches.module(webPluginModules.list(), id, rev, relativePath)
+            ?? webPluginModules.read(id, rev, relativePath)
         }
       })) {
         return;
@@ -9742,6 +9904,14 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       }
       if (isManagerControlRequestPath(requestUrl.pathname)) {
         jsonResponse(response, 404, { code: -1, message: "Manager API route not found." });
+        return;
+      }
+      if (["GET", "HEAD"].includes(request.method ?? "") && (requestUrl.pathname === "/index.html" || !path.extname(requestUrl.pathname))) {
+        void managerWebPatches.document().then(document => {
+          if (!document) { htmlResponse(requestUrl.pathname, response); return; }
+          response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-rabiroute-web-revision": document.revision });
+          response.end(request.method === "HEAD" ? undefined : document.body);
+        }).catch(() => jsonResponse(response, 503, { code: -1, message: "Web document integrity is unavailable." }));
         return;
       }
       htmlResponse(requestUrl.pathname, response);

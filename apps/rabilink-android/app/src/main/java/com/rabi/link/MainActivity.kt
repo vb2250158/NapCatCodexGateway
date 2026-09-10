@@ -65,6 +65,19 @@ class MainActivity : Activity() {
     private lateinit var runtimeQueue: TextView
     private lateinit var runtimeError: TextView
     private val runtimeHandler = Handler(Looper.getMainLooper())
+    private var captureBar: Button? = null
+    private val captureListener = Runnable { runtimeHandler.post { refreshCaptureBar() } }
+    private fun refreshCaptureBar() {
+        val owner = com.rabi.link.recording.CaptureOwnership.current()
+        captureBar?.apply {
+            visibility = if (owner.isEmpty()) View.GONE else View.VISIBLE
+            text = when (owner) {
+                "audio" -> "● 正在录音 · 停止并保存"
+                "video" -> "● 视频接收已开启 · 停止并保存"
+                else -> "● 语音采集中 · 停止并保存"
+            }
+        }
+    }
     private lateinit var inputMode: Spinner
     private lateinit var proactivityPreference: Spinner
     private lateinit var autoStartVoiceService: Switch
@@ -126,6 +139,13 @@ class MainActivity : Activity() {
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        if (!intent.getBooleanExtra("open_messages", false) && !intent.getBooleanExtra("open_settings", false) && intentRoute(intent).isBlank()) {
+            startActivity(Intent(this, com.rabi.link.recording.RabiRecordingHubActivity::class.java)
+                .putExtra("video", intent.getBooleanExtra("open_offline_recorder", false))
+                .putExtra("auto_video", state == null && getSharedPreferences("rabi_live_recorder", MODE_PRIVATE).getBoolean("auto_start_video", false)))
+            finish()
+            return
+        }
         val saved = RabiLinkRelaySettings.load(this)
         if (saved.configured) availableRoutes = RabiRouteMetadataCache.load(this, saved)
         activeRouteId = intentRoute(intent).ifBlank { state?.getString("active_route_id").orEmpty() }
@@ -138,7 +158,7 @@ class MainActivity : Activity() {
             restored == Screen.SETTINGS -> showSettings(saved, false)
             else -> showConversationList()
         }
-        if (saved.configured && saved.statusSyncEnabled) RokidDeviceStatusSyncService.start(this)
+        if (saved.configured && saved.statusSyncEnabled && com.rabi.link.recording.CaptureOwnership.current().isEmpty()) RokidDeviceStatusSyncService.start(this)
         val conversation = RabiConversationSettings.load(this)
         when (RabiConversationStartupPolicy.decide(
             saved.configured,
@@ -146,7 +166,7 @@ class MainActivity : Activity() {
             conversation,
             checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED,
         )) {
-            RabiConversationStartupPolicy.Action.START_VOICE -> RabiConversationService.start(this)
+            RabiConversationStartupPolicy.Action.START_VOICE -> RabiConversationService.restoreAfterBoot(this)
             RabiConversationStartupPolicy.Action.RESTORE_TRANSPORT -> RabiConversationService.restoreAfterBoot(this)
             RabiConversationStartupPolicy.Action.NONE -> Unit
         }
@@ -166,6 +186,39 @@ class MainActivity : Activity() {
     }
 
     private fun intentRoute(intent: Intent?): String = intent?.getStringExtra("route_profile_id")?.trim().orEmpty()
+
+    override fun setContentView(view: View) {
+        val shell = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        shell.addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
+        captureBar = Button(this).apply {
+            text = "● 采集正在进行 · 停止并保存"; minHeight = dp(48)
+            setOnClickListener {
+                when (com.rabi.link.recording.CaptureOwnership.current()) {
+                    "audio" -> startService(Intent(this@MainActivity, com.rabi.link.modules.rokid.RabiLocalAudioService::class.java).setAction(com.rabi.link.modules.rokid.RabiLocalAudioService.STOP))
+                    "video" -> startService(Intent(this@MainActivity, com.rabi.link.modules.rokid.RabiLiveRecordingService::class.java).setAction(com.rabi.link.modules.rokid.RabiLiveRecordingService.STOP))
+                    "conversation" -> RabiConversationService.pauseForLocalCapture()
+                }
+                text = "正在保存，请在首页查看结果"
+            }
+        }
+        shell.addView(captureBar)
+        refreshCaptureBar()
+        val navigation = LinearLayout(this).apply { setBackgroundColor(RabiMobileUi.surface) }
+        listOf("home" to "首页", "records" to "记录", "messages" to "消息", "devices" to "设备").forEach { (key, label) ->
+            navigation.addView(Button(this).apply {
+                text = label; isAllCaps = false; minHeight = dp(52); setTextColor(Color.rgb(16, 42, 67))
+                setOnClickListener {
+                    if (key == "messages") showConversationList()
+                    else {
+                        startActivity(Intent(this@MainActivity, com.rabi.link.recording.RabiRecordingHubActivity::class.java)
+                            .putExtra("page", key).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                        finish()
+                    }
+                }
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        shell.addView(navigation); super.setContentView(shell)
+    }
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("screen", screen.name)
@@ -191,6 +244,9 @@ class MainActivity : Activity() {
         chatMessages = null; chatScroll = null; composer = null; conversationListHost = null; conversationListScroll = null
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(RabiMobileUi.background) }
         if (!firstRun) root.addView(appBar("设置", "连接、设备与诊断", "返回") { onBackPressed() })
+        root.addView(primary("眼镜离线录像 · 无需联网") {
+            startActivity(Intent(this, com.rabi.link.modules.rokid.RabiLiveRecordingActivity::class.java))
+        })
         root.addView(buildUi(), LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
         if (saved.baseUrl.isNotBlank()) {
@@ -760,6 +816,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        com.rabi.link.recording.CaptureOwnership.listen(captureListener)
+        refreshCaptureBar()
         if (!runtimeReceiverRegistered) {
             ContextCompat.registerReceiver(
                 this,
@@ -781,6 +839,7 @@ class MainActivity : Activity() {
         }
     }
     override fun onPause() {
+        com.rabi.link.recording.CaptureOwnership.unlisten(captureListener)
         if (runtimeReceiverRegistered) {
             unregisterReceiver(runtimeReceiver)
             runtimeReceiverRegistered = false
@@ -942,8 +1001,8 @@ class MainActivity : Activity() {
             isEnabled = BuildConfig.ROKID_VIDEO
         })
         addView(directVideo)
-        addView(note("视频保存到所选电脑，不经过转接服务器。局域网或公网直连失败时停止视频，不切换服务器中继。"))
-        if (!BuildConfig.ROKID_VIDEO) addView(note("当前手机包未包含乐奇视频 SDK；此能力仍在真机验收中。"))
+        directVideo.visibility = if (BuildConfig.ROKID_VIDEO) View.VISIBLE else View.GONE
+        if (BuildConfig.ROKID_VIDEO) addView(note("实验 SDK 直传尚未完成眼镜取流验收。手机本地录像请使用设置页顶部的“眼镜离线录像”。"))
         addView(note("开启后，每次打开 Rabi 都会按当前交互模式启动语音服务。关闭后只保持消息连接，不会自动使用手机或眼镜麦克风。"))
         addView(label("明确主动性偏好")); addView(proactivityPreference, full(0, 0, 0, 6))
         addView(note("这是交给 PC / Route / Agent 的明确偏好，不是 App 本地决策规则。Agent 仍可根据情景、权限和动作安全门选择不打扰、准备、提示、建议、请求确认或行动。"))

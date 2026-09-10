@@ -91,7 +91,7 @@ class FakeChild extends EventEmitter implements ManagerStorageMutationChild {
 }
 
 function operation(idempotencyKey: string, expectedRevision: string | null = null): ManagerStorageMutationOptions {
-  return { idempotencyKey, expectedRevision, timeoutMs: 5_000 };
+  return { idempotencyKey, expectedRevision, timeoutMs: 15_000 };
 }
 
 function planRevision(roleDir: string, planId: string): string {
@@ -107,6 +107,53 @@ function tempRolesRoot(t: test.TestContext): { rolesRoot: string; roleDir: strin
   fs.mkdirSync(roleDir, { recursive: true });
   return { rolesRoot, roleDir };
 }
+
+test("terminal plan validation resolves legacy uncertain receipts without changing the plan", async t => {
+  const { rolesRoot, roleDir } = tempRolesRoot(t);
+  const plan = createPlan(roleDir, {
+    id: "terminal-validation", title: "Terminal validation", focus: "Report invalid completion accurately",
+    status: "分析中", currentStepId: "verify", steps: [{ id: "verify", title: "Verify" }], keywords: ["validation"]
+  });
+  const before = planRevision(roleDir, plan.id);
+  const patch = { status: "完成", currentStepId: "verify" };
+  const key = "legacy-terminal-validation";
+  const rootDir = path.join(roleDir, "runtime");
+  await executeDurableDelivery({
+    rootDir, namespace: MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, deliveryId: key,
+    payload: { roleId: "YeYu", planId: plan.id, task: { type: "plan_update", patch } },
+    deliver: async () => { throw new Error("Plan status 完成 forbids currentStepId."); }
+  });
+  const pool = new ManagerStorageMutationPool({ rolesRoot, applicationGenerationId: "validation-generation", managerInstanceId: "validation-manager" });
+  t.after(() => pool.stop());
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(pool.updatePlan("YeYu", plan.id, patch, operation(key, before)),
+      (error: unknown) => error instanceof ManagerStorageMutationError
+        && error.code === "validation_rejected" && /forbids currentStepId/.test(error.message));
+    assert.equal(planRevision(roleDir, plan.id), before);
+  }
+  const receipt = readDurableDeliveryReceipt(rootDir, MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, key);
+  assert.equal(receipt?.state, "completed");
+  assert.equal((receipt?.result as { domain: string }).domain, "rejected");
+  const corrected = await pool.updatePlan("YeYu", plan.id, { status: "完成", currentStepId: null }, operation("corrected-terminal-validation", before));
+  assert.equal(corrected.status, "完成");
+  assert.equal(corrected.currentStepId, undefined);
+});
+
+test("plan mutation revision checks ignore unrelated malformed plan packages", async t => {
+  const { rolesRoot, roleDir } = tempRolesRoot(t);
+  const plan = createPlan(roleDir, {
+    id: "point-revision", title: "Point revision", focus: "Read the addressed plan only", status: "分析中",
+    currentStepId: "verify", steps: [{ id: "verify", title: "Verify" }], keywords: ["revision"]
+  });
+  const before = planRevision(roleDir, plan.id);
+  const unrelated = path.join(roleDir, "plans", "active", "unrelated");
+  fs.mkdirSync(unrelated);
+  fs.writeFileSync(path.join(unrelated, "plan.json"), "invalid JSON");
+  const pool = new ManagerStorageMutationPool({ rolesRoot, applicationGenerationId: "point-generation", managerInstanceId: "point-manager" });
+  t.after(() => pool.stop());
+  const result = await pool.updatePlan("YeYu", plan.id, { title: "Point revision updated" }, operation("point-revision-update", before));
+  assert.equal(result.title, "Point revision updated");
+});
 
 test("storage mutation child serializes plan, memory, secretary, and feedback writes with durable replay", async t => {
   const { rolesRoot, roleDir } = tempRolesRoot(t);

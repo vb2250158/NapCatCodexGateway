@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   deliverPlanApprovalFeedback,
   PlanFeedbackDeliveryPendingError,
+  requireConfirmedPlanDelivery,
   type PlanApprovalFeedbackPersonaRequest,
   type PlanApprovalFeedbackSecretaryTarget
 } from "./planApprovalFeedbackDelivery.js";
@@ -53,10 +54,31 @@ const guidance: PlanFeedbackRecord = {
   text: "先确认整体入口体验，再调整后续步骤。"
 };
 
+test("HTTP 202 without a delivery receipt stays pending and never announces success", async () => {
+  let sends = 0;
+  const notices: string[] = [];
+  await assert.rejects(deliverPlanApprovalFeedback({
+    roleId: "Planner", managerBaseUrl: "http://localhost", feedback,
+    plan: plan({ agentType: "codex", sessionId: "019f0000-0000-7000-8000-000000000091", workspace: process.cwd() }),
+    directRetryAttempts: 2, directRetryDelayMs: 1,
+    sendToTask: async () => {
+      sends++;
+      requireConfirmedPlanDelivery({ statusCode: 202, data: { status: "delivery_unconfirmed", ok: false,
+        delivery: { deliveryId: "original-delivery" }, error: { message: "Desktop owner confirmation timed out" } } });
+    },
+    readTaskDelivery: async () => "missing",
+    sendToPersona: async request => { notices.push(request.kind); }
+  }), PlanFeedbackDeliveryPendingError);
+  assert.equal(sends, 1);
+  assert.deepEqual(notices, []);
+  assert.doesNotThrow(() => requireConfirmedPlanDelivery({ statusCode: 202, data: { status: "delivered", ok: true } }));
+  assert.throws(() => requireConfirmedPlanDelivery({ statusCode: 202, data: { status: "delivered_tracking_failed", ok: false } }), PlanFeedbackDeliveryPendingError);
+});
+
 const secretary: PlanApprovalFeedbackSecretaryTarget = {
   threadId: "019f0000-0000-7000-8000-000000000091",
   threadName: "主人格 协助处理计划1",
-  workspace: "C:\\Data\\CottonProject\\RabiRoute",
+  workspace: "C:\\Work\\ExampleProject",
   model: "gpt-5.6-terra"
 };
 
@@ -71,7 +93,7 @@ test("enabled plan secretary receives the control notice while the bound task re
       agentType: "codex",
       sessionId: "019f0000-0000-7000-8000-000000000001",
       sessionTitle: "原业务任务",
-      workspace: "C:\\Data\\CottonProject\\PangHu"
+      workspace: "C:\\Work\\ExampleProject"
     }),
     feedback,
     secretary,
@@ -120,7 +142,7 @@ test("approval is delivered to the bound Codex task and persona only receives an
       agentType: "codex",
       sessionId: "019f0000-0000-7000-8000-000000000001",
       sessionTitle: "原业务任务",
-      workspace: "C:\\Data\\CottonProject\\PangHu"
+      workspace: "C:\\Work\\ExampleProject"
     }),
     feedback,
     sendToTask: async (request) => { taskRequests.push(request); },
@@ -132,7 +154,7 @@ test("approval is delivered to the bound Codex task and persona only receives an
   assert.equal(taskRequests[0]?.threadId, "019f0000-0000-7000-8000-000000000001");
   assert.equal(taskRequests[0]?.title, "原业务任务");
   assert.equal(taskRequests[0]?.createIfMissing, true);
-  assert.equal(taskRequests[0]?.cwd, "C:\\Data\\CottonProject\\PangHu");
+  assert.equal(taskRequests[0]?.cwd, "C:\\Work\\ExampleProject");
   assert.match(taskRequests[0]?.prompt || "", /批准按推荐方案实施/);
   assert.match(taskRequests[0]?.prompt || "", /approval_response/);
   assert.equal(personaRequests.length, 1);
@@ -168,7 +190,7 @@ test("plan guidance reaches the bound task without pretending to approve a step"
     plan: plan({
       agentType: "codex",
       sessionId: "019f0000-0000-7000-8000-000000000006",
-      workspace: "C:\\Data\\CottonProject\\PangHu"
+      workspace: "C:\\Work\\ExampleProject"
     }),
     feedback: guidance,
     sendToTask: async (request) => { taskRequests.push(request); },
@@ -207,7 +229,7 @@ test("approval keeps retrying the bound Codex task and never asks the persona to
     plan: plan({
       agentType: "codex",
       sessionId: "019f0000-0000-7000-8000-000000000002",
-      workspace: "C:\\Data\\CottonProject\\PangHu"
+      workspace: "C:\\Work\\ExampleProject"
     }),
     feedback,
     sendToTask: async () => {
@@ -238,7 +260,7 @@ test("a persistent bound-task owner failure is recorded as failed instead of del
     plan: plan({
       agentType: "codex",
       sessionId: "019f0000-0000-7000-8000-000000000004",
-      workspace: "C:\\Data\\CottonProject\\PangHu"
+      workspace: "C:\\Work\\ExampleProject"
     }),
     feedback,
     sendToTask: async () => {
@@ -270,7 +292,7 @@ test("an ambiguous IPC timeout is not replayed because the owner may already hav
     plan: plan({
       agentType: "codex",
       sessionId: "019f0000-0000-7000-8000-000000000005",
-      workspace: "C:\\Data\\CottonProject\\PangHu"
+      workspace: "C:\\Work\\ExampleProject"
     }),
     feedback,
     sendToTask: async () => {
@@ -298,7 +320,7 @@ test("an ambiguous IPC timeout is completed when feedbackId readback proves acce
     plan: plan({
       agentType: "codex",
       sessionId: "019f0000-0000-7000-8000-000000000006",
-      workspace: "C:\\Data\\CottonProject\\PangHu"
+      workspace: "C:\\Work\\ExampleProject"
     }),
     feedback: guidance,
     directRetryAttempts: 3,
@@ -332,7 +354,7 @@ test("an active readback stays pending without replay or a false failed notice",
     plan: plan({
       agentType: "codex",
       sessionId: "019f0000-0000-7000-8000-000000000007",
-      workspace: "C:\\Data\\CottonProject\\PangHu"
+      workspace: "C:\\Work\\ExampleProject"
     }),
     feedback: guidance,
     directRetryAttempts: 3,
@@ -361,7 +383,7 @@ test("a persona notice failure does not resend approval to the already-started b
     plan: plan({
       agentType: "codex",
       sessionId: "019f0000-0000-7000-8000-000000000003",
-      workspace: "C:\\Data\\CottonProject\\PangHu"
+      workspace: "C:\\Work\\ExampleProject"
     }),
     feedback,
     sendToTask: async () => { taskCalls += 1; },

@@ -62,6 +62,23 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** HTTP acceptance is not proof that Desktop accepted the message. */
+export function requireConfirmedPlanDelivery(result: { statusCode: number; data: Record<string, unknown> }): void {
+  const { data, statusCode } = result;
+  const error = data.error as { message?: string } | undefined;
+  if (data.status === "delivery_unconfirmed" || data.status === "delivered_tracking_failed") {
+    const delivery = data.delivery as { deliveryId?: string } | undefined;
+    throw new PlanFeedbackDeliveryPendingError(
+      `Plan delivery is awaiting confirmation (status=${data.status}, deliveryId=${delivery?.deliveryId || "unavailable"}). `
+      + `${error?.message || data.warning || "No confirmed delivery receipt is available."} `
+      + "Read the original delivery receipt; do not resend the message or mark the feedback delivered."
+    );
+  }
+  if (statusCode < 200 || statusCode >= 300 || data.ok === false || data.status !== "delivered") {
+    throw new Error(String(data.message || error?.message || `Plan delivery did not confirm acceptance (HTTP ${statusCode}, status=${data.status || "missing"}).`));
+  }
+}
+
 function wait(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
@@ -288,6 +305,7 @@ export async function deliverPlanApprovalFeedback(
         lastError = new PlanFeedbackDeliveryPendingError(errorMessage(error));
         break;
       }
+      if (error instanceof PlanFeedbackDeliveryPendingError) break;
       const retryable = isRetryableBoundTaskDeliveryError(error);
       if (attempt === 0 && retryable) {
         try {

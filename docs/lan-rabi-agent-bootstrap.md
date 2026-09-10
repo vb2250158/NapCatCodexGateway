@@ -1,110 +1,79 @@
 <!-- docs-language-switch -->
-<div align="center">
-简体中文 | <a href="./lan-rabi-agent-bootstrap_en.md">English</a>
-</div>
+<div align="center">简体中文 | <a href="./lan-rabi-agent-bootstrap_en.md">English</a></div>
 <!-- /docs-language-switch -->
 
-# 局域网 Rabi Agent 接入与更新
+# 远端 Agent 接入与更新
 
-> 状态：**实验集成**。Manager、Rabi Web、资源签名、节点连接和更新请求已实现；当前只支持投递到已配置的 Codex Desktop 任务 owner，尚未完成真实多电脑验收。
->
-> 读者：维护者、局域网部署人员和接入 Rabi Agent 的现有 Agent。
+> 状态：实验集成。接入提示词、下载与签名校验、本机与远端实例目录、多个 Agent、稳定路由绑定和共用管理操作已实现。真实双机安装和宿主运行验收待完成。
 
-## 它解决什么问题
+## 用户只需三步
 
-RabiRoute 仍在 Manager 电脑运行。其他电脑不安装完整 RabiRoute、不运行 Gateway，也不需要配对码或设备密码。执行电脑只保留无界面的 Rabi Agent：它主动连回 Manager，接收任务、把任务投给那台电脑上已经打开的 Codex Desktop 任务，并回传领取、完成或失败状态。
+1. 打开 **远端 Agent** 页面（`#/lan-agents`），点击 **复制接入提示词**。页面使用当前 Manager 的局域网地址和发布公钥指纹；本机回环地址会替换为当前局域网地址。Manager 须先启用局域网访问。
+2. 启动目标电脑上的 Codex 或 DSH，把提示词粘贴到想接收消息的任务里。该 Agent 检查 Node.js 22.13+、发现当前任务与工作目录，下载并验证接入程序，保存私有配置，注册登录启动项并启动后台连接。不需要安装完整 RabiRoute，也不需要手填任务 ID。
+3. 回到当前路由的 **消息适配器 → 添加 AGENT**，选择 **远端Agent(<IP地址>)** 并保存。没有节点时，菜单引导进入接入页面；已接入节点使用 Manager 观察到的连接 IP 展示，保存的稳定身份是 instanceId + agentId。
 
-Rabi Web 的“局域网 Agent”页面显示节点、最近任务和发布版本；在线节点可由该页面请求更新。Manager 不会直接改远端文件，Rabi Agent 自己下载、校验、切换；新版本在 30 秒内没有连回 Manager 时，旧版本继续运行。
+本机与远端电脑统一为实例，页面采用 **实例 → Agent** 两层折叠。本机默认出现，无需接入安装。远端实例显示 **远端Agent(<IP地址>)**，内部可管理多个 Agent；Codex/DSH 是执行能力，不再是两种远端实例。IP 改变不会修改路由身份。
 
-## 已实现范围
+实例内共用配置界面包含名称、开关、工作目录、任务名称与 ID、模型、推理强度、环境扫描、打开任务和 Hook 安装。扫描由用户显式刷新触发。人格自动化中的 Hook 策略仍由当前 Manager 管理。
 
-| 项目 | 当前行为 |
+提示词含连接密钥，只能粘贴到目标电脑的私密任务中。不要把密钥写入仓库、群聊、日志、截图或命令历史。复制使用安全剪贴板或页面回退，支持局域网 HTTP。
+
+## 数据与执行边界
+
+| 对象 | 唯一拥有者 | 行为与验收 |
+| --- | --- | --- |
+| 节点、IP、连接和任务状态 | Manager 的节点注册表 | HTTP 管理操作与 WebSocket 连接都显式鉴权；离线投递失败。 |
+| 路由绑定 | 路由配置的 `agentInstanceBindings[provider]` | 界面保存 `instanceId + agentId` 引用，不保存第二套连接凭据；Gateway 从本代 Manager 获得地址与凭据。 |
+| 任务、模型、工具和权限 | 远端现有 Codex/DSH 宿主 | 实例保存各 Agent 的任务绑定，不新建备用 Runtime，不改变宿主启动配置；Manager 缺席时宿主仍独立运行。 |
+| 后台连接进程 | 当前用户的 Rabi Agent | 主动连接 Manager；管理下载、校验、登录启动和更新。 |
+| 真实消息路径 | 路由 → Agent adapter → Manager 节点注册表 → 远端进程 → 已绑定任务 | Codex 走 Desktop IPC；DSH 走本机 `session.prompt`，`mode=queue`。两者分别只有一条执行路径。 |
+
+Codex owner 不可用时失败，不使用 `codex app-server`。DSH API 或绑定不可用时失败，不回退到 Codex。Codex 当前任务忙时明确拒绝新投递，避免覆盖任务关联；已接受的重复任务不重复执行。
+
+节点在线只表示远端进程已连接。任务记录分别显示传送、领取、处理中、完成或失败。DSH 当前只回传队列接受状态，实际回复在其绑定会话查看；Codex 完成状态来自 Desktop 广播，回复在对应任务查看。本机图片路径不会直接发送到另一台电脑。完整计划助手、消息处理池与远端人格文件同步的能力对齐仍需继续验证；不能据此宣称所有本地高级功能已完整迁移。
+
+## 安装与发布
+
+| 平台 | 私有目录 |
 | --- | --- |
-| 身份验证 | 复用 `webguiLan.accessToken`。节点清单、任务下发和更新请求即使来自 loopback 也必须显式携带 Token；不使用配对码、UDP 扫描、设备密码或第二套 Token。 |
-| 资源发布 | `GET /api/lan-agent/releases/manifest` 返回 Node 资源清单、Ed25519 公钥、签名和公钥 SHA-256 指纹；每个文件单独提供 SHA-256。 |
-| 发布信任 | 首次接入从 Rabi Web 复制发布公钥指纹并保存到私有配置。每次更新先比较该固定指纹，再验证清单签名；清单同时替换公钥和签名也会被拒绝。 |
-| 资源下载 | Agent 通过 `Authorization: Bearer <LAN connection Token>` 下载清单和文件。 |
-| 长连接 | Agent 连接 `/api/lan-agent/connect` 后先发送 `authenticate`，收到 `authenticated` 才发送 `hello`。浏览器 WebSocket 无法稳定附带自定义 Authorization Header，因此连接认证放在第一条消息；HTTP 下载仍使用 Bearer Header。 |
-| 节点与任务 | Manager 持久保存最近 500 个节点状态和任务；重连不会重复执行同一个 `taskId`。 |
-| 本机处理端 | 仅 `codex-desktop`。任务只通过 Codex Desktop IPC 投给已配置的任务 owner；Desktop 未就绪或 owner 未加载时失败关闭，不启动 `codex app-server` 或其他备用 Runtime。 |
-| 启动恢复 | `--bootstrap` 为当前用户创建启动项，用户登录后恢复这个无界面进程；启动项不保存 Token。 |
-
-Rabi Agent 需要 Node.js 22 或更高版本。它不请求管理员权限，不写系统级环境变量。
-
-## Rabi Web 操作
-
-1. 在 Manager 中启用局域网 Web 访问并生成局域网连接 Token。
-2. 用包含 Token 的完整 Rabi Web 访问链接打开控制台。
-3. 打开 **局域网 Agent**，复制页面显示的“发布公钥 SHA-256”。节点首次连上后会显示版本、平台、Codex Desktop 能力和最后在线时间。
-4. 首次接入时把该指纹作为 `RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256` 交给新电脑。
-5. 点击在线节点的 **更新到当前版本**。节点收到 `updateAvailable` 后自行下载并校验资源；页面显示 `requested`、`updated` 或 `failed`。
-
-节点离线时不能请求更新。重新上线后再次请求即可。
-
-## 首次接入
-
-新电脑必须已有：Node.js 22+、Codex/ChatGPT Desktop，以及一个已经打开的目标任务 owner。现有 Agent 接到下面的提示词后，负责下载、校验、安装并启动 Rabi Agent；普通用户不需要手工安装 RabiRoute 或输入配对码。
-
-Rabi Agent 的当前用户私有目录：
-
-| 平台 | 目录 |
-| --- | --- |
-| Windows | `%LOCALAPPDATA%\RabiAgent\` |
+| Windows | `%LOCALAPPDATA%/RabiAgent/` |
 | macOS | `~/Library/Application Support/RabiAgent/` |
 | Linux | `~/.local/share/RabiAgent/` |
 
-首次接入后的配置只保存 Manager 地址、局域网连接 Token、稳定 `nodeId`、发布公钥 SHA-256 指纹、允许工作目录和 Codex Desktop 任务 ID。配置文件权限只给当前用户；不要把 Token 写进仓库、日志、命令历史、任务正文或截图。
+提示词由 WebGUI 的统一模板生成，不再手工拼接文档里的第二份模板。它携带完整 Manager URL、现有局域网 Token 和固定发布公钥 SHA-256。资源清单使用 Ed25519 签名；逐个文件验证 SHA-256 和大小，拒绝越界路径和跨源下载。签名密钥位于 Manager 私有数据中，升级须保留；轮换须重新分发可信指纹。
 
-## 接入提示词
+接入进程变量：`RABI_MANAGER_URL`、`RABI_LAN_LINK_TOKEN`、`RABI_NODE_ID`、`RABI_AGENT_DEFAULT_CWD`、`RABI_AGENT_ALLOWED_CWDS`、`RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256`。Codex 使用 `RABI_AGENT_TYPE=codex-desktop` 和 `RABI_AGENT_CODEX_THREAD_ID`；DSH 使用 `RABI_AGENT_TYPE=dsh`、`RABI_AGENT_DSH_URL`、`RABI_AGENT_DSH_SESSION_ID`。这些值由远端 Agent 发现并写入私有配置，不要求用户输入。
 
-把尖括号中的值替换为本次连接信息后发送给新电脑上已有的 Agent。Token 只放在该次私密提示中，不要转发到群聊或提交到仓库。
+`node rabi-agent.mjs --bootstrap` 是常驻进程，应隐藏并脱离安装终端运行。首次接入后刷新节点页面。在线节点可请求更新；程序自行下载、校验并切换，30 秒内未连回则保留原版本。Manager 地址变更后应重新复制当前提示词更新连接，不猜端口。
 
-```text
-Connect this computer to the LAN Rabi Manager by installing and starting the current headless Rabi Agent. Do not install full RabiRoute, do not use a pairing code, and do not start a fallback Codex runtime.
+## 实例身份与管理
 
-Rabi Manager URL: <RABI_MANAGER_URL>
-LAN connection Token: <RABI_LAN_LINK_TOKEN>
-Stable node ID: <RABI_NODE_ID>
-Allowed workspace: <RABI_AGENT_DEFAULT_CWD>
-Existing Codex Desktop task owner ID: <RABI_AGENT_CODEX_THREAD_ID>
-Release public key SHA-256: <RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256>
+本机 instanceId 持久保存在 Manager 私有目录的 `agent-instance-id.json`；远端 instanceId 沿用连接程序私有 `nodeId`。远端原有单任务配置读取时映射为 `agentId=default`，新增 Agent 使用 UUID。Agent 配置由执行电脑持有，Manager 保存目录投影；本机 Agent 继续以原有路由配置为事实源，保存经过原有并发版本检查。
 
-1. Require Node.js 22 or newer and an already-open Codex/ChatGPT Desktop task owner with the ID above. Stop with the failed prerequisite if either is unavailable.
-2. Request GET <RABI_MANAGER_URL>/api/lan-agent/releases/manifest with Authorization: Bearer <RABI_LAN_LINK_TOKEN>.
-3. Derive SHA-256 from the manifest Ed25519 public key in canonical SPKI DER form and require it to equal <RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256> and manifest.publicKeySha256. Then verify the signature over exactly { version, platform, minNodeVersion, files }; verify every downloaded file's SHA-256 and byte size. Reject paths containing ., .., empty segments, or absolute paths.
-4. Download every file in the manifest into the current user's RabiAgent releases/<version> directory. Do not put the Token in the package, logs, repository, screenshots, command history, or task text.
-5. Set only this process environment for bootstrap: RABI_MANAGER_URL, RABI_LAN_LINK_TOKEN, RABI_NODE_ID, RABI_AGENT_DEFAULT_CWD, RABI_AGENT_ALLOWED_CWDS, RABI_AGENT_CODEX_THREAD_ID, and RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256.
-6. From the verified release directory, run: node rabi-agent.mjs --bootstrap. This writes current-user-only configuration, registers the current-user startup entry, and starts the Rabi Agent.
-7. Wait for Manager to return connected. Report only: Rabi Agent connected: <RABI_NODE_ID>, version: <version>.
-8. On failure, report only the failed step and error. Do not retry indefinitely, skip verification, create another token, use UDP discovery, use a device password, or launch codex app-server.
-```
+本机与远端共用 `instanceManagement.ts` 的扫描、任务与 Hook 安装逻辑。远端通过有请求 ID 和连接所有权校验的 WebSocket RPC 调用；断线立即失败，超时后必须先刷新再决定是否重试。Hook 通过已注册 Agent 的会话 ID 校验，使用隔离的实例身份关联当前 Manager 人格。
 
-签名密钥保存在 Manager 的私有运行数据中。密钥丢失或替换会改变公钥指纹，既有节点会拒绝后续更新；轮换必须通过可信渠道重新分发指纹，并更新每个节点私有配置中的 `releasePublicKeySha256`。真实双机验收前还需要完成显式密钥 provision、权限核验与受控轮换流程。
+实例中的“路由与完整 Agent 设置”进入同一消息适配器页面，包含消息处理、独立记忆整理与计划协助设置。消息处理池和记忆整理按 `instanceId + agentId + 主任务 ID` 隔离持久状态；切换电脑或重绑主任务后不会复用旧电脑的工作任务。创建或解析出的协助任务登记到所属 Agent，Manager 后续按归属分派；离线和身份歧义会失败，不降级到本机。
 
-## 连接、任务和更新合同
+安装版从当前不可变版本包读取接入程序、共用管理运行库和 Hook 包，签名密钥仍保存在私有数据目录。再次粘贴接入提示词更新连接时保留原实例 ID、Agent 目录和已允许的工作目录。已绑定的本机任务关闭后仍保留在实例中，可以重新开启；远端绑定占用同一路由处理端时，应先在路由设置中切回本机。
 
-```text
-GET  /api/lan-agent/releases/manifest
-GET  /api/lan-agent/releases/<version>/node/<assetPath>
-GET  /api/lan-agent/nodes
-POST /api/lan-agent/nodes/<nodeId>/update
-POST /api/lan-agent/nodes/<nodeId>/tasks
-WS   /api/lan-agent/connect
-```
+## API
 
-WebSocket 消息顺序：
+- `GET /api/lan-agent/releases/manifest` 与 `GET /api/lan-agent/releases/<version>/node/<assetPath>`：发布清单与文件。
+- `GET /api/lan-agent/nodes`：连接状态、发布信息与最近任务。
+- `GET /api/lan-agent/instances`：本机和远端实例及其 Agent。
+- `POST /api/lan-agent/instances/<instanceId>/agents`：添加 Agent。
+- `POST /api/lan-agent/instances/<instanceId>/agents/<agentId>/<operation>`：`configure`、`scan`、`threads`、`hooks`、`context`、`tasks`。
+- `POST /api/lan-agent/nodes/<nodeId>/tasks`：投递；省略 `targetAgent` 时采用节点声明的宿主。使用 `idempotencyKey` 去重。
+- `POST /api/lan-agent/nodes/<nodeId>/update`：更新请求。
+- `WS /api/lan-agent/connect`：`authenticate → authenticated → hello → connected → heartbeat`。
 
-```text
-authenticate -> authenticated -> hello -> connected -> heartbeat
-assignTask  -> ackTask -> progress -> taskResult
-updateAvailable -> updateResult
-```
+保留 `lan-agent` 连接和发布 API 路径供现有安装更新；未发布的 `lanAgent` 特殊处理端类型与 `lanAgentNodeId` 配置已移除，路由统一使用实例绑定，用户入口统一称为远端 Agent。旧 Remote Agent v3 是独立实验协议，不作为本次 Agent 端的投递路径或安装依赖；其迁移不在本次范围。
 
-任务具有 `taskId` 与 `idempotencyKey`。Manager 按节点保存去重记录；Agent 只接受 `codex-desktop`，并验证任务工作目录位于接入时声明的允许目录中。任务被 Codex Desktop 接收后，Rabi Agent 等待 Desktop 的任务状态广播；完成结果表示 owner 已完成，具体回复仍在该 Desktop 任务中查看。
+## 剩余实机验收
 
-## 仍需验收
+- 两台电脑首次安装、Token 撤销、断网恢复和登录启动。
+- Codex/DSH 现有任务连续消息、宿主缺席和真实回复可见性。
+- Windows、macOS、Linux 启动项和更新失败恢复。
+## 能力范围
 
-- 两台真实电脑上的首次接入、Token 撤销、网络中断和登录启动恢复。
-- Codex Desktop owner 完成状态广播与实际任务回复的对应关系。
-- Windows、macOS、Linux 启动项的真实运行验证。
-- Remote Agent v3 仍保留为独立实验链路；未迁移或未验收前不删除它。
+当前实现统一了实例身份、目录、Agent 管理界面与远端操作传输；实例内可以进入其绑定路由的共用完整设置。高级任务的实例分派、状态隔离与 Hook 归属已有代码和本机契约测试，真实远端宿主中的计划回传、消息处理看板和完整工作流仍须逐项验收。节点在线和本机协议夹具通过不代表真实双机或所有高级能力对等验收完成。

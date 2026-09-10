@@ -10,6 +10,14 @@ Windows 安装版只有一个应用生命周期入口：`RabiRouteHost.exe`。Ma
 
 ## 生命周期所有权
 
+后台任务故障与核心接口就绪分开判断：`health.state` 不因记忆整理等后台 incident 单独降级；`health.backgroundState` 和 `health.backgroundIncidentCount` 保留故障状态，详细原因仍在 `backgroundLifecycle` 和日志中。必需能力、计划存储启动和路线就绪检查不变。后台任务独立退避，不能阻断无关 API。记忆整理的投递结果不确定时持久化待核对状态，后续只读原投递回执；没有确认不能自动重发。移除的调度目标不再计入当前故障汇总。
+
+健康探测单次期限为五秒，仍要求连续三次失败才重建，给短时 CPU 拥塞留出恢复机会；generation、实例和必需能力校验不变。这是容错门槛，不替代长停顿诊断。
+
+Manager 为线程桥发现允许工作目录时，只从 Desktop 索引查询任务 ID、目录及归档标记，保留最近一万条记录的范围；不读取任务正文或侧栏名称索引。任务名称解析与模型设置仍由原 Desktop owner 合同负责，不能用目录发现替代投递身份检查。
+
+Host 在十五分钟内累计五次 generation 失败后进入 `faulted`，停止自动重建并等待明确的 Host 重启命令，避免约一分钟一轮的失败绕过熔断。Manager 启动前三分钟使用 10 毫秒 CPU 采样，每十秒向 `logs/manager/manager-runtime-YYYY-MM-DD.jsonl` 写入 `startup_cpu_sample`：只含耗时、定时器延迟及前十二个函数位置，不含消息、参数或完整绝对路径。采样不开放调试端口，到期自动停止；采样失败不阻断业务启动。
+
 | 组件 | 负责 | 不负责 |
 | --- | --- | --- |
 | RabiRoute Host | 当前用户单实例、应用代、子进程 Job、启动顺序、有界重启、本机控制命令 | Route、插件业务、WebGUI 状态、桌面表现 |
@@ -82,6 +90,10 @@ Sunshine 的固定 base-port 约定不属于这里采用的不变量。RabiRoute
 ```
 
 Developer Channel 只在本机执行增量 build，以当前不可变版本为基底生成带完整 manifest 的新候选版本，然后通过唯一 Host 做 fenced quit、原子切换 `current.json`、启动完整新 application generation，并核对 Host→Manager/Tray、动态 URL 与 `/meta` 身份。失败时指针自动回滚并恢复上一版本。它不从 NAS 运行代码、不直接启动 Manager/Tray，也不生成发行压缩包；`package-lock.json`、根 Bootstrap 或依赖运行时变化仍必须走完整发行流程。默认会重新构建托盘 Desktop runtime 与 Host Core，避免候选版本夹带基底中的陈旧二进制；只有明确复用已安装构建时才传 `-RebuildDesktopRuntime:$false` 或 `-RebuildHostCore:$false`。
+
+候选版本同时完整替换本次源码中的 `docs/`、`plugins/`、`skills/` 和 `source-patches/`，删除候选内已退役的同层文件，避免新消息包指向旧接口合同、遗漏新模块开发指南或加载旧插件入口及清单；缺少任一目录时构造失败，旧版本保持不变。业务数据、补丁操作回执和动态注册记录不属于这些发行目录，不随构建清理。
+
+根目录中英文 README 与版本更新日志也必须来自本次构建源码；缺少任一文件时构造失败，不沿用基底中的旧说明。
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe"

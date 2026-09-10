@@ -85,6 +85,22 @@ function makeRoleDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-role-"));
 }
 
+test("optional plan message channels survive create, partial update and readback; empty clears them", t => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const destination = { channel: "napcat", gatewayId: "route", params: { target: "group", targetId: "123", instanceId: "qq" } };
+  const input = { status: "分析中", currentStepId: "check", steps: [{ id: "check", title: "Check channels", status: "进行中" }], keywords: ["channel"] };
+  const plan = createPlan(roleDir, { ...input, title: "Channel binding", focus: "Channel binding", messageChannels: [destination] });
+  assert.deepEqual(getPlan(roleDir, plan.id)?.messageChannels, [destination]);
+  updatePlan(roleDir, plan.id, { title: "Renamed" });
+  assert.deepEqual(getPlan(roleDir, plan.id)?.messageChannels, [destination]);
+  assert.throws(() => updatePlan(roleDir, plan.id, { messageChannels: [{ ...destination, params: {} }] }), /messageChannels/);
+  assert.deepEqual(getPlan(roleDir, plan.id)?.messageChannels, [destination]);
+  updatePlan(roleDir, plan.id, { messageChannels: [] });
+  assert.deepEqual(getPlan(roleDir, plan.id)?.messageChannels, []);
+  assert.equal(createPlan(roleDir, { ...input, title: "No channel", focus: "Optional channel" }).messageChannels, undefined);
+});
+
 function directoryByteSnapshot(root: string): Array<[string, string]> {
   if (!fs.existsSync(root)) return [];
   const files: Array<[string, string]> = [];

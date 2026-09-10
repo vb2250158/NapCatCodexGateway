@@ -137,7 +137,9 @@ function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest
   if (!(["text", "image", "voice", "file"] as string[]).includes(type)) {
     throw new Error("payload.type must be text, image, voice, or file.");
   }
-  const text = textValue(payload.text, "payload.text", type === "text");
+  const validatedText = textValue(payload.text, "payload.text", type === "text");
+  // Validation rejects empty input; message whitespace belongs to the sender.
+  const text = validatedText && typeof payload.text === "string" ? payload.text : validatedText;
   const path = textValue(payload.path, "payload.path", false);
   const url = textValue(payload.url, "payload.url", false);
   if (type !== "text" && !path && !url) throw new Error(`${type} payload requires payload.path or payload.url.`);

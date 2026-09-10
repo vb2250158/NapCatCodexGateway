@@ -1,10 +1,22 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import fs from 'node:fs';
+import os from 'node:os';
+import { pathToFileURL } from 'node:url';
 
 const execute = promisify(execFile);
 
 export async function requestHook(input, options = {}) {
+  if (!options.env) {
+    const directory = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'RabiAgent') : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support', 'RabiAgent') : path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'RabiAgent');
+    const helper = path.join(directory, 'hook-client.mjs');
+    if (fs.existsSync(helper)) {
+      const { requestInstanceHook } = await import(pathToFileURL(helper).href);
+      const result = await requestInstanceHook(input, path.join(directory, 'config.json'), options.fetch);
+      if (result !== undefined) return result;
+    }
+  }
   const env = options.env ?? process.env;
   let descriptor;
   let baseUrl = env.RABI_MANAGER_URL;

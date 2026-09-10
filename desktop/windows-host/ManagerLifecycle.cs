@@ -14,7 +14,7 @@ internal sealed record ManagerProbeResult(ManagerProbeState State, string Messag
 
 internal sealed class ManagerLifecycleClient : IDisposable
 {
-    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan ShutdownRequestTimeout = TimeSpan.FromSeconds(3);
     private readonly HttpClient _client;
 
@@ -186,6 +186,7 @@ internal sealed class ManagerLifecycleClient : IDisposable
 
 internal sealed class RestartFailureWindow
 {
+    internal static readonly TimeSpan DefaultWindow = TimeSpan.FromMinutes(15);
     private readonly int _limit;
     private readonly TimeSpan _window;
     private readonly Queue<DateTimeOffset> _failures = new();

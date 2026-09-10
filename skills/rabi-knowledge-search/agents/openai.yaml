@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rabi 记忆与计划搜索"
+  short_description: "Rabi 在线时先查计划和记忆，再定位项目文件；离线直接普通搜索"
+  default_prompt: "使用 $rabi-knowledge-search 查找相关资料；仅在 Rabi 在线且人格范围明确时优先查询计划和记忆，按命中线索定位文件。"

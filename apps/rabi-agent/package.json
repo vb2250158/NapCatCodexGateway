@@ -1,12 +1,13 @@
 {
   "name": "rabi-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Headless LAN worker that forwards approved RabiRoute tasks to a local Codex Desktop owner.",
+  "description": "Headless LAN worker that forwards RabiRoute tasks to a bound local Codex Desktop or DSH session.",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.13.0"
   },
+  "dependencies": { "@openai/codex": "0.144.1" },
   "scripts": {
     "start": "node rabi-agent.mjs --run",
     "bootstrap": "node rabi-agent.mjs --bootstrap",

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, ref } from "vue";
 import { useI18n } from "../i18n";
 import { useGatewayStore } from "../stores/gatewayStore";
@@ -138,7 +139,7 @@ async function triggerRule(rule: { id: string; displayName: string; routeKind: "
   } catch (error) {
     triggerResult.value = {
       ok: false,
-      message: error instanceof Error ? error.message : String(error)
+      message: userFacingError(error)
     };
   } finally {
     triggeringRuleId.value = "";
@@ -155,7 +156,7 @@ async function deleteCurrentGateway(): Promise<void> {
   try {
     await store.deleteGateway(gateway.value.id);
   } catch (error) {
-    deleteError.value = error instanceof Error ? error.message : String(error);
+    deleteError.value = userFacingError(error);
   } finally {
     deletingGateway.value = false;
   }

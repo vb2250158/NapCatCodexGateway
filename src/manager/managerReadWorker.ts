@@ -1,4 +1,5 @@
 import { parentPort, workerData } from "node:worker_threads";
+import { readKnowledgeStorageDelta, type KnowledgeInventory } from "./knowledgeSearchStorage.js";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -42,6 +43,7 @@ import { listOpenPlanFeedbackRecoveryCandidates } from "./planFeedbackRecoveryDi
 import type { GatewayDiagnosticsWorkerInput } from "./gatewayDiagnosticsSnapshot.js";
 
 export type ManagerReadWorkerTask =
+  | { type: "knowledge_search_delta"; roleDir: string; previous: KnowledgeInventory }
   | {
       type: "gateway_diagnostics_snapshot";
       input: GatewayDiagnosticsWorkerInput;
@@ -273,6 +275,8 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
       const limit = Math.min(5_000, Math.max(1, Math.floor(task.limit) || 120));
       return readRolePanelTimeline(roleFolderPath(task.rolesRoot, roleId), limit);
     }
+    case "knowledge_search_delta":
+      return readKnowledgeStorageDelta(task.roleDir, task.previous);
     case "role_knowledge_catalog_snapshot":
       return readRoleKnowledgeCatalogSnapshot(task.roleDir) satisfies RoleKnowledgeCatalogSnapshot;
     case "role_plan_catalog": {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import type {
@@ -239,7 +240,7 @@ async function refreshData(): Promise<void> {
       speech.refreshSpeakers()
     ]);
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : String(error);
+    localError.value = userFacingError(error);
   }
 }
 
@@ -255,7 +256,7 @@ async function createSpeaker(): Promise<void> {
     syncSpeakerDrafts();
     actionMessage.value = "说话人资料已创建。";
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : String(error);
+    localError.value = userFacingError(error);
   } finally {
     actionBusy.value = false;
   }
@@ -275,7 +276,7 @@ async function saveSpeaker(profile: SpeechSpeakerProfile): Promise<void> {
     await refreshVisibleRecords();
     actionMessage.value = "说话人资料已更新，历史记录显示名已重新解析。";
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : String(error);
+    localError.value = userFacingError(error);
   } finally {
     actionBusy.value = false;
   }
@@ -292,7 +293,7 @@ async function deleteSpeaker(profile: SpeechSpeakerProfile): Promise<void> {
     await refreshVisibleRecords();
     actionMessage.value = `已删除说话人资料，并解除 ${result.removedBindings} 条绑定。`;
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : String(error);
+    localError.value = userFacingError(error);
   } finally {
     actionBusy.value = false;
   }
@@ -314,7 +315,7 @@ async function bindSelectedSpeaker(): Promise<void> {
     actionMessage.value = "说话人绑定已保存；只修正当前录音中的相同分段标签。";
     bindingDialog.value = false;
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : String(error);
+    localError.value = userFacingError(error);
   } finally {
     actionBusy.value = false;
   }
@@ -331,7 +332,7 @@ async function unbindSelectedSpeaker(): Promise<void> {
     actionMessage.value = "已解除说话人绑定；记录恢复显示原始分段标签。";
     bindingDialog.value = false;
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : String(error);
+    localError.value = userFacingError(error);
   } finally {
     actionBusy.value = false;
   }

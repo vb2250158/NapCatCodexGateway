@@ -65,6 +65,11 @@ function tokenMatches(actual: string | string[] | undefined, expected: string): 
   return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
 }
 
+export function managerHostRequestAuthorized(request: http.IncomingMessage, identity: ManagerHostIdentity | null): boolean {
+  return Boolean(identity && isLoopbackRemoteAddress(request.socket.remoteAddress)
+    && tokenMatches(request.headers["x-rabiroute-host-token"], identity.controlToken));
+}
+
 export function handleManagerHostLifecycleRequest(
   request: http.IncomingMessage,
   requestUrl: URL,

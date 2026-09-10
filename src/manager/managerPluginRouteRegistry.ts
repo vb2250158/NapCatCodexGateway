@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { currentPluginActivation } from "../plugin-kernel/pluginActivationContext.js";
 
 export type ManagerPluginRouteHandler = (
   request: IncomingMessage,
@@ -47,6 +48,7 @@ type NormalizedManagerPluginRoute = {
 
 type ManagerPluginRouteBatch = {
   instanceId: string;
+  activationId?: string;
   routes: readonly NormalizedManagerPluginRoute[];
 };
 
@@ -135,7 +137,11 @@ function routeMatches(
 export class ManagerPluginRouteRegistry {
   private readonly batches: ManagerPluginRouteBatch[] = [];
 
+  constructor(private readonly publishedActivations?: () => ReadonlySet<string>) {}
+
   register(instanceId: string, declarations: readonly ManagerPluginRouteDeclaration[]): () => void {
+    const activationId = currentPluginActivation()?.activationId;
+    if (this.publishedActivations && !activationId) throw new Error("Managed plugin routes require a plugin activation context.");
     const normalizedInstanceId = required(instanceId, "Manager plugin route instanceId");
     const existingRoutes = this.batches.flatMap(batch => batch.routes);
     const routes = declarations.map(declaration => {
@@ -169,7 +175,7 @@ export class ManagerPluginRouteRegistry {
         );
       }
     }
-    const batch = { instanceId: normalizedInstanceId, routes };
+    const batch = { instanceId: normalizedInstanceId, activationId, routes };
     this.batches.push(batch);
     let active = true;
     return () => {
@@ -181,9 +187,11 @@ export class ManagerPluginRouteRegistry {
   }
 
   private activeBatches(): readonly ManagerPluginRouteBatch[] {
+    const published = this.publishedActivations?.();
     const latestByInstance = new Map<string, ManagerPluginRouteBatch>();
     const instanceOrder: string[] = [];
     for (const batch of this.batches) {
+      if (published && (!batch.activationId || !published.has(batch.activationId))) continue;
       if (!latestByInstance.has(batch.instanceId)) instanceOrder.push(batch.instanceId);
       latestByInstance.set(batch.instanceId, batch);
     }

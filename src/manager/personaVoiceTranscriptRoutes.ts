@@ -1,3 +1,4 @@
+import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import http from "node:http";
 import {
   type PersonaVoiceTranscriptQuery,
@@ -12,6 +13,7 @@ export type PersonaVoiceTranscriptRouteContext = {
 };
 
 function jsonResponse(response: http.ServerResponse, status: number, body: unknown): void {
+  body = errorResponsePresentation(body, status);
   if (response.destroyed || response.writableEnded) return;
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   response.end(JSON.stringify(body, null, 2));

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { discoverRabiPeers } from "./rabiPeerDiscovery.js";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -593,15 +594,7 @@ export class PersonaSyncCoordinator {
   ) {}
 
   async peers(): Promise<PersonaSyncPeer[]> {
-    const relay = this.relayConfig();
-    if (!relay.url.trim() || !relay.token.trim()) throw new Error("RabiLink Relay is not configured for persona peer discovery.");
-    const params = new URLSearchParams({ deviceId: relay.deviceId, deviceGuid: relay.deviceGuid });
-    const response = await fetchWithTimeout(`${relay.url.replace(/\/+$/, "")}/api/rabilink/peers?${params}`, {
-      headers: { "x-rabilink-token": relay.token }
-    }, 5_000);
-    const body = await response.json().catch(() => ({})) as { peers?: PersonaSyncPeer[]; message?: string };
-    if (!response.ok) throw new Error(body.message || `RabiLink peer discovery failed: HTTP ${response.status}`);
-    return Array.isArray(body.peers) ? body.peers : [];
+    return discoverRabiPeers(this.relayConfig());
   }
 
   async sync(peerId: string, roleId?: string): Promise<PersonaSyncResult> {

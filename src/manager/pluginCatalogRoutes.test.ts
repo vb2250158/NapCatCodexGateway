@@ -8,6 +8,7 @@ import { GenerationRuntime, loadPluginProfile, PluginPackageCatalog } from "../p
 import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
 import { WebPluginModuleRegistry } from "./webPluginModules.js";
+import { renderPluginCatalog } from "./pluginCatalogPresentation.js";
 
 async function createFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-plugin-catalog-"));
@@ -86,6 +87,7 @@ async function startCatalogServer() {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (!handlePluginCatalogApi(request, url, response, {
       runtime,
+      renderCatalog: async (input, host) => ({ revision: 0, contract: {}, value: renderPluginCatalog(input, host) }),
       reconciliation: { diagnostics: () => [], reconcile },
       webModules: { list: () => modules.list(), read: (id, rev, relativePath) => modules.read(id, rev, relativePath) }
     })) response.writeHead(404).end();

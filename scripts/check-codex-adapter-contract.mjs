@@ -54,7 +54,8 @@ assert.match(routeConfig, /Desktop 未启动或目标任务无法加载时会明
 assert.match(routeConfig, /createIfMissing:\s*false/);
 assert.match(routeConfig, /initialize(?:Codex)?PlanAssistants[\s\S]*createIfMissing:\s*true/);
 assert.doesNotMatch(routeConfig, /@blur="ensureCodexThreadBinding"/);
-assert.match(gatewayStore, /await bindAgentSessionsForSave\(selectedGateway\.value/);
+assert.doesNotMatch(gatewayStore, /bindAgentSessionsForSave/,
+  "Ordinary Route saves must not resolve or create a Desktop task; explicit initialization owns that side effect.");
 assert.match(sessionBinding, /createIfMissing:\s*true/);
 assert.match(routeConfig, /initializeAgentSessionForRoute/);
 assert.match(routeConfig, /\/api\/role-panel\/messages/);

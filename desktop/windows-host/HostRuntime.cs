@@ -280,6 +280,12 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
     internal ManagerReady Ready { get; }
     internal Task<string> Failure { get; }
     internal string HealthState => _healthState;
+    internal Task<HostResponse> ForwardSourcePatchAsync(JsonElement payload, bool reconcile, CancellationToken cancellationToken)
+    {
+        if (Volatile.Read(ref _stopping) != 0)
+            return Task.FromResult(new HostResponse(false, "source_patch_unconfirmed", "The source patch generation is stopping; query the original operation."));
+        return SourcePatchTransport.SendAsync(Ready, _controlToken, payload, reconcile, cancellationToken);
+    }
     internal uint TrayPid => _tray.ProcessId;
     internal string TrayBoundManagerInstanceId => _trayReady.ManagerInstanceId;
     internal IReadOnlyList<uint> JobMemberPids
@@ -660,7 +666,8 @@ internal sealed record QueuedCommand(
     string? ApplicationGenerationId,
     HostOperationContext Operation,
     TaskCompletionSource<HostResponse> Completion,
-    TaskCompletionSource<bool> ResponseSent);
+    TaskCompletionSource<bool> ResponseSent,
+    JsonElement? SourcePatch = null);
 
 internal sealed record PendingTransition(
     HostOperationContext Operation,
@@ -705,7 +712,7 @@ internal sealed class HostRuntime
     private readonly Channel<QueuedCommand> _commands = Channel.CreateUnbounded<QueuedCommand>();
     private readonly ConcurrentDictionary<string, QueuedCommand> _acceptedMutations = new(StringComparer.Ordinal);
     private readonly object _mutationAcceptanceGate = new();
-    private readonly RestartFailureWindow _failureWindow = new(RestartBackoff.Length, TimeSpan.FromMinutes(2));
+    private readonly RestartFailureWindow _failureWindow = new(RestartBackoff.Length, RestartFailureWindow.DefaultWindow);
     private readonly object _publicationGate = new();
     private readonly ConditionalWeakTable<HostOperationContext, TerminalAuditMarker> _terminalAuditOperations = new();
     private string _state = "starting";
@@ -714,6 +721,7 @@ internal sealed class HostRuntime
     private string? _fenceGenerationId;
     private volatile LifecyclePublication _publication = new("starting", null, null);
     private bool _acceptingMutations = true;
+    private int _sourcePatchInFlight;
 
     internal HostRuntime(string packageRoot, string stateRoot, HostLog log, IHostLifecycleAudit? audit = null)
     {
@@ -1016,6 +1024,21 @@ internal sealed class HostRuntime
                         command.Completion.TrySetResult(Response(false, CurrentState(), "The active Manager endpoint has been revoked."));
                     }
                     break;
+                case "source-patch":
+                case "source-patch-reconcile":
+                    if (!CanQuit(command) || command.SourcePatch is not { } sourcePatch || !SourcePatchTransport.Matches(generation.Ready, sourcePatch))
+                    {
+                        command.Completion.TrySetResult(Response(false, "stale_generation", "The source patch request does not match the active application and Manager."));
+                        break;
+                    }
+                    if (Interlocked.Increment(ref _sourcePatchInFlight) > 4)
+                    {
+                        Interlocked.Decrement(ref _sourcePatchInFlight);
+                        command.Completion.TrySetResult(Response(false, "busy", "Source patch forwarding is full; this request was not forwarded."));
+                        break;
+                    }
+                    _ = ForwardSourcePatchCommandAsync(generation, command, sourcePatch, cancellationToken);
+                    break;
                 case "restart":
                     if (!CanQuit(command))
                     {
@@ -1064,6 +1087,20 @@ internal sealed class HostRuntime
         {
             return (true, null);
         }
+    }
+
+    private async Task ForwardSourcePatchCommandAsync(ApplicationGeneration generation, QueuedCommand command, JsonElement payload, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await generation.ForwardSourcePatchAsync(payload, command.Command == "source-patch-reconcile", cancellationToken);
+            command.Completion.TrySetResult(result);
+        }
+        catch
+        {
+            command.Completion.TrySetResult(new HostResponse(false, "source_patch_unconfirmed", "Source patch forwarding did not confirm an outcome; query the original operation."));
+        }
+        finally { Interlocked.Decrement(ref _sourcePatchInFlight); }
     }
 
     private async Task<string?> WaitBackoffOrCommandAsync(TimeSpan delay, CancellationToken cancellationToken)
@@ -1423,7 +1460,8 @@ internal sealed class HostRuntime
                         request.ApplicationGenerationId,
                         operation,
                         completion,
-                        responseSent);
+                        responseSent,
+                        request.SourcePatch);
                 var mutationAccepted = false;
                 lock (_mutationAcceptanceGate)
                 {
@@ -1616,6 +1654,8 @@ internal sealed class HostRuntime
             "status" => "status_query",
             "activate" => "activate_surface",
             "restart" => "restart_request",
+            "source-patch" => "source_patch_request",
+            "source-patch-reconcile" => "source_patch_reconcile",
             "quit" when !string.IsNullOrWhiteSpace(requestedGenerationId) => "fenced_cli_exit",
             "quit" => "generation_mismatch",
             _ => "invalid_operation"

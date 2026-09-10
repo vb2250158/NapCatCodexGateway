@@ -6,6 +6,10 @@
 
 # RabiRoute 代码架构
 
+Android 日常入口由 `recording/RabiRecordingHubActivity` 提供四页导航；`CaptureOwnership` 协调会话录音、本地录音和录像互斥，`RecordingStore` 保存会话清单。采集与媒体文件分别由 `RabiLocalAudioService`、`RabiLiveRecordingService` 持有。`RabiConversationService` 的历史队列初始化在单线程执行器中完成，就绪前命令有序等待，避免阻塞主线程与后台录像。见[移动端记录界面](rabilink-mobile-recording-ui.md)。
+
+跨 PC 只读调用由 `rabiPeerProtocol.ts` 拥有加密合同和目标授权分派，`rabiPeerClient.ts` 编排 LAN/P2P/Relay，`rabiPeerDirect.ts` 拥有有界 WebRTC 连接。`rabiPeerDiscovery.ts` 同时服务 RPC 与人格同步；RabiLink 插件拥有 HTTP 入口及释放，现有专用 LAN listener 额外接受加密的 `/api/rabilink/peer/receive`，不开放完整 Manager。见[跨电脑接口调用](rabilink-peer-rpc.md)。
+
 实验视频直连由 `RabiDirectVideoSender.kt` 与 `src/manager/rabiDirectVideo.ts` 承担两端传输。RabiLink Manager 插件拥有接收器生命周期和本机文件；`rabiDirectVideoRoutes.ts` 仅接收有界 SDP，Relay 不接收视频字节。SDK 取流留在眼镜适配器。见 [能力与验收限制](rabilink-direct-video.md)。
 
 > 状态：当前代码地图。28 个内置 Manager 插件迁移完成，定义与生命周期 hook 一一对应。
@@ -235,7 +239,7 @@ data/roles/<RoleId>/conversation/archive/index.json
 - 当前人格、逻辑消息端和会话最近双向消息如何从 `conversation/current.jsonl` 取得。
 - 当前消息明确要求 Agent 处理多电脑人格同步时，如何只为本次任务注入同应用 peer 查询、当前人格同步和冲突终态合同；普通消息不携带该提示。Manager 的事件驱动自动对账器独立运行，不由 AgentPacket 创建或拥有。
 - 当前消息询问全天/区间声纹、用户与他人发言或说话人身份时，如何注入当前人格的 `voice-transcripts` 查询和 `voice-identities` 追加修正合同；证据不足必须保持 unknown。
-- 当前 Route 配置持久计划管理秘书时，如何把每个秘书槽的完整任务 ID、名称、workspace 和控制面边界注入主任务；计划的业务 `taskBinding` 仍指向独立业务任务，秘书及其临时子 Agent只做计划盘点、查重、状态核对、结果消费和续投，不修改业务文件。
+- 当前 Route 配置持久计划管理秘书且本轮涉及计划、秘书、委派或计划反馈时，如何把每个秘书槽的完整任务 ID、名称、workspace 和控制面边界注入主任务；计划的业务 `taskBinding` 仍指向独立业务任务，秘书及其临时子 Agent只做计划盘点、查重、状态核对、结果消费和续投，不修改业务文件。
 
 它依赖 RouteDecision，但不重新决定路由。
 
@@ -324,7 +328,7 @@ Desktop 任务审批与 `src/outbox.ts` 的 Action Gate 是两道不同边界：
 
 `src/messageProcessing/board.ts` 是 Manager 拥有的消息处理状态机，`src/messageProcessing/persistence.ts` 负责把状态保存到运行期 `data/.runtime/message-processing-board.json`。业务规则不直接决定文件位置。Manager 启动时同步读取现有快照；运行期间把连续变更合并为最新待写快照，由 Worker 使用紧凑 JSON 和原子替换保存，避免大型状态文件的序列化、`fsync` 和重命名阻塞 HTTP 主线程。`/meta.messageProcessingPersistence` 报告待写、写入、重试、最近耗时和错误。Gateway 在消息组进入 Codex 消息处理任务前登记需求，投递成功后记录精确 Desktop 任务；消息处理 Agent 通过结果接口提交回复、不回复或结构化转交，Outbox 再用 `replyContext.messageProcessingRequirementId` 回写真实发送结果。直接 @、直接回复、私聊和计划进展是必须处理项；普通群讨论仍由 Agent 判断是否参与。
 
-`src/napcatMedia.ts` 在 NapCat 消息进入时把图片 URL 立即转成受限大小的本地运行文件，并把成功或失败写进消息附件记录；`src/messageProcessing/sourceEvidence.ts` 再从当前消息组和可追溯引用链生成消息 ID、附件清单和可投递图片路径。`src/messageProcessing/managedAttachmentDelivery.ts` 按 `requirementId + attachmentId + contentHash` 把可读图片复制到目标 Agent 工作区内的受管缓存，拒绝缓存路径中的符号链接，并按每批最多八张生成稳定批次身份。正文只进入第一批；后续批次只说明批次位置。附件复制失败时仍投递一次正文并列出不可用附件，要求处理端等待附件恢复或转交，不能推断图片内容。`messageAgentPool.ts` 使用持久批次回执复用已经成功的批次，避免同一 requirement 重试时重复投递。`src/agentThreads.ts` 继续只接受目标工作区内、实际存在的受支持图片路径，`src/codexDesktopBridge.ts` 把它们转换成 Desktop `localImage` 输入。`board.ts` 保留聚合需求的全部来源证据，并单独保存 Agent 已核对的 `sourceEvidenceReview`。回复 outcome 可以先进入 `awaiting_send`；发送审批再按 `proposedSend.params.replyToMessageId` 解析本次主消息、明确回复链和正文实际引用的附件。只有这个精确子集中的附件不可读才阻止回复；静默关闭仍必须覆盖整个聚合需求。`AgentPacket` 先给出宽泛最近消息，再给出当前消息；当前消息前五分钟内最接近的讨论片段和引用证据紧跟当前消息，供处理端结合已经读过的历史解释纠正和短追问。
+`src/napcatMedia.ts` 在 NapCat 消息进入时把图片 URL 立即转成受限大小的本地运行文件，并把成功或失败写进消息附件记录；`src/messageProcessing/sourceEvidence.ts` 再从当前消息组和可追溯引用链生成消息 ID、附件清单和可投递图片路径。`src/messageProcessing/managedAttachmentDelivery.ts` 按 `requirementId + attachmentId + contentHash` 把可读图片复制到目标 Agent 工作区内的受管缓存，拒绝缓存路径中的符号链接，并按每批最多八张生成稳定批次身份。正文只进入第一批；后续批次只说明批次位置。附件复制失败时仍投递一次正文并列出不可用附件，要求处理端等待附件恢复或转交，不能推断图片内容。`messageAgentPool.ts` 使用持久批次回执复用已经成功的批次，避免同一 requirement 重试时重复投递。`src/agentThreads.ts` 继续只接受目标工作区内、实际存在的受支持图片路径，`src/codexDesktopBridge.ts` 把它们转换成 Desktop `localImage` 输入。`board.ts` 保留聚合需求的全部来源证据，并单独保存 Agent 已核对的 `sourceEvidenceReview`。回复 outcome 可以先进入 `awaiting_send`；发送审批再按 `proposedSend.params.replyToMessageId` 解析本次主消息、明确回复链和正文实际引用的附件。只有这个精确子集中的附件不可读才阻止回复；静默关闭仍必须覆盖整个聚合需求。`AgentPacket` 先给出宽泛最近消息，再给出当前消息；当前消息前五分钟内最接近的讨论片段和引用证据位于最近消息之后；已经完整显示的同 ID 消息只保留指向最近消息的引用，供处理端结合已经读过的历史解释纠正和短追问。
 
 `src/replyImageDescriptions.ts` 在 NapCat 群聊引用发送进入幂等 reservation 前，按精确 Route、群、实例和 `replyToMessageId` 读取来源消息。受跟踪发送已经通过 send-context 审批时，图片检查只使用该需求的精确来源消息和已审核正式记录；历史 `conversationKey` 不能改写正式群号，同 ID 的其它历史副本也不能替代该证据。正式群、Route、实例或目标不一致，记录不唯一，或图片附件未审核时失败关闭；没有受跟踪审批的普通发送不使用这项回退。来源含图片时，`params.replyImageDescriptions` 必须与图片数量和原顺序一一对应；来源找不到、图片不可读、描述缺失或空泛都会阻止发送。真实平台发送成功后，每张 `napcat-media` 图片旁会创建或追加图片同名 `.md`，记录来源消息、图片序号、发送 Agent 类型与完整会话、`deliveryId`、QQ 回执和本次理解。幂等回执只保存说明文件映射，不把描述正文复制进按平台消息 ID 查询的运维结果；Manager 另写不含正文和图片路径的 `agent_reply_image_descriptions_archived` 事件。
 
@@ -378,6 +382,8 @@ startManager();
 
 
 ### Manager 插件运行时
+
+源码热补丁的清单校验由 `sourcePatchCatalog.ts` 统一提供给构建与监听；`SourcePatchWatcher` 自动发现新模块并按依赖分组编译。`ManagerSourcePatchService` 持有动态注册记录、不可变基线、模块 Worker 和发布回执，插件通过通用 `host.manager.source-patches@1` 调用导出函数，不向核心增加模块名分支。新增模块的依赖初值与后续迁移边界见[源码热补丁](source-hot-patches.md)。
 
 正式 Manager 只通过 `startManager()` 初始化。`src/plugin-kernel/` 负责 Manifest 校验、包 revision 隔离、单一 Profile、能力图、权限、generation 和 effect 释放。默认构建从 `dist/plugins/profiles/desktop.json` 与 `dist/plugins/packages/` 加载；树外插件可通过 `RABIROUTE_PLUGIN_PROFILE` 和 `RABIROUTE_PLUGIN_PACKAGE_ROOTS` 选择独立 Profile 与额外包根目录。运行时不读取旧配置格式，也不从源码插件目录加载。
 
@@ -547,6 +553,8 @@ Gateway 配置的事实源 Module。
 
 - `src/stores/gatewayStore.ts`：调用 manager HTTP 接口并维护配置状态。首屏使用 `/gateways?summary=1&includeConfig=1`，保留完整可编辑 Route 定义，但只取轻量运行状态；控制台、消息适配器和日志诊断页通过 `ensureDiagnostics()` 按需补取完整诊断，避免人格页和知识页反复扫描日志、消息文件与所有人格全文。
 - `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读。首屏使用 `loadRolePlanPage()` 读取 8 条摘要并立即挂载，摘要包含当前步骤标题、进度和附件数量；后续摘要仍按每批 8 条后台补齐并使用 `facets=0`。视口附近通过 `loadRolePlanPreview()` 请求 `detail=preview`，只合并计划描述、当前步骤说明、阻塞信息与附件元数据，队列最多 4 并发；附件保持在折叠卡片中可见。展开卡片时 `loadFullPlanDetails()` 再调用完整单计划接口，取得全部步骤和审批合同，并独立刷新 Agent 状态与反馈；“工作留痕”继续单独读取历史。首屏全局进度只覆盖首批列表，后台目录补齐和卡片预览使用数量状态及卡片内提示。记忆先取当前分类 24 条并按最多 100 条补齐。Manager 控制面使用紧凑 JSON，单计划预览和完整详情复用预热目录缓存；冷缓存由异步并发文件读取建立，同一人格共用填充任务，文件监听只重读变化文件。目录跳转只挂载目标起点的有界窗口并提升目标预览优先级，不新增浏览器侧事实源。WebGUI 使用 Vue `KeepAlive` 保存本次浏览器会话中的计划页实例；页面失焦、隐藏或切换到其它 WebGUI 页面时只暂停观察器和读取，返回后恢复已加载详情、筛选、展开状态与阅读位置。只有显式刷新操作或浏览器重载会丢弃并重建该缓存。排序筛选弹窗立即挂载轻量外框，并在浏览器完成一帧绘制后异步挂载控件；标签候选复用首批计划响应中的 Manager facets，并通过虚拟列表只创建可见行，不为弹窗维护第二份业务数据，也不在打开时追加请求。审批合同仍由 Manager 的 `presentation.approval.stepId` 定位，只有 `ready/enabled=true` 可提交；计划级引导只提交 `planId`。反馈成功后更新本地卡片并监听 `plan_feedback_changed`。
+- `App.vue` 统一将响应式 URL 同步到 `gatewayStore.syncRouteSelection`。`routeScopedNavigation.ts` 解析正式路径及插件恢复页的原始 `from`；`main.ts` 等首个路由确认后挂载。Store 只在无明确 Route 的入口选择默认配置，显式未知 Route 保持未选中；各页面不再通过双向 watcher 回写 URL。路由下拉通过 Router 历史导航切换，名称编辑仅保留当前消息适配器配置的定向地址更新。
+- `src/components/PlanAttachmentGallery.vue`：描述区与审批区共用图片、视频和 Markdown 预览卡片；附件 URL、加载状态、摘要缓存与预览弹窗仍由计划页拥有，不新增查询或存储真源。
 - `src/components/PlanFeedbackComposer.vue`：计划引导与审批意见共用的输入组件。`@` 引用、Enter/Shift+Enter、文件选择、剪贴板粘贴、附件预览和删除只在此处实现；页面只传入两类反馈各自的可编辑条件、提交条件和文案。
 - 计划详情展开时，通过 `manager/planAgentStatusRoutes.ts` 按需读取该计划 `taskBinding` 与可选 `secretaryBinding` 的真实会话状态；页面刷新后只补查仍保持展开的计划，不在目录摘要加载完成后扫描全部绑定。`manager/planAgentStatus.ts` 按绑定的 `agentType` 分派：Codex 读取 Desktop 任务，DSH 通过 apiproxy 读取 DSH 会话；它负责 2.8 秒有界读取、同绑定请求去重、workspace 校验以及 Agent 工作状态与会话状态的分离。Windows 普通路径与 `\\?\\` 扩展路径先归一化再比较。WebGUI 的 3 秒请求预算只决定何时显示未知。打开动作只定位已核对的精确绑定：Codex 调用 `openCodexDesktopThread()`，DSH 打开带 `rabiSessionId` 的 DSH Web 页面；两者都不发送 prompt、不创建任务或会话，也不走备用 Runtime。
 - `src/roleKnowledge.ts` 为近期记忆列表生成并缓存沉淀投影。投影用 `updatedAt` / `recalledAt` 计算每条记忆的 24 小时候选时间和 72 小时触发时间，返回 `triggersNextConsolidation` 与 `willEnterNextConsolidation`；记忆目录写入或外部文件变化时与目录缓存一起失效。`src/manager/memoryConsolidationScheduler.ts` 读取最早截止时间并设置一次性任务，到点后重新核对活跃时间、创建 run 并投递 Manager 内置事件。最不活跃记忆到达 72 小时时，`recentMemoryConsolidationCohort()` 固定 `triggerAt` 与 `candidateCutoffAt`，列表投影和真实整理 request 共用该结果，避免晚执行时扩大候选范围。新记忆写入 `.md`，结构化字段保存在元数据区，正文保留标准 Markdown；旧 `.json` 继续读取，同 ID 时 `.md` 优先。`RoleKnowledgePage.vue` 只消费 Manager 结果，不在浏览器复制沉淀候选算法。
@@ -801,8 +809,24 @@ src/messageEndpoints/
 
 `shared/agentHookAutomation.ts` 拥有事件、条件和消息端的定义与校验。规则结构为 `event`、AND 语义的 `conditions[]` 和 `destination.channel/gatewayId/params`；未知条件、事件和消息端失败关闭。当前事件为 `task_completed`，条件为 `project`、`bound_plan`、`include_sessions`、`exclude_sessions`（`sessions[]` 保存完整 ID 与显示名，按 ID 匹配，排除优先），消息端为 NapCat 群／私聊和语音。后续能力需在此合同与执行入口同时注册。
 
-完成通知读取 Codex 当前任务标题，回退到计划 `taskBinding.sessionTitle`，不输出项目路径或 sessionId。`bound_plan` 条件按当前人格已发布的计划目录核对 Codex `taskBinding.sessionId`。原 `projectPath/requireBoundPlan/groupId` 等平铺字段仅在配置边界迁移，保存后删除，不保留旧执行分支；保留集合字段 `codexHooks.completionDeliveries` 作为现有配置的稳定入口。NapCat 群迁移保持原 deliveryId，语音成功和失败也写入 Outbox 的投递身份，避免重放。
+完成通知按任务 ID 读取 Codex 当前任务标题，读取不到时显示“未命名任务”，不回退到计划 `taskBinding.sessionTitle`，不输出项目路径或 sessionId。`bound_plan` 条件按当前人格已发布的计划目录核对 Codex `taskBinding.sessionId`。原 `projectPath/requireBoundPlan/groupId` 等平铺字段仅在配置边界迁移，保存后删除，不保留旧执行分支；保留集合字段 `codexHooks.completionDeliveries` 作为现有配置的稳定入口。NapCat 群迁移保持原 deliveryId，语音成功和失败也写入 Outbox 的投递身份，避免重放。
 
 `codexHooks.completionDeliveries` 由人格持有项目完成消息规则。`agentCompletionDelivery.ts` 在 Stop 完成门禁通过后按项目匹配所有会话：Git 项目使用 common directory 归并工作树，普通目录使用真实绝对路径。发送复用 `agentSend` / Outbox 的持久回执和稳定 deliveryId；并发事件 single-flight，结果不确定时停止重发。DSH 事件显式携带 agentType，不触发 Codex 项目规则。
 
 人格页自动化分为接收消息、定制任务、Agent Hook。`configRepository` 将 `codexHooks` 保存到人格 `personaConfig.json`；该字段沿用既有序列化名称，Codex 和 DSH 共用。旧 Route 字段在保存或显式迁移时移除。`agentAdapters/hookInstallation.ts` 通过 Agent 官方插件管理器安装埋点；`plugins/rabi-codex-context` 与 `plugins/rabi-dsh-context` 随构建进入 `dist/agent-hooks`，不在各 Agent 端维护人格业务规则。
+
+## WebGUI 单路线保存
+
+`gatewayStore` 拥有可编辑草稿与最近确认的配置基线，`gatewayDraft.ts` 比较语义值并执行三方合并（数组整体冲突）。单路线保存使用 `PUT /gateways/:id/config`，提交固定快照与全目录强 `If-Match`、`Idempotency-Key`。读取最新目录后只合并该路线的字段；事务入队后再次 CAS，因此读取与写入之间的并发变化仍会被拒绝。
+
+Manager 复用 Route catalog worker 的 upsert、日志、回滚和持久化回执。指定原路线 ID 的 upsert 仅写目标适配器文件及其人格配置，重命名拒绝占用其他路线名称；人格共享字段由目标人格配置拥有。批量 `POST /gateways` 继续供明确的整目录管理调用使用，WebGUI 普通保存不再调用它。
+
+`GET /gateways/mutations/:operationId` 经同一 worker 队列屏障完成恢复并读取回执，返回 `committed` 或 `not_committed`。进程未能安全结束或队列不可用时不宣称未提交。前端在同一页面内保存提交快照以接纳迟到确认，sessionStorage 仅保留旧 v2 操作元信息。成功回执更新基线，不覆盖后续编辑；运行应用错误独立返回。
+
+计划可选 `messageChannels` 列表，Agent 可在创建计划或 PATCH 时绑定；省略或 `[]` 均合法，不阻断建计划、执行或人格事件投递。每项为 `{channel, gatewayId, params}`，复用事件投递的 NapCat 群／个人 QQ 与语音参数。计划渠道只用于绑定 Codex 任务的最终结果；与人格规则共同匹配，同一任务、轮次、目标去重。Hook 自动通知不要求原始群消息编号，也不被旧引用式进度通知的失败阻断；Agent 主动回复仍尽量引用来源。
+
+消息投递的结构化数据、统一渲染和回执恢复归属见[模板架构](message-delivery-templates.md)。
+
+## 电脑实例与 Agent 管理
+
+`shared/agentInstance.ts` 定义电脑身份和 Agent 引用，`agentInstanceBindings` 把路由绑定到实例内 Agent，IP 不参与持久身份。`agentAdapters/instanceManagement.ts` 复用现有扫描、任务与 Hook 安装逻辑；本机直接调用，远端通过 `lanAgentRegistry.ts` 的连接所有权校验 RPC 调用。`apps/rabi-agent` 持有远端私有配置，WebGUI 的 `InstanceAgentSettings.vue` 复用基本管理界面。能力范围与尚未完成的高级功能对等见[接入说明](lan-rabi-agent-bootstrap.md)。

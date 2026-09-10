@@ -6,6 +6,8 @@ English | <a href="./README.md">简体中文</a>
 
 # RabiRoute Documentation
 
+- [Offline glasses recording and live preview](rabilink-offline-recording_en.md): record glasses streams on the phone and watch locally; device acceptance is in progress.
+
 This directory contains current guides, experimental integrations, designs, research, and historical handoffs. The existence of a file does not mean its feature is complete; check its status before relying on it.
 
 ## Status definitions
@@ -39,10 +41,13 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Routing, personas, and handlers
 
+- [Install Rabi knowledge search](../skills/rabi-knowledge-search/README_en.md) — Project maintainers can install the skill to search plans and memories first when online, and use ordinary search when offline.
+
 - [Routing configuration](routing-configuration_en.md) — **Current guide** for `personaConfig.json`, route kinds, regex, pipelines, and template variables.
 - [Routing and personas](routing-and-personas_en.md) — **Current guide** for route/role boundaries and persona decision templates.
 - [Agent context injection](agent-context-injection_en.md) — **Current guide** for the persona-scoped bidirectional ledger, per-endpoint/conversation recent-message budgets, archival boundaries, persona-directory and cross-persona credentials, paths, and reply context inside `AgentPacket`.
 - [Rabi Agent interfaces](rabi-agent-interfaces_en.md) — **Current contract** for handler replies, persona discovery, idempotent one-way cross-persona delivery, receipts, thread bridge, plans, memory, Remote Agent, and role skills.
+- [Long-term maintenance and self-repair](rabi-maintenance_en.md) — **Maintenance workflow** for a stable intake task, original issue ownership, recovery verification, and periodic code-quality work.
 - [Plans and memory](plan-and-memory-model_en.md) — **Current guide** for Role Knowledge sources, recall, explicit consolidation, and side effects.
 - [Unified dynamic record lifecycle](dynamic-record-lifecycle_en.md) — **Current guide** for archival, memory consolidation, physical sharding, retention, and the 24/72-hour dynamic windows.
 - [Pipeline presets](pipeline-presets_en.md) — Agent-session defaults, explicit external targets, and Outbox statuses; FenneNote output is archival compatibility only.
@@ -54,11 +59,16 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Architecture and maintenance
 
+- [Mobile recording interface](rabilink-mobile-recording-ui_en.md) — Four-page navigation, capture modes, offline storage, session replay and compatibility boundaries.
+
+- [Rokid development sources and troubleshooting](rokid-development_en.md) — SDK route, official-source reading status, installation evidence and development skill; CXR-M is excluded.
+
 - [Architecture](architecture_en.md) — **Current fact**. Product boundaries, the Codex Desktop owner, current Outbox, and future Action Queue are separated.
 - [Plugin architecture lessons from DSH](dsh-plugin-architecture-lessons_en.md) — **Research and implementation summary**. Covers the completed migration of 28 built-in Manager plugins, WebGUI/Desktop minimal extension hosts, contribution points, process-isolation boundaries, and the future third-party presentation Extension Host.
 - [How DSH uses Cordis](dsh-cordis-runtime-analysis_en.md) — **Implementation research**. Explains profiles, Loader, Fibers, service realms, the browser plugin tree, dynamic code, and process-sandbox boundaries.
 - [RabiRoute plugin platform target architecture](manager-plugin-implementation-hot-swap_en.md) — **Current architecture**. Defines a minimal Plugin Kernel, independent capability packages, one SDK, multi-host extension, atomic generation switching, out-of-tree plugin acceptance, and one complete removal of the old runtime.
 - [Plugin Bundles and hot replacement](plugin-bundles_en.md) — **Current implementation guide**. one Profile, independent packages, the shared SDK, generation hot replacement, and browser revision rollback.
+- [Source hot patches](source-hot-patches_en.md) — **In development**. Source mode watches code and declared resources, compiles and validates changes, preserves state, and switches without stopping the service; the document states the installed-runtime acceptance boundary.
 - [Code architecture](code-architecture_en.md) — **Current fact**. Backend, Manager, endpoint, Role Knowledge, WebGUI, and desktop module map.
 - [Project function map](project-function-map_en.md) — **Current fact**. Locate behavior by maturity, side effect, API, and code owner.
 - [Path and directory conventions](path-and-directory-conventions_en.md) — **Current maintainer guide**. Separates software, public samples, local runtime data, and logs, and defines relative-path and business-ID interfaces.
@@ -79,6 +89,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Rabi Voice Client](../desktop/rabi-voice-client/README_en.md) — use a meeting-room Windows PC as a LAN microphone and speaker while segmentation and models stay on the RabiSpeech host.
 - [Local speech model downloads](local-speech-model-downloads_en.md) — use Model Management for on-demand weights and review each TTS/ASR model's source, isolated runtime, and validation requirements.
 - [RabiSpeech performance report](rabispeech-performance-report_en.md) — six TTS and five main ASR models, cold/warm timing, quality indicators, hardware, and CUDA issues.
+- [Cross-PC API calls](rabilink-peer-rpc_en.md) — Query another PC by device ID, configure target grants and inspect the actual LAN, P2P or Relay result.
 - [RabiLink Relay](rabilink-relay-server_en.md)
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker_en.md)
 - [RabiLink glasses three-route comparison](rabilink-glasses-route-comparison_en.md) — host, lifecycle, device capability, release cost, and current guidance for native Lingzhu agent, AIUI, and native app routes.
@@ -96,12 +107,13 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Designs and history
 
+
 - [Proactive-intelligence system design overview](../主动智能设计思路_en.md) — **Planned**. Covers user modeling, scenarios, proactive action, memory, and device responsibilities. See Current Capabilities for implementation status.
 - [Conversational message collection, message groups, and four-Agent collaboration](group-message-batching-and-triage-plan_en.md) — **Experimental**. Natural-language traffic may be recorded immediately, settled into batches, and sent to dynamic Codex Message Agents by a combined ranking of the quoted message's Agent session, prior message group, conversation, speaker, and endpoint familiarity. Live group/DM and complete four-Agent acceptance remain pending.
 - [Persona route workbench plan](persona-route-workbench-plan_en.md) — **Partially implemented**. Speech-keyword and per-endpoint context controls are live; side-effect-free RouteDecision/AgentPacket preview is not implemented.
 - [Windows tray task-window plan](rabiroute-windows-tray-task-window-plan_en.md) — design record; use `desktop/tray-task-window/` and the packaging guide for the actual implementation.
 - [UE/UX audit and refactor](rabiroute-ue-ux-audit-and-refactor_en.md) — phase audit.
-- [LAN Rabi Agent bootstrap and updates](lan-rabi-agent-bootstrap_en.md) — **Experimental integration**. Covers headless-node bootstrap, the LAN connection Token, Rabi Web update requests, and the current Codex Desktop task-owner limitation.
+- [Remote Agent setup and updates](lan-rabi-agent-bootstrap_en.md) — **Experimental integration**. Copy a prompt to connect another computer, manage its Agents in the current Manager, and select them as route handlers.
 - [Historical mobile-app Webhook plan](mobile-app-webhook-integration_en.md) — **Historical**. The current RabiLink path no longer requires a phone bridge as the main relay.
 
 Archived material is under [`archive/`](../archive/README_en.md). Buildable clients live under [`apps/`](../apps/README_en.md), reusable SDKs under [`packages/`](../packages/README_en.md), and copyable samples under [`examples/`](../examples/README_en.md).
@@ -112,3 +124,7 @@ Archived material is under [`archive/`](../archive/README_en.md). Buildable clie
 2. Maintain the English version manually only after behavior is accurate; do not batch-translate stale documents.
 3. Design documents must be labeled Planned or Historical instead of appearing in the current-capability list.
 4. Runtime-semantic Markdown (`AGENTS.md`, `SKILL.md`, personas, prompts, memories, and plans) must not be translated mechanically.
+
+- [Delivery templates and ownership](message-delivery-templates_en.md): renderer ownership, scenario differences and historical receipt retirement for developers.
+
+- [Plan and memory summary search](knowledge-search_en.md)

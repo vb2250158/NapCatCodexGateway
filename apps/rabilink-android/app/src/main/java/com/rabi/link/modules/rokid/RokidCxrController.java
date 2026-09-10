@@ -40,8 +40,14 @@ public final class RokidCxrController {
     private final RokidCxrLinkState linkState = new RokidCxrLinkState();
     private final RokidAudioCapture audioCapture = new RokidAudioCapture();
     private String sessionType = "";
+    private final String targetPackage;
 
     public RokidCxrController(Context context, Listener listener) {
+        this(context, listener, GLASS_ASR_PACKAGE);
+    }
+
+    RokidCxrController(Context context, Listener listener, String targetPackage) {
+        this.targetPackage = targetPackage;
         this.cxrLink = new CXRLink(context.getApplicationContext());
         this.listener = listener;
         RokidCxrCallbacks.install(cxrLink, linkState, audioCapture, listener);
@@ -132,7 +138,7 @@ public final class RokidCxrController {
     public boolean connectGlassAppSession(String token) {
         prepareSessionSwitch();
         boolean configured = cxrLink.configCXRSession(
-                new CxrDefs.CXRSession(CxrDefs.CXRSessionType.CUSTOMAPP, GLASS_ASR_PACKAGE),
+                new CxrDefs.CXRSession(CxrDefs.CXRSessionType.CUSTOMAPP, targetPackage),
                 new ICXRSessionCbk() {
                     @Override
                     public void onSessionAvailable(CxrDefs.CXRSessionReason reason) {
@@ -155,7 +161,7 @@ public final class RokidCxrController {
                     }
                 }
         );
-        log("configCXRSession CUSTOMAPP package=" + GLASS_ASR_PACKAGE + " result=" + configured);
+        log("configCXRSession CUSTOMAPP package=" + targetPackage + " result=" + configured);
         sessionType = "CUSTOMAPP";
         boolean connected = cxrLink.connect(token);
         log("connectGlassAppSession=" + connected);
@@ -168,7 +174,7 @@ public final class RokidCxrController {
     }
 
     void installGlassAsrApp(String apkPath) {
-        log("appUploadAndInstall path=" + apkPath + " target=" + GLASS_ASR_PACKAGE);
+        log("appUploadAndInstall target=" + targetPackage);
         cxrLink.appUploadAndInstall(apkPath, glassAppCallback());
     }
 
@@ -176,6 +182,17 @@ public final class RokidCxrController {
         closeCustomViewBeforeGlassAppStart();
         log("appStart entry=" + GLASS_ASR_ENTRY);
         cxrLink.appStart(GLASS_ASR_ENTRY, glassAppCallback());
+    }
+
+    public void startGlassVideoApp() {
+        closeCustomViewBeforeGlassAppStart();
+        cxrLink.appStart(targetPackage + ".GlassVideoActivity", glassAppCallback());
+    }
+
+    boolean sendVideoCommand(String payload) {
+        Caps caps = new Caps(); caps.write("protocol"); caps.write(payload);
+        Integer result = cxrLink.sendCustomCmd(com.rabi.link.protocol.RabiGlassVideoProtocol.CHANNEL, caps);
+        return result != null && result == 0;
     }
 
     void stopGlassAsrApp() {
@@ -236,6 +253,8 @@ public final class RokidCxrController {
         log("startAudioStream(" + RokidProbeDefaults.AUDIO_STREAM_MODE + ")=" + started);
         return started;
     }
+
+    void disableDiagnosticAudioBuffer() { audioCapture.setRetainPcm(false); }
 
     boolean stopAudioStream() {
         boolean stopped = cxrLink.stopAudioStream();
@@ -313,7 +332,7 @@ public final class RokidCxrController {
         cxrLink.setCXRCustomCmdCbk(new ICustomCmdCbk() {
             @Override
             public void onCustomCmdResult(String key, byte[] payload) {
-                if (!NATIVE_VOICE_REPLY_KEY.equals(key)) {
+                if (!NATIVE_VOICE_REPLY_KEY.equals(key) && !com.rabi.link.protocol.RabiGlassVideoProtocol.REPLY.equals(key)) {
                     log("ignore custom cmd key=" + key + " bytes=" + (payload == null ? 0 : payload.length));
                     return;
                 }

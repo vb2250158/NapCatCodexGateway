@@ -27,7 +27,7 @@ test("LAN Agent release manifest signs the published Node resources", () => {
     const manifest = store.manifest();
     assert.equal(manifest.version, "0.9.1");
     assert.equal(manifest.platform, "node");
-    assert.equal(manifest.minNodeVersion, "22.0.0");
+    assert.equal(manifest.minNodeVersion, "22.13.0");
     assert.deepEqual(manifest.files.map(file => file.path), ["lib/worker.mjs", "package.json", "rabi-agent.mjs"]);
     assert.match(manifest.publicKeySha256, /^[a-f0-9]{64}$/);
     assert.equal(verifyLanAgentReleaseManifest(manifest, manifest.publicKeySha256), true);
@@ -49,4 +49,21 @@ test("LAN Agent release manifest signs the published Node resources", () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("installed releases read immutable package assets while keeping the signing identity in private data", () => {
+  const root = temporaryDirectory("rabi-instance-packaged-release-");
+  try {
+    const agentRoot = path.join(root, "immutable", "apps", "rabi-agent");
+    writeAgent(agentRoot);
+    fs.mkdirSync(path.join(agentRoot, "runtime"));
+    fs.writeFileSync(path.join(agentRoot, "runtime", "management.mjs"), "export const bundled = true;");
+    const privateRoot = path.join(root, "private");
+    const store = new LanAgentReleaseStore({ rootDir: privateRoot, agentRoot });
+    const manifest = store.manifest();
+    assert.ok(manifest.files.some(file => file.path === "runtime/management.mjs"));
+    assert.equal(fs.existsSync(path.join(privateRoot, "data", "lan-agent-release-signing-key.json")), true);
+    assert.equal(fs.existsSync(path.join(agentRoot, "data")), false);
+    assert.equal(verifyLanAgentReleaseManifest(manifest, manifest.publicKeySha256), true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

@@ -95,8 +95,8 @@
     {
       "key": "等待 QA",
       "state": "enabled",
-      "label": "等待 QA",
-      "labelEn": "Awaiting QA",
+      "label": "等待 QA 验收",
+      "labelEn": "Awaiting QA acceptance",
       "description": "目标包已确认，正在等待 QA 验收结论。",
       "descriptionEn": "The target package is confirmed and awaiting QA acceptance.",
       "order": 5,

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, ref } from "vue";
 import type { GatewayDefinition } from "@shared/gatewayConfigModel";
 import { AGENT_HOOK_EVENTS, AGENT_HOOK_CONDITIONS, AGENT_HOOK_DESTINATIONS, agentHookRuleErrors,
@@ -33,7 +34,7 @@ async function scanSessions(more = false) {
       .map((session: AgentHookSession) => ({ id: session.id, name: session.name || "未命名任务" }));
     sessions.value = [...new Map([...(more ? sessions.value : []), ...found].map(session => [session.id, session])).values()];
     nextSessionOffset.value = codex?.sessionPage?.hasMore ? codex.sessionPage.nextOffset ?? null : null;
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
+  } catch (cause) { error.value = userFacingError(cause); }
   finally { sessionLoading.value = false; }
 }
 const routes = computed(() => props.gateways.map(item => ({ title: item.name || item.id, value: item.id })));
@@ -66,7 +67,7 @@ async function scanProjects() {
     if (!response.ok) throw new Error(data.message || "读取 Codex 项目失败");
     projects.value = (data.agents?.codex?.projects ?? []).map((item: { path: string }) => item.path);
     if (!projects.value.length) projects.value = data.cwdOptions ?? [];
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
+  } catch (cause) { error.value = userFacingError(cause); }
   finally { loading.value = false; }
 }
 </script>

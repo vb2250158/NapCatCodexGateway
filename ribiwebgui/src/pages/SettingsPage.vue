@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { managerEventSource } from "../managerApi";
@@ -85,7 +86,7 @@ async function loadWebguiLanAccess(): Promise<void> {
     webguiLanAccess.value = body.data as WebguiLanAccess;
     webguiLanError.value = "";
   } catch (error) {
-    webguiLanError.value = error instanceof Error ? error.message : String(error);
+    webguiLanError.value = userFacingError(error);
   }
 }
 
@@ -111,7 +112,7 @@ async function updateWebguiLanAccess(
       ? "配置已保存；重启 Manager 后监听范围才会改变。"
       : "局域网 WebGUI 配置已更新。";
   } catch (error) {
-    webguiLanError.value = error instanceof Error ? error.message : String(error);
+    webguiLanError.value = userFacingError(error);
     throw error;
   } finally {
     webguiLanSaving.value = false;
@@ -165,7 +166,7 @@ async function copyWebguiLanText(value: string, successMessage: string): Promise
     webguiLanNotice.value = successMessage;
     webguiLanError.value = "";
   } catch (error) {
-    webguiLanError.value = `复制失败：${error instanceof Error ? error.message : String(error)}`;
+    webguiLanError.value = `复制失败：${userFacingError(error)}`;
   }
 }
 
@@ -196,7 +197,7 @@ async function saveDirConfig(): Promise<void> {
     routeDir.value = data.routeDir ?? "";
     rolesDir.value = data.rolesDir ?? "";
   } catch (e) {
-    dirError.value = e instanceof Error ? e.message : String(e);
+    dirError.value = userFacingError(e);
     throw e;
   } finally {
     dirSaving.value = false;
@@ -231,7 +232,7 @@ async function saveRabiIdentity(): Promise<void> {
     rabiName.value = store.meta.rabiName || "";
     loadRabiLinkRelayForm();
   } catch (e) {
-    rabiError.value = e instanceof Error ? e.message : String(e);
+    rabiError.value = userFacingError(e);
     throw e;
   } finally {
     rabiSaving.value = false;

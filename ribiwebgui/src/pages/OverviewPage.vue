@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { userFacingError } from "../userFacingError";
+import { computed, onBeforeUnmount, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
+import { registerPageSaveAction } from "../pageSaveAction";
 import { routeScopedAdaptersPath, routeScopedOverviewPath } from "../routeScopedNavigation";
 import { adapterLabel, configNameFor, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
 
@@ -11,6 +13,12 @@ const router = useRouter();
 const gatewayActionId = ref("");
 const gatewayActionError = ref("");
 const deletingGatewayId = ref("");
+onBeforeUnmount(registerPageSaveAction({
+  dirty: computed(() => store.dirty),
+  ready: computed(() => !store.loading),
+  saving: computed(() => store.saving),
+  save: () => store.saveChangedRoutes()
+}));
 
 function avatarUrlForGateway(gatewayId: string, roleId?: string): string {
   const options = store.runtimeFor(gatewayId).roleInfo?.options || [];
@@ -41,7 +49,7 @@ async function runGatewayAction(id: string, action: "start" | "stop" | "restart"
   try {
     await store.actionGateway(id, action);
   } catch (error) {
-    gatewayActionError.value = error instanceof Error ? error.message : String(error);
+    gatewayActionError.value = userFacingError(error);
   } finally {
     window.setTimeout(() => {
       gatewayActionId.value = "";
@@ -59,7 +67,7 @@ async function deleteGatewayFromConsole(gateway: any): Promise<void> {
   try {
     await store.deleteGateway(gateway.id);
   } catch (error) {
-    gatewayActionError.value = error instanceof Error ? error.message : String(error);
+    gatewayActionError.value = userFacingError(error);
   } finally {
     deletingGatewayId.value = "";
   }

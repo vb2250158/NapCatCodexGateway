@@ -13,13 +13,36 @@ import { AGENT_HOOK_EVENTS, agentHookRuleErrors } from "../shared/agentHookAutom
 const execute = promisify(execFile);
 export type CompletionDeliveryResult = { ruleId: string; status: "sent" | "failed"; reason?: string };
 export type CompletionRuleOwner = { roleId: string; rule: AgentCompletionDeliveryRule };
+export function planCompletionDeliveryRules(roleId: string, plans: readonly Pick<PlanItem, "id" | "taskBinding" | "messageChannels">[], sessionId: string): CompletionRuleOwner[] {
+  return plans.filter(plan => plan.taskBinding?.agentType === "codex" && plan.taskBinding.sessionId === sessionId)
+    .flatMap(plan => (plan.messageChannels ?? []).map((destination, index) => ({ roleId, rule: {
+      id: `plan-${plan.id}-${index}`, enabled: true, event: "task_completed", conditions: [{ type: "bound_plan" }], destination
+    } })));
+}
 export type CompletionTaskContext = { taskName?: string; plans: Array<{ id: string; title: string }> };
+
+/** Preserve every character and Unicode code point across transport-sized messages. */
+export function splitCompletionMessage(text: string, maxChars = 3000): string[] {
+  if (!Number.isInteger(maxChars) || maxChars < 2) throw new Error("Invalid message chunk size.");
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxChars) {
+    let end = remaining.lastIndexOf("\n", maxChars - 1) + 1;
+    if (!end) end = maxChars;
+    const last = remaining.charCodeAt(end - 1);
+    if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+    chunks.push(remaining.slice(0, end));
+    remaining = remaining.slice(end);
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
 
 export function completionTaskContextFromPlans(sessionId: string,
   plans: readonly Pick<PlanItem, "id" | "title" | "taskBinding">[], currentTitle?: string): CompletionTaskContext {
   const bound = plans.filter(plan => plan.taskBinding?.agentType === "codex" && plan.taskBinding.sessionId === sessionId);
   return {
-    taskName: currentTitle?.trim() || bound.find(plan => plan.taskBinding?.sessionTitle?.trim())?.taskBinding?.sessionTitle,
+    taskName: currentTitle?.trim() || undefined,
     plans: bound.map(plan => ({ id: plan.id, title: plan.title }))
   };
 }
@@ -27,8 +50,7 @@ export function completionTaskContextFromPlans(sessionId: string,
 export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryRule, hook: CodexHookContextRequest,
   deliveryId: string, routeId: string, options: AgentReplyOptions, context: CompletionTaskContext = { plans: [] }): Promise<void> {
   const taskName = context.taskName?.trim() || "未命名任务";
-  const heading = ["Codex 任务完成", `任务：${taskName}`,
-    ...(context.plans.length ? [`计划：${context.plans.map(plan => plan.title).join("、")}`] : [])].join("\n");
+  const heading = ["Codex 本轮结果", `任务：${taskName}`].join("\n");
   const { channel, params } = rule.destination;
   if (channel !== "napcat" && channel !== "speech") throw new Error("不支持的消息端。");
   const request: AgentSendRequest = {
@@ -39,10 +61,18 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
     payload: { type: "text", text: `${heading}\n\n${hook.lastAssistantMessage!.trim()}` },
     styleValidation: 0
   };
-  const inspection = await inspectAgentSendDelivery(request, options);
-  if (inspection.state === "uncertain") throw new Error(inspection.reason);
-  const result = inspection.state === "completed" ? inspection.result : await handleAgentSend(request, options);
-  if (result.status !== "sent" || (channel === "napcat" && !result.sentMessageId)) throw new Error(result.reason || "完成消息未取得发送回执。");
+  const text = `${heading}\n\n${hook.lastAssistantMessage!.trim()}`;
+  const chunks = channel === "napcat" ? splitCompletionMessage(text) : [text];
+  for (const [index, chunk] of chunks.entries()) {
+    const part: AgentSendRequest = { ...request,
+      deliveryId: index === 0 ? deliveryId : `${deliveryId}-part-${index + 1}`,
+      payload: { type: "text", text: chunk }
+    };
+    const inspection = await inspectAgentSendDelivery(part, options);
+    if (inspection.state === "uncertain") throw new Error(inspection.reason);
+    const result = inspection.state === "completed" ? inspection.result : await handleAgentSend(part, options);
+    if (result.status !== "sent" || (channel === "napcat" && !result.sentMessageId)) throw new Error(result.reason || "完成消息未取得发送回执。");
+  }
 }
 
 function canonicalPath(value: string): string {
@@ -68,7 +98,7 @@ export async function completionProjectIdentity(directory: string): Promise<stri
 export class AgentCompletionDeliveryService {
   private readonly pending = new Map<string, Promise<CompletionDeliveryResult[]>>();
   constructor(private readonly options: {
-    rules(): CompletionRuleOwner[];
+    rules(request: CodexHookContextRequest): CompletionRuleOwner[];
     projectIdentity?: typeof completionProjectIdentity;
     taskContext?(owner: CompletionRuleOwner, request: CodexHookContextRequest): CompletionTaskContext | Promise<CompletionTaskContext>;
     deliver(owner: CompletionRuleOwner, request: CodexHookContextRequest, deliveryId: string, context: CompletionTaskContext): Promise<void>;
@@ -87,7 +117,7 @@ export class AgentCompletionDeliveryService {
   }
 
   private async deliverMatches(request: CodexHookContextRequest): Promise<CompletionDeliveryResult[]> {
-    const owners = this.options.rules().filter(({ rule }) => rule.enabled);
+    const owners = this.options.rules(request).filter(({ rule }) => rule.enabled);
     if (!owners.length) return [];
     const identify = this.options.projectIdentity ?? completionProjectIdentity;
     const results: CompletionDeliveryResult[] = [];

@@ -334,7 +334,7 @@ class SystemScreenshotTest(unittest.TestCase):
             self.assertEqual(len(list((root / ".rabiroute-message-images").glob("screenshot-*.png"))), 1)
             overlay.close()
 
-    def test_capture_opens_virtual_desktop_overlay_before_async_capture_starts(self) -> None:
+    def test_capture_freezes_pixels_before_overlay_and_background_work(self) -> None:
         controller = SystemScreenshotController(
             None,  # type: ignore[arg-type]
             Path(tempfile.gettempdir()),
@@ -342,12 +342,46 @@ class SystemScreenshotTest(unittest.TestCase):
             lambda _title, _message, _is_error: None,
         )
         controller._settings = ScreenshotSettings(enabled=True)
-        with patch("rabiroute_tray.system_screenshot.start_qt_task", return_value=None) as start_task:
+        image = QImage(200, 100, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.blue)
+
+        def capture() -> QImage:
+            self.assertIsNone(controller._capture_overlay)
+            start_task.assert_not_called()
+            return image
+
+        with (
+            patch("rabiroute_tray.system_screenshot.start_qt_task", return_value=None) as start_task,
+            patch("rabiroute_tray.system_screenshot.capture_desktop_image", side_effect=capture) as grab,
+        ):
             controller._capture_requested()
+            self.assertEqual(controller._capture_overlay._image.pixelColor(0, 0), QColor(Qt.GlobalColor.blue))
+            controller._capture_requested()
+            grab.assert_called_once()
 
         self.assertIsNotNone(controller._capture_overlay)
         self.assertEqual(start_task.call_count, 2)
-        self.assertEqual(start_task.call_args_list[0].args[0].__name__, "capture_desktop_image_async")
+        controller.stop()
+
+    def test_capture_failure_leaves_no_overlay_and_can_retry(self) -> None:
+        notifications = []
+        controller = SystemScreenshotController(
+            None, Path(tempfile.gettempdir()), lambda: [],
+            lambda *args: notifications.append(args),
+        )
+        controller._settings = ScreenshotSettings(enabled=True)
+        image = QImage(200, 100, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.blue)
+        with (
+            patch("rabiroute_tray.system_screenshot.start_qt_task", return_value=None) as start_task,
+            patch("rabiroute_tray.system_screenshot.capture_desktop_image", side_effect=[RuntimeError("capture unavailable"), image]),
+        ):
+            controller._capture_requested()
+            self.assertIsNone(controller._capture_overlay)
+            start_task.assert_not_called()
+            self.assertIn("capture unavailable", notifications[0][1])
+            controller._capture_requested()
+            self.assertIsNotNone(controller._capture_overlay)
         controller.stop()
 
     def test_captured_virtual_desktop_uses_one_native_canvas_in_one_overlay(self) -> None:
@@ -360,8 +394,6 @@ class SystemScreenshotTest(unittest.TestCase):
         controller._settings = ScreenshotSettings(enabled=True)
         overlay = ScreenshotCaptureOverlay(ScreenshotHistory(()), QRect(0, 0, 200, 100))
         controller._capture_overlay = overlay
-        capture_task = object()
-        controller._capture_task = capture_task  # type: ignore[assignment]
         image = QImage(250, 150, QImage.Format.Format_ARGB32)
         image.fill(Qt.GlobalColor.blue)
         screens = (
@@ -374,9 +406,8 @@ class SystemScreenshotTest(unittest.TestCase):
             patch("rabiroute_tray.system_screenshot.windows_virtual_screen_origin", return_value=QPoint(0, 0)),
             patch("rabiroute_tray.system_screenshot.start_qt_task", return_value=None),
         ):
-            controller._capture_image_ready(capture_task, overlay, image)  # type: ignore[arg-type]
+            controller._capture_image_ready(overlay, image)
 
-        self.assertIsNone(controller._capture_task)
         self.assertEqual(overlay.geometry(), QRect(0, 0, 200, 100))
         self.assertIsNotNone(overlay.capture_layout)
         assert overlay.capture_layout is not None

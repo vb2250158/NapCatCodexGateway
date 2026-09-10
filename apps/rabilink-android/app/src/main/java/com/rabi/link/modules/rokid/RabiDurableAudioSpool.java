@@ -1162,6 +1162,7 @@ final class RabiDurableAudioSpool {
         String firstId = "";
         String lastId = "";
         long records = 0L;
+        long legacyRecords = 0L;
         StringBuilder recovered = new StringBuilder();
         for (int lineIndex = 0; lineIndex < lines.length; lineIndex++) {
             String line = lines[lineIndex];
@@ -1184,7 +1185,15 @@ final class RabiDurableAudioSpool {
                 lastFailure = "audit_trailing_write_recovered";
                 break;
             }
-            String eventId = row.getString("id");
+            // Legacy audit rows had only time/event/details. Keep source bytes intact
+            // and give the rebuilt index a stable identity without inventing sequence numbers.
+            boolean legacy = !row.has("id") && !row.has("eventSequence") && row.length() == 3
+                    && row.opt("time") instanceof Number && row.opt("event") instanceof String
+                    && row.opt("details") instanceof JSONObject;
+            String eventId = legacy
+                    ? "legacy-" + sha256((lineIndex + "\n" + line).getBytes(StandardCharsets.UTF_8))
+                    : row.getString("id");
+            if (legacy) legacyRecords += 1L;
             long eventSequence = row.optLong("eventSequence", 0L);
             auditEventIds.add(eventId);
             if (records == 0L) {
@@ -1204,6 +1213,7 @@ final class RabiDurableAudioSpool {
                 .put("firstEventSequence", firstSequence)
                 .put("lastEventSequence", lastSequence)
                 .put("records", records)
+                .put("legacyRecords", legacyRecords)
                 .put("bytes", file.length())
                 .put("sha256", sha256(Files.readAllBytes(file.toPath())));
     }
@@ -1534,8 +1544,13 @@ final class RabiDurableAudioSpool {
     }
     private static String sha256(byte[] data) throws Exception {
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(data);
-        StringBuilder value = new StringBuilder(digest.length * 2);
-        for (byte item : digest) value.append(String.format(Locale.US, "%02x", item & 0xff));
-        return value.toString();
+        char[] hex = "0123456789abcdef".toCharArray();
+        char[] value = new char[digest.length * 2];
+        for (int index = 0; index < digest.length; index++) {
+            int item = digest[index] & 0xff;
+            value[index * 2] = hex[item >>> 4];
+            value[index * 2 + 1] = hex[item & 15];
+        }
+        return new String(value);
     }
 }

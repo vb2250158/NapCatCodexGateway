@@ -3,6 +3,7 @@ import type { Socket } from "node:net";
 import os from "node:os";
 import type { PersonaSyncRouteContext } from "./personaSyncRoutes.js";
 import { handlePersonaSyncApi } from "./personaSyncRoutes.js";
+import { errorResponsePresentation } from "../shared/errorPresentation.js";
 
 export type PersonaSyncLanStatus = {
   state: "disabled" | "starting" | "listening" | "error";
@@ -12,6 +13,7 @@ export type PersonaSyncLanStatus = {
 };
 
 export type PersonaSyncLanServerOptions = {
+  peerHandler?: (request: http.IncomingMessage, url: URL, response: http.ServerResponse) => boolean;
   host?: string;
   port?: number;
   addresses?: () => string[];
@@ -93,6 +95,7 @@ export class PersonaSyncLanServer {
       cancel = () => finish();
       const server = http.createServer((request, response) => {
         const requestUrl = new URL(request.url || "/", "http://persona-sync.local");
+        if (requestUrl.pathname === "/api/rabilink/peer/receive" && this.options.peerHandler?.(request, requestUrl, response)) return;
         if (!dataPlaneRequest(request.method, requestUrl.pathname)) {
           response.writeHead(404, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
           response.end(JSON.stringify({ code: -1, message: "This LAN listener only exposes persona synchronization data-plane APIs." }));
@@ -101,11 +104,11 @@ export class PersonaSyncLanServer {
         try {
           if (!handlePersonaSyncApi(request, requestUrl, response, this.context)) {
             response.writeHead(404, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-            response.end(JSON.stringify({ code: -1, message: "Not found" }));
+            response.end(JSON.stringify(errorResponsePresentation({ code: -1, message: "Not found" }, 404)));
           }
         } catch (error) {
           response.writeHead(500, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-          response.end(JSON.stringify({ code: -1, message: error instanceof Error ? error.message : String(error) }));
+          response.end(JSON.stringify(errorResponsePresentation({ code: -1, message: error instanceof Error ? error.message : String(error) }, 500)));
         }
       });
       server.on("connection", socket => {

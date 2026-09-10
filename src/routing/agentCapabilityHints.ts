@@ -5,6 +5,17 @@ export type AgentCapabilityHintContext = {
 
 const PERSONA_SYNC_INTENT_PATTERN = /(?:人格|角色).{0,8}(?:同步|跨机|多机|多电脑|合并)|同步.{0,8}(?:人格|角色)|多台?电脑.{0,12}(?:人格|角色|同步|数据)|persona[\s_-]*sync|(?:persona|role).{0,8}\bpeer\b/i;
 const VOICE_IDENTITY_INTENT_PATTERN = /声纹|谁(?:在)?说的|说话人|哪些.{0,8}(?:是我|用户).{0,8}说|(?:用户|我).{0,8}说的.{0,8}(?:别人|其他人)|(?:别人|其他人).{0,8}说的|区分.{0,12}(?:用户|我|别人|其他人).{0,8}说|(?:一天|全天).{0,8}录音|voiceprint|speaker[\s_-]*identity/i;
+const PLAN_ASSISTANT_INTENT_PATTERN = /计划|秘书|委派|委托|派发|分派|交给.{0,12}(?:处理|执行)|\b(?:plan|delegate|delegation|secretary)\b/i;
+const REMOTE_AGENT_INTENT_PATTERN = /远端|远程.{0,12}(?:执行|任务|运行|构建|打包|设备)|(?:另一台|其他|其它)电脑.{0,12}(?:执行|运行|构建|打包)|\bremote[\s_-]*(?:agent|task|device|exec|build)\b/i;
+
+// These gates select documentation only; they never grant permission or dispatch work.
+export function needsPlanAssistantHint(text: string, routeKind: string): boolean {
+  return routeKind === "plan_feedback" || PLAN_ASSISTANT_INTENT_PATTERN.test(text);
+}
+
+export function needsRemoteAgentHint(text: string): boolean {
+  return REMOTE_AGENT_INTENT_PATTERN.test(text);
+}
 
 function managerBaseUrl(context: AgentCapabilityHintContext): string {
   const rawPort = String(context.managerPort || "").trim();

@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { skipArchitectureDirectory } from "./lib/architecture-scan-boundary.mjs";
 
 const root = process.cwd();
 const activeRoots = ["src", "scripts", "plugins", "ribiwebgui", "desktop"];
-const ignoredDirectories = new Set(["node_modules", "dist", "data", ".git", ".runtime", "__pycache__"]);
 const forbidden = [
   ["rabi", "manager", "base"].join("."),
   ["manager", "Base", "Plugin", "Activation"].join(""),
@@ -45,8 +45,8 @@ async function filesRecursively(relativeRoot) {
   const result = [];
   async function visit(directory) {
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-      if (entry.isDirectory() && ignoredDirectories.has(entry.name)) continue;
       const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory() && skipArchitectureDirectory(entry.name, path.relative(root, absolute))) continue;
       if (entry.isDirectory()) await visit(absolute);
       else if (entry.isFile()) result.push(absolute);
     }

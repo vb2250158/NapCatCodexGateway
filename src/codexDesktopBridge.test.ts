@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -9,15 +11,40 @@ import {
   agentDeliveryMarkerForTest,
   applyCodexSidebarTaskNamesForTest,
   codexDesktopDeepLinkForTest,
+  readCodexDesktopThreadsByIds,
   listCodexDesktopThreadsFromRowsForTest
 } from "./codexDesktopBridge.js";
+
+test("batch history references resolve exact IDs and current sidebar names including archived tasks", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-task-names-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const databasePath = path.join(root, "state.sqlite");
+  const indexPath = path.join(root, "session_index.jsonl");
+  const db = new DatabaseSync(databasePath);
+  db.exec(`CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, cwd TEXT, rollout_path TEXT,
+    updated_at INTEGER, updated_at_ms INTEGER, recency_at INTEGER, recency_at_ms INTEGER,
+    archived INTEGER, first_user_message TEXT)`);
+  const insert = db.prepare("INSERT INTO threads VALUES (?, 'internal prompt', '', '', 1, 1000, 1, 1000, ?, '')");
+  insert.run("task", 1);
+  insert.run("unnamed", 0);
+  insert.run("unrelated", 0);
+  db.close();
+  fs.writeFileSync(indexPath, JSON.stringify({ id: "task", thread_name: "Source task", updated_at: "2026-09-08T01:00:00Z" }));
+  const result = readCodexDesktopThreadsByIds(["task", "task", "missing", "unnamed"], databasePath, indexPath);
+  assert.equal(result.length, 2);
+  assert.equal(result.find(task => task.id === "task")?.title, "Source task");
+  assert.equal(result.find(task => task.id === "task")?.archived, true);
+  assert.equal(result.find(task => task.id === "unnamed")?.title, "");
+  fs.appendFileSync(indexPath, '\n' + JSON.stringify({ id: "task", thread_name: "Renamed task", updated_at: "2026-09-08T02:00:00Z" }));
+  assert.equal(readCodexDesktopThreadsByIds(["task"], databasePath, indexPath)[0]?.title, "Renamed task");
+});
 
 test("Desktop left sidebar is the only displayed task-name source", () => {
   const id = "019f0000-0000-7000-8000-000000000065";
   const result = applyCodexSidebarTaskNamesForTest([{
     id,
     title: "[rabi:bind XinghaiBuilder]\n[消息处理 Agent 初始化]",
-    cwd: "C:\\Work\\PangHu",
+    cwd: "C:\\Work\\ExampleProject",
     rolloutPath: "task.jsonl",
     firstUserMessage: "[rabi:bind XinghaiBuilder]",
     updatedAt: "2026-08-04T08:00:00.000Z"
@@ -36,7 +63,7 @@ test("Desktop tasks without a sidebar Name do not fall back to SQLite title", ()
   const result = applyCodexSidebarTaskNamesForTest([{
     id: "019f0000-0000-7000-8000-000000000066",
     title: "SQLite 原始 title",
-    cwd: "C:\\Work\\PangHu",
+    cwd: "C:\\Work\\ExampleProject",
     rolloutPath: "task.jsonl",
     firstUserMessage: "首条消息",
     updatedAt: "2026-08-04T08:00:00.000Z"
@@ -282,7 +309,7 @@ test("Desktop bridge never resends an accepted steer when its receipt is delayed
   try {
     await assert.rejects(bridge.deliver({
       threadId: "019f0000-0000-7000-8000-000000000113",
-      prompt: "[投递编号] deliveryId: 88888888-1111-4222-8333-444444444444\n验证投递",
+      prompt: "验证投递\n\n[投递编号]\ndeliveryId: 88888888-1111-4222-8333-444444444444",
       cwd: process.cwd(),
       sandbox: "workspace-write"
     }), { name: "CodexDesktopDeliveryUnconfirmedError" });
@@ -390,11 +417,15 @@ for (const scenario of ["delayed-receipt", "timeout-confirmed", "timeout-unconfi
       pipePaths: [router.pipePath],
       deliveryReceiptGraceMs: 40,
       deliveryReceiptPollMs: 10,
-      deliveryReceiptReader: () => ++receiptReads >= 2 && (scenario === "delayed-receipt" || scenario === "timeout-confirmed"),
+      deliveryReceiptReader: (_threadId, deliveryId) => {
+        assert.equal(deliveryId, marker);
+        return ++receiptReads >= 2 && (scenario === "delayed-receipt" || scenario === "timeout-confirmed");
+      },
       onDeliveryEvent: event => events.push(event)
     });
     try {
-      const pending = bridge.deliver({ threadId: "019f0000-0000-7000-8000-000000000114", prompt: `private prompt\ndeliveryId: ${marker}`, cwd: process.cwd(), sandbox: "workspace-write" });
+      const prompt = `[消息源]\n消息源类型：Agent\n\n[消息内容]\nprivate prompt\n\n[回传参数]\n${JSON.stringify({ deliveryId: marker, responsePolicy: "none" })}`;
+      const pending = bridge.deliver({ threadId: "019f0000-0000-7000-8000-000000000114", prompt, cwd: process.cwd(), sandbox: "workspace-write" });
       if (scenario.endsWith("unconfirmed")) {
         await assert.rejects(pending, { name: "CodexDesktopDeliveryUnconfirmedError" });
         assert.equal(events.at(-1)?.stage, "delivery_unconfirmed");

@@ -25,7 +25,7 @@ function powerShellDpapi(script: string, input: string): string {
     input,
     encoding: "utf8",
     windowsHide: true,
-    timeout: 5000,
+    timeout: 15_000,
     maxBuffer: 4 * 1024 * 1024
   });
   if (result.status !== 0 || result.error || !String(result.stdout || "").trim()) {

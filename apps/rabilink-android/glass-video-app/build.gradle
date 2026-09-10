@@ -1,0 +1,35 @@
+plugins { id "com.android.application" }
+
+android {
+    namespace "com.rabi.link.glass.video"
+    compileSdk 34
+    defaultConfig {
+        applicationId "com.rabi.link.glass.video"
+        minSdk 31
+        targetSdk 34
+        versionCode 1
+        versionName "0.1.0"
+    }
+    def restoredKey = rootProject.file("secrets/rokid/signing/debug.keystore")
+    signingConfigs {
+        restoredDebug {
+            storeFile restoredKey
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
+    }
+    buildTypes { debug { if (restoredKey.exists()) signingConfig signingConfigs.restoredDebug } }
+    sourceSets { main { java.srcDir("$rootDir/shared/src/main/java") } }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+dependencies {
+    implementation "com.github.pedroSG94.RootEncoder:library:2.4.3"
+    implementation("com.rokid.cxr:cxr-service-bridge:1.0-20260417.063502-103") {
+        exclude group: "androidx.test"
+        exclude group: "androidx.concurrent"
+    }
+}

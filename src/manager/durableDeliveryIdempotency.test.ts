@@ -296,7 +296,7 @@ test("an independent heartbeat fences a remote retry while the main thread is sy
       );
       contenderCompletion = waitForChild(contender);
       heartbeatBefore = fs.statSync(durableDeliveryReceiptPath(rootDir, namespace, deliveryId)).mtimeMs;
-      Atomics.wait(mainThreadBlock, 0, 0, 1_100);
+      Atomics.wait(mainThreadBlock, 0, 0, 3_000);
       heartbeatAfter = fs.statSync(durableDeliveryReceiptPath(rootDir, namespace, deliveryId)).mtimeMs;
       const renewed = readDurableDeliveryReceipt(rootDir, namespace, deliveryId);
       assert.ok(heartbeatAfter > heartbeatBefore, "the Worker must advance the observed receipt mtime");

@@ -180,9 +180,9 @@ export function buildRabiLinkConversationReviewPrompt(input: {
   const localEvidenceLines = evidenceToolPath
     ? [
       "[本机现场取证]",
-      "本轮是主动智能反思；即使没有新增用户记录，也不能把静默当成秋雨不在场。当前人格已提供有界取证工具，且用户已明确允许每轮短时读取本机现场时，运行一次：",
+      "仅在当前人格提供取证工具、且已有明确授权覆盖本轮采集时运行一次；工具存在不代表获得授权。静默不能证明用户不在场。",
       `${evidenceToolPath} -CaptureScreen -CaptureCamera -IncludeWindowTitle -OutputPath <本机临时 manifest>。只使用本机临时目录，不把 manifest 或原始材料写回角色目录。`,
-      "实际查看 manifest 标出的成功屏幕/摄像头一帧；分别记录来源、采样时间、事实、推断、未知、自触发风险和置信度。前台窗口、进程、文件修改和本轮探针活动不等于秋雨正在操作；摄像头画面不用于身份、健康或情绪诊断。",
+      "查看成功采样的一帧，记录来源、时间、事实与未知；前台窗口或探针活动不能证明用户正在操作，摄像头画面不用于身份、健康或情绪诊断。",
       "本机语音只读取已运行的 RabiRoute speech/RabiLink 摘要；不启动第二个常驻录音器。探针失败时回退到低敏元数据并保留未知，不因单个传感器失败结束本轮。",
       "查看后删除 manifest、屏幕图、摄像头图和证据临时目录，并核对已不存在；原始图像、音频和完整转写不得写入日记、记忆或任何外发消息。"
     ]
@@ -216,6 +216,7 @@ export function buildRabiLinkConversationReviewPrompt(input: {
     `历史会话目录：${input.archiveDir}`,
     `本次新增用户记录：${input.pendingUserEntries.length}`,
     `新增范围：${first?.entryId || "无新增用户记录"} -> ${last?.entryId || "无新增用户记录"}`,
+    `记录时间：${first?.recordedAt || "无新增记录"} -> ${last?.recordedAt || "无新增记录"}`,
     `本次涉及 Route：${input.pendingRouteProfileIds?.join(", ") || input.routeProfileId}`,
     `当前人格：${input.agentRolePath || "使用当前线程已绑定人格"}`,
     input.identityLines?.length ? `[身份定位]\n${input.identityLines.join("\n")}` : "",
@@ -224,22 +225,21 @@ export function buildRabiLinkConversationReviewPrompt(input: {
       : "",
     resolvedReviewPolicyPath ? `先完整读取并遵循主动审阅策略：${resolvedReviewPolicyPath}` : "主动审阅策略：使用本提示中的默认策略",
     "",
-    "必须执行：",
+    "[审阅范围]",
     "1. 用结构化方式读取当前 JSONL。每行是一条 JSON；用户观察、Agent 已投递消息和手动审阅请求都在同一条时间线上。新增范围可能跨分卷；当前文件找不到起始 entryId 时，必须读取历史索引并在归档中找到它。",
     input.reflection
       ? "2. 本次可能没有新增用户记录。回看当前账本中足够的用户与 Agent 消息，并检查当前人格目录内相关计划、任务、记忆或最近工具结果；需要跨会话恢复语境时，先读历史索引，再按文件名读取日期归档。"
       : "2. 阅读全部本次新增用户记录，并回看当前账本中足够的先前用户与 Agent 消息；需要跨会话恢复语境时，先读历史索引，再按文件名读取日期归档。归档只分割原始数据，没有摘要。",
     "3. 区分明确对你说的话、环境交谈、媒体声音、半句话和 ASR 噪声。不要把持续录音中的每句话都当成命令。",
-    "4. 建立或更新用户意图工作假设：当前活动、真正目标、阻碍、下一步、可利用机会、情绪/认知负荷、时效和用户希望你怎样参与。不要停在表面关键词，也不要把猜测写成事实。",
-    "5. 想尽可用办法减轻用户负担。可以主动读取相关本地文件、计划和项目状态，做低风险分析、检索、草稿或预备工作；有价值时给出结果或最小下一步，不要只问泛泛的“需要我帮忙吗”。",
-    "6. 只有在能带来明确帮助时才主动打断：直接问题、时间敏感提醒、风险、重要遗漏、可立即推进的下一步，或用户明确要求你介入。普通闲聊、重复、背景音和低置信片段保持安静。",
+    "4. 结合记录判断当前意图、阻碍和下一步；区分事实、推断与未知。",
+    "5. 只有在能带来明确帮助时才主动打断：直接问题、时间敏感提醒、风险、重要遗漏、可立即推进的下一步，或用户明确要求你介入。普通闲聊、重复、背景音和低置信片段保持安静。",
     ...localEvidenceLines,
-    "7. 任何外发、删除、购买、设备控制或配置高风险动作仍需遵守 RabiRoute 安全门；不要因为旁听到一句话就擅自执行。",
-    `8. 需要对眼镜说话时，以 Content-Type=application/json POST ${sendApiUrl}。请求体示例：${proactiveSendBody}。必须明确 channel=rabilink、目标设备和呈现方式；下行不依赖上行 taskId，眼镜会按队列调用原生 TTS。若本次涉及多个 Route，必须根据对应记录的 routeProfileId 分别投递，不能把一个人格的结论发到另一个 Route。`,
-    "9. 只有接口返回 ok=true 且 status=sent 才视为已投递；成功下行会自动写回同一账本。不要复述内部路径、entryId、JSON 字段或审阅过程，也不要重复已经投递过的内容。",
+    "6. 任何外发、删除、购买、设备控制或配置高风险动作仍需遵守 RabiRoute 安全门；不要因为旁听到一句话就擅自执行。",
+    `[回传参数]\nPOST ${sendApiUrl}\n${proactiveSendBody}\n多个 Route 按记录的 routeProfileId 分别投递。`,
+    "只有接口返回 ok=true 且 status=sent 才视为已投递；成功下行会自动写回同一账本。不要复述内部路径、entryId、JSON 字段或审阅过程，也不要重复已经投递过的内容。",
     input.manual
-      ? "10. 这是用户手动要求审阅：即使暂时没有要执行的动作，也应给眼镜一句很短的自然确认，说明你已经看过并给出最有用的一点结论。"
-      : "10. 如果没有值得打断用户的内容，不调用下行接口；可以完成有用的静默准备，并在 Codex 线程内简短记录判断。"
+      ? "这是用户手动要求审阅：即使暂时没有要执行的动作，也应给眼镜一句很短的自然确认，说明你已经看过并给出最有用的一点结论。"
+      : "如果没有值得打断用户的内容，不调用下行接口；可以完成有用的静默准备，并在 Codex 线程内简短记录判断。"
   ].filter(Boolean).join("\n");
 }
 

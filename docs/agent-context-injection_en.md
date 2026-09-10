@@ -12,6 +12,16 @@ RabiRoute wraps a routed event before delivering it to a handler. The wrapper te
 
 The route template should stay thin. Users normally add only rule-specific instructions; RabiRoute generates the stable event and context sections.
 
+## Packet minimization boundaries
+
+Default `focused` mode renders one required-reading list with IDs, summaries and GET endpoints, omitting empty indexes and duplicate recall summaries. Codex Hooks use the same view. Full instructions for plan and memory mutations, cross-persona delivery and remote tasks are read on demand from the corresponding sections of `rabi-agent-interfaces_en.md`; the operation stops if those instructions cannot be read. Packets retain authorization, dynamic Manager identity, idempotency, applicable strong ETag / If-Match and readback requirements. Explicit `legacy` configuration retains the previous index view for existing rollback workflows. Migrate through `contextInjection.mode=focused`; remove this compatibility branch once legacy configurations and their rollback requirement have been retired.
+
+The explicit send request appears only once, in `[回传参数]`; delivery requirements reference that template while retaining the current workflow, target, source credentials and requirement receipts. Focused or immediately addressed discussion references a message ID when the complete same-ID message already appears in recent history. Truncated, unnumbered or absent messages retain their excerpt. History limits and reply chains are unchanged.
+
+Configured secretary names, IDs, workspaces and responsibilities appear only for current plan, secretary or delegation intent, or a plan-feedback event. Remote-task instructions additionally require current remote-execution intent and an enabled remote endpoint. These gates only select instructions; they neither create tasks nor grant permission. Other operations remain discoverable through the interface document.
+
+The shared packet contains no named person's companionship or heartbeat policy; the bound persona file and current template own those behaviors. Identity facts, candidate/conflict boundaries, explicit targets, attachments and reply evidence remain available.
+
 ## Unified trigger pipeline
 
 Context entry points no longer call role knowledge independently. Each adapter emits a normalized trigger for `RabiContextManager`:
@@ -103,11 +113,11 @@ RabiRoute places this text in the `[User template supplement]` section. Event fi
 
 ## Current wrapper
 
-Every RabiRoute delivery starts with the exact wire section `[消息源]`, immediately followed by `[消息内容]`. Event details, recent messages, reply parsing, role paths, and collaboration rules follow the message content. Empty or disabled sections are omitted.
+Every RabiRoute delivery starts with the exact wire section `[消息源]`, immediately followed by `[消息内容]`. Event details, recent messages, reference parsing and role paths follow under `[相关上下文]`. Generic collaboration rules are not injected. Empty or disabled sections are omitted.
 
 Each source type has its own required identity. `message_adapter` requires `messageAdapter`, `conversationType`, `conversationId`, `messageId`, and either `senderName` or `senderId`. `agent` requires the actual `agentAdapter`, session name, and complete session ID. `plan` requires the plan name and ID. `system` requires event type, name, and ID, with optional actor type, name, and ID.
 
-`contextBlocks` carry event, attachment, and recent-message context. `controlBlocks` carry initialization, response contracts, and collaboration rules. The fixed order is source, message content, context blocks, then control blocks. Neither block type may contain `[消息源]`, `[消息内容]`, or `[投递源]`; bracketed headings in message content are quoted so they cannot impersonate peer control sections.
+`contextBlocks` carry event, attachment, and recent-message context. `controlBlocks` carry reply parameters and current delivery requirements. The fixed order is source, message content, context blocks, then control blocks. Neither block type may contain `[消息源]`, `[消息内容]`, or `[投递源]`; bracketed headings in message content are quoted so they cannot impersonate peer control sections.
 
 Legacy `[投递源]` wrappers, nested envelopes, and old Agent response wrappers are removed before the new envelope is rendered. When an old replay record did not persist structured provenance, RabiRoute labels it as `历史投递记录` instead of guessing the original endpoint, Agent, or session.
 
@@ -124,7 +134,6 @@ Legacy `[投递源]` wrappers, nested envelopes, and old Agent response wrappers
 事件：<event label>
 路由类型：<routeKind>
 事件时间：<time>
-当前时间：<currentTime>
 
 [最近消息]
 最近 <recentMessageLimit> 条双向消息：
@@ -145,10 +154,9 @@ Memory: <memoryDir>
 
 [Memory and plans]
 Interface guide: <agentInterfaceDocPath>
-Compact on-demand API hints
-Full active-index query paths
-Matched skill summaries
-Matched plan/memory summaries
+On-demand read endpoints and the interface document
+Read the applicable contract before mutations or delivery; stop if unavailable
+Retain authorization, dynamic Manager identity, idempotency, applicable strong ETag / If-Match and readback requirements
 
 [Pre-action context confirmation]
 <required-read items and GET endpoints>
@@ -159,23 +167,16 @@ Current bidirectional conversation: <conversationCurrentPath>
 Conversation archive: <conversationArchiveDir>
 Conversation archive index: <conversationArchiveIndexPath>
 
-[Send]
+[Reply parameters]
 Send API: <sendApiUrl>
 Explicit send template: <sendRequestJson>
 Source context for audit and cross-persona contact only: <replyContextJson>
-
-[Cross-persona contact]
-Discover: GET /api/personas?addressable=true
-Deliver: POST /api/personas/{personaId}/messages
-Source Route: replyContext.runtimeRouteId
-Source capability: replyContext.personaMessagingCapability
-Requirement: use one stable unique deliveryId per business delivery; replies reuse personaConversationId, reference the current messageId, increment personaMessageHopCount, and never exceed personaMessageMaxHops
 
 [Send requirements]
 <instructions derived from outputAdapter, source, and replyToSource>
 
 [Remote Agent devices]
-<included only when the route enables the remoteAgent message endpoint>
+<requires current remote-execution intent and an enabled remoteAgent endpoint>
 
 [User template supplement]
 <optional route template>
@@ -213,7 +214,7 @@ This avoids leaking usernames or machine-specific absolute paths into prompts an
 
 ## Recall and required reads
 
-`[Memory and plans]` lists current plans and recent memories by ID and title. Current plans are unarchived plans whose persona status definition includes the `current` view; other plans participate in the views configured by `personaConfig.json.planWorkflow`. Status labels and ordering also come from that persona workflow. `archiveStatus=已归档` plans are excluded before keyword scoring even when ID, title, or keywords match; only an explicit plan-ID read or Archived view can return them. A recent memory is considered active using the later of `updatedAt` and `viewedAt`; the default direct-display window is 24 hours.
+In default `focused` mode, `[Memory and plans]` contains read endpoints and the operation-contract entry. Required IDs, summaries and GET endpoints appear once in `[Pre-action context confirmation]`. Explicit `legacy` mode retains full indexes. Current plans are unarchived plans whose persona status definition includes the `current` view; other plans participate in the views configured by `personaConfig.json.planWorkflow`. Status labels and ordering also come from that persona workflow. `archiveStatus=已归档` plans are excluded before keyword scoring even when ID, title, or keywords match; only an explicit plan-ID read or Archived view can return them. A recent memory is considered active using the later of `updatedAt` and `viewedAt`; the default direct-display window is 24 hours.
 
 Before delivery, RabiRoute performs lightweight matching over metadata only:
 

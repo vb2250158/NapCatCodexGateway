@@ -5,13 +5,27 @@ import path from "node:path";
 import http from "node:http";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
-import { AgentCompletionDeliveryService, completionProjectIdentity, completionTaskContextFromPlans, deliverCompletionToEndpoint, type CompletionRuleOwner } from "./agentCompletionDelivery.js";
+import { AgentCompletionDeliveryService, completionProjectIdentity, completionTaskContextFromPlans, deliverCompletionToEndpoint, planCompletionDeliveryRules, splitCompletionMessage, type CompletionRuleOwner } from "./agentCompletionDelivery.js";
 import { CodexHookContextService, type CodexHookContextRequest } from "./codexHookContext.js";
 
 const owner: CompletionRuleOwner = { roleId: "test", rule: { id: "rule", enabled: true,
   event: "task_completed", conditions: [{ type: "project", path: "/project" }],
   destination: { channel: "napcat", gatewayId: "route", params: { target: "group", instanceId: "qq", targetId: "12345" } } } };
 const event = { eventName: "Stop" as const, sessionId: "agent-1", turnId: "turn-1", cwd: "/project", lastAssistantMessage: "Done" };
+
+test("optional plan channels merge with persona rules and deduplicate the same destination", async () => {
+  const plans = [{ id: "plan", taskBinding: { agentType: "codex" as const, sessionId: "agent-1", workspace: "/project" }, messageChannels: [owner.rule.destination] }];
+  assert.deepEqual(planCompletionDeliveryRules("test", plans, "other"), []);
+  assert.deepEqual(planCompletionDeliveryRules("test", [{ ...plans[0], messageChannels: undefined }], "agent-1"), []);
+  let sent = 0;
+  const service = new AgentCompletionDeliveryService({ rules: request => [owner, ...planCompletionDeliveryRules("test", plans, request.sessionId)],
+    projectIdentity: async value => value, taskContext: () => ({ plans: [{ id: "plan", title: "Plan" }] }),
+    deliver: async () => { sent += 1; } });
+  await service.handle(event);
+  assert.equal(sent, 1);
+  await service.handle({ ...event, sessionId: "other" });
+  assert.equal(sent, 2, "unbound sessions still use persona event rules");
+});
 
 test("session allow and deny lists match exact IDs, combine with project and plan, and deny wins", async () => {
   const sent: string[] = [];
@@ -44,7 +58,7 @@ test("plan requirement skips unbound tasks and uses the current task title with 
   const context = completionTaskContextFromPlans("agent-1", plans, "当前任务名");
   assert.equal(context.taskName, "当前任务名");
   assert.deepEqual(context.plans, [{ id: "plan-1", title: "修复登录窗口" }]);
-  assert.equal(completionTaskContextFromPlans("agent-1", plans).taskName, "旧任务名");
+  assert.equal(completionTaskContextFromPlans("agent-1", plans).taskName, undefined, "a stored plan label must not impersonate the current task title");
   const calls: string[] = [];
   const service = new AgentCompletionDeliveryService({ rules: () => [{ ...owner, rule: { ...owner.rule, conditions: [...owner.rule.conditions, { type: "bound_plan" }] } }],
     projectIdentity: async value => value, taskContext: (_, hook) => completionTaskContextFromPlans(hook.sessionId, plans),
@@ -148,12 +162,23 @@ test("completion reaches the selected group through Outbox and repeated events r
     assert.equal(messages[0].group_id, 12345);
     assert.match(String(messages[0].message), /Done/);
     assert.match(String(messages[0].message), /任务：修复登录失败/);
-    assert.match(String(messages[0].message), /计划：登录窗口修复计划/);
+    assert.doesNotMatch(String(messages[0].message), /计划：|登录窗口修复计划/);
     assert.doesNotMatch(String(messages[0].message), /项目：|\/project|agent-1/);
     assert.doesNotMatch(String(messages[0].message), /CQ:reply/);
     const changed = await create().handle({ ...event, lastAssistantMessage: "Changed final" });
     assert.equal(changed[0].status, "failed", "a changed payload cannot silently reuse the old identity");
     assert.equal(messages.length, 1);
+    const longFinal = "文档已写好：\n\n[说明](https://example.com/mechanism)\n" + "完整机制与验证😀\n".repeat(1000);
+    const longEvent = { ...event, turnId: "long-final", lastAssistantMessage: longFinal };
+    assert.equal((await create().handle(longEvent))[0].status, "sent");
+    const count = messages.length;
+    assert.ok(count > 2);
+    const delivered = messages.slice(1).map(message => String(message.message)).join("");
+    assert.ok(delivered.endsWith(longFinal.trim()));
+    assert.match(delivered, /任务：修复登录失败/);
+    assert.doesNotMatch(delivered, /下一步：/);
+    assert.equal((await create().handle(longEvent))[0].status, "sent");
+    assert.equal(messages.length, count, "replaying a multipart final reuses every part receipt");
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
     fs.rmSync(rootDir, { recursive: true, force: true });
@@ -207,4 +232,14 @@ test("endpoint selection delivers to private QQ or speech with independent param
     await new Promise<void>(resolve => server.close(() => resolve()));
     fs.rmSync(rootDir, { recursive: true, force: true });
   }
+});
+
+
+test("completion text chunks preserve multiline replies, links and Unicode without plan prose", () => {
+  const text = "文档已写好：\n\n[说明](https://example.com/mechanism)\n" + "机制与验证状态😀\n".repeat(1500);
+  const parts = splitCompletionMessage(text);
+  assert.ok(parts.length > 1);
+  assert.equal(parts.join(""), text);
+  assert.ok(parts.every(part => part.length <= 3000 && !/[\ud800-\udbff]$/.test(part)));
+  assert.deepEqual(splitCompletionMessage("abcd😀ef", 5), ["abcd", "😀ef"]);
 });

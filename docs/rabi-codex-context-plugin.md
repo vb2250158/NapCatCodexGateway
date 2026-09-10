@@ -10,11 +10,21 @@
 
 该插件只注册并执行自身 `PLUGIN_ROOT` 下的 Hook。安装、升级和运行均不改写其他插件的 `hooks.json`、市场条目或启用状态，可与独立的语言风格 Hook 同时加载。
 
+## 人格可配置的 Stop 追问
+
+`personaConfig.json.codexHooks.planFollowup` 拥有 `enabled`（默认 false）、`cooldownSeconds`（默认 300）和有序 `rules`。每条规则包含稳定 `id`、`enabled`、`statusKeys` 和 `prompt`。状态 key 引用该人格状态目录，没有内置业务状态触发列表。Manager 在唯一业务任务绑定下匹配第一条规则，返回 `followup: { decision: "block", reason }`，插件只转换为 Codex Stop 输出。配置保存复用人格 Repository，UI 位于「自动化 → Agent Hook」。
+
+既有 Hook 运行记录保存规则与计划步骤指纹、轮次和时间。同轮、相同指纹、冷却期及 `stop_hook_active` 阻止重复追问；终态、归档、绑定歧义或 Manager 不可用时不触发。追问期间不提前发送完成通知。该决策不会变更业务计划、替代授权或安排未来唤醒。独立本机守卫的固定 Stop 拦截应另行退役为提示；插件不会改写其他 Hook。
+
 ## 人格聊天记录
 
 Manager 在 `Stop` 收到非空 `last_assistant_message`（或 `lastAssistantMessage`）和 `turn_id`（或 `turnId`）时，将完整正文追加到唯一归属人格的 `chat-history/final-replies.jsonl`。归属复用显式 Hook 绑定、Route 任务及计划/秘书/消息处理任务绑定；归属冲突或缺失时不写入。Codex 和通过同一 Hook API 上报的 DSH 回复共用此入口，不读取桌面聊天数据库或补录旧消息。
 
-`GET /api/roles/:roleId/chat-history?limit=50&cursor=<byte-offset>` 返回 `entries` 和 `nextCursor`，按追加顺序倒序读取；cursor 省略时从最新位置开始，`nextCursor=null` 表示已到最早记录。正文不截断，分页最多 100 条且达到约 1 MiB 后提前返回游标。`sessionId + turnId + 正文` 的摘要用于重复回调去重。追加成功后发布 `persona_chat_history_changed`，WebGUI 仅在聊天记录标签激活时读取，支持重连刷新与手动翻页。该记录动作独立于计划完成通知开关，并保留现有启动恢复门禁。
+`GET /api/roles/:roleId/chat-history?limit=50&cursor=<byte-offset>` 返回 `entries` 和 `nextCursor`，按追加顺序倒序读取；cursor 省略时从最新位置开始，`nextCursor=null` 表示已到最早记录。正文不截断，分页最多 100 条且达到约 1 MiB 后提前返回游标。`sessionId + turnId + 正文` 的摘要用于重复回调去重。追加成功后发布 `persona_chat_history_changed`，WebGUI 仅在聊天记录标签激活时读取，收到事件或重连后按消息 ID 增量补入顶部，不清空已有记录；跨页补齐断线期间的新回复，保留更早记录游标、展开状态和阅读位置，请求期间到达的事件合并为随后一次补读。支持手动翻页与补读，只有切换人格时重置列表。该记录动作独立于计划完成通知开关，并保留现有启动恢复门禁。
+
+聊天记录读取时按本页任务 ID 批量解析 Codex 侧栏名称，不重写历史正文；点击任务名称使用与计划面板相同的 Codex 任务深链接。完整任务 ID 和回合 ID 保留在折叠详情中。桌面元数据不可用或任务不存在时保留 ID 和正文，不提供定位链接。
+
+受管线程 `send` 的 Agent 互投从此版本起写入同一聊天记录文件，按实际投递 ID 去重，保留纯消息正文及来源/目标任务 ID。卡片同一行左侧为来源任务、右侧为目标任务；两端 Codex 名称和定位链接按页解析。唯一归属的人格分别可见，同人格只记录一次；未绑定或归属冲突的端不猜人格。失败投递不入记录，送达未确认的记录明确展示“记录时尚未确认送达”（这是记录时的状态，不是后续回执状态）。不补录历史投递，不把 Hook 最终回复推断成互投消息。原 `chat-history/final-replies.jsonl` 路径保留，以保持已有记录和字节分页游标兼容；没有第二份历史存储。
 
 ## 唯一边界
 
@@ -64,7 +74,7 @@ Codex Stop
 
 ## WebGUI Hook 管理
 
-Codex 处理端配置面板显示三组 Hook 开关，并直接说明触发时机：
+人格「自动化 → Agent Hook」集中管理 Hook 开关，并说明触发时机；Agent 端只负责安装或更新 Hook：
 
 | 开关 | Codex Hook | 何时触发 | 默认值 |
 |---|---|---|---|
@@ -81,7 +91,7 @@ Codex 处理端配置面板显示三组 Hook 开关，并直接说明触发时�
 - 同一 `sessionId + turnId` 持久化去重。
 - Hook 不读取 transcript 猜测结果，也不自动修改计划状态、步骤或记忆。
 - 目标 Codex 会话必须已精确绑定，且不得与执行会话相同；workspace、人格或 gateway 冲突时失败关闭。
-- 成功时 `Stop` 不输出任何 Hook JSON；投递失败时只返回非阻塞 `systemMessage` 警告，不阻断 Codex 最终回答。
+- 未命中人格追问时，完成通知成功不会输出 Hook JSON；投递失败只返回非阻塞 `systemMessage`。命中已启用追问规则时，按上文返回一次 Stop block。
 - 完成记录写入私有运行文件 `data/codex-hook/sessions.json`，不得提交。
 
 ## Codex-only 模式
@@ -171,3 +181,10 @@ codex plugin add rabi-codex-context@rabiroute-local
 12. 完成提醒成功时 Hook stdout 为空；失败只产生非阻塞系统警告。更新插件后必须在 `/hooks` 重新审阅并信任新增的 `Stop` Hook。
 
 代码和本地 mock 测试不等于 Desktop 实机验收。未在两个真实 Codex Desktop 任务之间观察到提醒前，本能力保持实验状态。
+
+
+## 完成通知的内容与配置
+
+完成通知只读取人格 `codexHooks.completionDeliveries` 与绑定计划 `messageChannels` 的显式目标，不根据私有项目路径或问题记录推断发送对象。两者命中同一目标时，每个任务轮次只发送一次。来源任务名称按完整任务 ID 从 Desktop 当前名称读取，无法读取时显示“未命名任务”，不使用旧计划绑定名称。正文保留完整最终回复，不追加计划中的旧“下一步”；QQ 长消息按最多 3000 个 UTF-16 单元分段，保留换行与完整 Unicode 字符，每段复用独立 Outbox 回执，失败时不继续发送后续段。
+
+旧的按业务项目自动发送摘要的入口已移除；升级前在相应人格或计划中确认通知目标。私有项目路径、群号与业务规则仅保存在 Git 忽略的人格数据中。升级不会重发历史回复。

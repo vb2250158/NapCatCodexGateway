@@ -74,16 +74,26 @@ function Write-BytesDurably([string]$Path, [byte[]]$Bytes) {
 }
 
 function Replace-File([string]$TemporaryPath, [string]$DestinationPath) {
-    if (Test-Path -LiteralPath $DestinationPath -PathType Leaf) {
-        $replaceBackup = "$DestinationPath.$PID.$([guid]::NewGuid().ToString('N')).replace-backup"
+    $lastFailure = $null
+    for ($attempt = 1; $attempt -le 20; $attempt++) {
         try {
-            [IO.File]::Replace($TemporaryPath, $DestinationPath, $replaceBackup, $true)
-        } finally {
-            Remove-Item -LiteralPath $replaceBackup -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $DestinationPath -PathType Leaf) {
+                $replaceBackup = "$DestinationPath.$PID.$([guid]::NewGuid().ToString('N')).replace-backup"
+                try {
+                    [IO.File]::Replace($TemporaryPath, $DestinationPath, $replaceBackup, $true)
+                } finally {
+                    Remove-Item -LiteralPath $replaceBackup -Force -ErrorAction SilentlyContinue
+                }
+            } else {
+                [IO.File]::Move($TemporaryPath, $DestinationPath)
+            }
+            return
+        } catch {
+            $lastFailure = $_.Exception
+            if ($attempt -lt 20) { Start-Sleep -Milliseconds 250 }
         }
-    } else {
-        [IO.File]::Move($TemporaryPath, $DestinationPath)
     }
+    throw $lastFailure
 }
 
 function Write-JsonDurably([string]$Path, [object]$Value) {

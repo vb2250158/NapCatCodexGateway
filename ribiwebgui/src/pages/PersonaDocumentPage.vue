@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { renderMarkdownPreview } from "../markdownPreview";
@@ -63,7 +64,7 @@ async function loadPersonaDocument(): Promise<void> {
     }
   } catch (loadError) {
     if (requestVersion === personaRequestVersion) {
-      loadedPersonaError.value = loadError instanceof Error ? loadError.message : String(loadError);
+      loadedPersonaError.value = userFacingError(loadError);
     }
   } finally {
     if (requestVersion === personaRequestVersion) personaLoading.value = false;

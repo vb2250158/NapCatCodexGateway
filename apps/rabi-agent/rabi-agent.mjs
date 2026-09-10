@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CodexDesktopIpcClient } from "./lib/codex-desktop-ipc.mjs";
+import { normalizeDshBinding, sendDshTask } from "./lib/dsh.mjs";
+import { instanceAgents, agentCatalog, configureInstanceAgent, resolveInstanceAgent, registerManagedSession } from "./lib/instance-agents.mjs";
 import { normalizeAllowedWorkspaces, resolveRealDirectory, resolveTaskWorkspace } from "./lib/cwd-policy.mjs";
 
 const packageJson = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"));
@@ -130,6 +132,8 @@ function parseWorkspaceList(value, fallback) {
 }
 
 function bootstrapConfig(configPath) {
+  const previous = readJson(configPath, undefined);
+  if (fs.existsSync(configPath) && !previous) throw new Error("The existing instance configuration is invalid; refusing to replace its identity.");
   const managerUrl = normalizeManagerUrl(process.env.RABI_MANAGER_URL);
   const lanLinkToken = String(process.env.RABI_LAN_LINK_TOKEN || "").trim();
   const defaultWorkspace = resolveRealDirectory(process.env.RABI_AGENT_DEFAULT_CWD || process.cwd(), "RABI_AGENT_DEFAULT_CWD");
@@ -137,12 +141,17 @@ function bootstrapConfig(configPath) {
   if (!lanLinkToken) throw new Error("RABI_LAN_LINK_TOKEN is required for bootstrap.");
   const releasePublicKeySha256 = normalizedPublicKeySha256(process.env.RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256);
   const codexThreadId = String(process.env.RABI_AGENT_CODEX_THREAD_ID || "").trim();
-  if (!codexThreadId) throw new Error("RABI_AGENT_CODEX_THREAD_ID is required; Rabi Agent only delivers to an existing Codex Desktop task owner.");
+  const agentType = process.env.RABI_AGENT_TYPE?.trim() || "codex-desktop";
+  if (!["codex-desktop", "dsh"].includes(agentType)) throw new Error("Unsupported RABI_AGENT_TYPE.");
+  if (agentType === "codex-desktop" && !codexThreadId) throw new Error("RABI_AGENT_CODEX_THREAD_ID is required for Codex Desktop.");
+  const dsh = agentType === "dsh" ? normalizeDshBinding({ baseUrl: process.env.RABI_AGENT_DSH_URL, sessionId: process.env.RABI_AGENT_DSH_SESSION_ID }) : undefined;
   const config = {
     schemaVersion: 1,
+    agentType,
+    dsh,
     managerUrl,
     lanLinkToken,
-    nodeId: String(process.env.RABI_NODE_ID || "").trim() || randomNodeId(),
+    nodeId: previous?.nodeId || String(process.env.RABI_NODE_ID || "").trim() || randomNodeId(),
     releasePublicKeySha256,
     defaultWorkspace,
     allowedWorkspaces,
@@ -152,6 +161,11 @@ function bootstrapConfig(configPath) {
       reasoningEffort: String(process.env.RABI_AGENT_CODEX_REASONING || "medium").trim() || "medium"
     }
   };
+  // Reconnecting an installed computer must not erase its Agent identities or permitted projects.
+  if (previous) {
+    config.agents = instanceAgents(previous);
+    config.allowedWorkspaces = normalizeAllowedWorkspaces([...(previous.allowedWorkspaces || []), ...allowedWorkspaces], defaultWorkspace);
+  }
   writePrivateJson(configPath, config);
   return config;
 }
@@ -169,6 +183,7 @@ function launcherPath(configPath) {
 }
 
 function writeLauncher(configPath) {
+  fs.copyFileSync(new URL("./lib/instance-hook.mjs", import.meta.url), path.join(path.dirname(configPath), "hook-client.mjs"));
   const launcher = launcherPath(configPath);
   const code = `import fs from "node:fs";\nimport path from "node:path";\nimport { spawn } from "node:child_process";\nconst args = process.argv.slice(2);\nconst index = args.indexOf("--config");\nconst configPath = index >= 0 && args[index + 1] ? path.resolve(args[index + 1]) : path.join(process.env.LOCALAPPDATA || process.env.HOME || process.cwd(), "RabiAgent", "config.json");\nconst currentPath = path.join(path.dirname(configPath), "current-release.json");\nconst current = JSON.parse(fs.readFileSync(currentPath, "utf8"));\nconst entrypoint = path.resolve(String(current.entrypoint || ""));\nif (!entrypoint || !fs.existsSync(entrypoint)) throw new Error("Rabi Agent current release is missing.");\nconst child = spawn(process.execPath, [entrypoint, "--run", "--config", configPath], { cwd: path.dirname(entrypoint), stdio: "inherit", windowsHide: true });\nchild.once("exit", code => { process.exitCode = typeof code === "number" ? code : 1; });\n`;
   fs.writeFileSync(launcher, code, { encoding: "utf8", mode: 0o600 });
@@ -205,8 +220,14 @@ function readConfig(configPath) {
   const defaultWorkspace = resolveRealDirectory(config.defaultWorkspace, "Rabi Agent default workspace");
   const allowedWorkspaces = normalizeAllowedWorkspaces(config.allowedWorkspaces, defaultWorkspace);
   const codexThreadId = String(config.codexDesktop?.threadId || "").trim();
-  if (!lanLinkToken || !nodeId || !codexThreadId) throw new Error(`Rabi Agent configuration is incomplete: ${configPath}`);
+  const agentType = config.agentType || "codex-desktop";
+  if (!["codex-desktop", "dsh"].includes(agentType)) throw new Error("Unsupported Rabi Agent type.");
+  if (!lanLinkToken || !nodeId || (agentType === "codex-desktop" && !codexThreadId)) throw new Error(`Rabi Agent configuration is incomplete: ${configPath}`);
   return {
+    agentType,
+    dsh: agentType === "dsh" ? normalizeDshBinding(config.dsh) : undefined,
+    schemaVersion: 1,
+    agents: config.agents,
     managerUrl,
     lanLinkToken,
     nodeId,
@@ -364,7 +385,8 @@ class RabiAgentRuntime {
           nodeId: this.config.nodeId,
           version: AGENT_VERSION,
           platform: `${process.platform}-${process.arch}`,
-          agentTypes: ["codex-desktop"],
+          agentTypes: [...new Set(instanceAgents(this.config).map(agent => agent.provider))],
+          agents: agentCatalog(this.config),
           allowedWorkspaces: this.config.allowedWorkspaces
         }
       });
@@ -386,6 +408,44 @@ class RabiAgentRuntime {
       this.enqueueTask(message.task);
       return;
     }
+    if (message.type === "manageAgent") {
+      this.taskQueue = this.taskQueue.catch(() => undefined).then(async () => {
+        try {
+          let result;
+          if (message.operation === "list") result = agentCatalog(this.config);
+          else if (message.operation === "configure") {
+            const next = configureInstanceAgent(this.config, message.params);
+            const agentId = message.params?.agentId;
+            if (agentId && this.taskByThread.has(instanceAgents(this.config).find(agent => agent.agentId === agentId)?.sessionId)) throw new Error("Wait for this Agent's running task before changing its binding.");
+            writePrivateJson(this.configPath, next);
+            this.config = next;
+            result = agentCatalog(next);
+            this.send({ type: "agentCatalog", agents: result });
+          } else {
+            const { manageInstanceAgent } = await import("./runtime/management.mjs");
+            const agent = instanceAgents(this.config).find(agent => agent.agentId === message.params?.agentId);
+            const initializeNew = !agent && message.params?.agentId === "new-agent" && ["resolve", "create"].includes(message.params?.action) && !message.params?.prompt;
+            if (message.operation === "threads" && !agent?.enabled && !initializeNew) throw new Error("The instance Agent is missing or disabled.");
+            const provider = agent?.provider === "codex-desktop" ? "codex" : agent?.provider;
+            if (provider && message.params?.agentAdapter && message.params.agentAdapter !== provider) throw new Error("The operation provider does not match the instance Agent.");
+            const dsh = (message.operation === "scan" || initializeNew) && message.params?.dshBaseUrl ? normalizeDshBinding({ baseUrl: message.params.dshBaseUrl, sessionId: "scan" }) : agent?.dsh || this.config.dsh;
+            const params = { ...message.params, ...(provider ? { provider, agentAdapter: provider } : {}) };
+            if (message.operation === "threads" && params.cwd) params.cwd = resolveTaskWorkspace(params.cwd, this.config);
+            result = await manageInstanceAgent(message.operation, params, { ...this.config, dsh, rootDir: path.dirname(fileURLToPath(import.meta.url)) });
+            if (agent && message.operation === "threads" && result.statusCode < 400 && ["resolve", "create"].includes(message.params?.action)) {
+              const next = registerManagedSession(this.config, agent.agentId, result.data?.thread?.id);
+              if (next !== this.config) {
+                writePrivateJson(this.configPath, next);
+                this.config = next;
+                this.send({ type: "agentCatalog", agents: agentCatalog(next) });
+              }
+            }
+          }
+          this.send({ type: "managementResult", requestId: message.requestId, result });
+        } catch (error) { this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error instanceof Error ? error.message : String(error), 1024) }); }
+      });
+      return;
+    }
     if (message.type === "updateAvailable") {
       void this.update(String(message.version || "")).catch(error => this.send({ type: "updateResult", status: "failed", error: boundedText(error instanceof Error ? error.message : String(error), 1024) }));
     }
@@ -395,6 +455,10 @@ class RabiAgentRuntime {
     const taskId = String(task.taskId || "").trim();
     if (!taskId) return;
     const known = this.stateStore.state.tasks[taskId];
+    if (known && !["completed", "failed"].includes(known.status)) {
+      this.send({ type: "progress", taskId, summary: "This task was already accepted; it will not be submitted twice." });
+      return;
+    }
     if (known?.status === "completed" || known?.status === "failed") {
       this.send({ type: "taskResult", taskId, status: known.status, summary: known.summary || "Rabi Agent deduplicated an already terminal task.", error: known.error });
       return;
@@ -404,26 +468,34 @@ class RabiAgentRuntime {
 
   async runTask(task) {
     const taskId = String(task.taskId || "").trim();
+    if (this.stateStore.state.tasks[taskId]) return;
     this.send({ type: "ackTask", taskId });
     rememberTask(this.stateStore, taskId, { status: "acknowledged" });
     try {
-      if (String(task.targetAgent || "") !== "codex-desktop") throw new Error(`Rabi Agent does not support target Agent: ${String(task.targetAgent || "missing")}`);
-      const cwd = resolveTaskWorkspace(task.cwd, { defaultWorkspace: this.config.defaultWorkspace, allowedWorkspaces: this.config.allowedWorkspaces });
+      const agent = resolveInstanceAgent(this.config, task);
+      const cwd = resolveTaskWorkspace(task.cwd || agent.workspace, { defaultWorkspace: this.config.defaultWorkspace, allowedWorkspaces: this.config.allowedWorkspaces });
       const prompt = String(task.message || "").trim();
       if (!prompt) throw new Error("Rabi Agent task message is empty.");
-      this.send({ type: "progress", taskId, summary: "Task accepted by the configured Codex Desktop owner." });
-      this.taskByThread.set(this.config.codexDesktop.threadId, taskId);
+      if (agent.provider === "dsh") {
+        await sendDshTask(agent.dsh, prompt);
+        this.send({ type: "progress", taskId, summary: "DSH accepted the message into the bound session queue. Read the response in that DSH session." });
+        rememberTask(this.stateStore, taskId, { status: "progress" });
+        return;
+      }
+      if (this.taskByThread.has(agent.sessionId)) throw new Error("The bound Codex task is busy. Wait for its current task to finish before submitting another message.");
+      this.taskByThread.set(agent.sessionId, taskId);
       await this.desktop.startTurn({
-        threadId: this.config.codexDesktop.threadId,
+        threadId: agent.sessionId,
         prompt,
         cwd,
-        model: this.config.codexDesktop.model,
-        reasoningEffort: this.config.codexDesktop.reasoningEffort
+        model: agent.model,
+        reasoningEffort: agent.reasoningEffort
       });
       this.send({ type: "progress", taskId, summary: "Codex Desktop accepted the task. Rabi Agent is waiting for its task state." });
       rememberTask(this.stateStore, taskId, { status: "progress" });
     } catch (error) {
       const message = boundedText(error instanceof Error ? error.message : String(error));
+      for (const [threadId, ownerTaskId] of this.taskByThread) if (ownerTaskId === taskId) this.taskByThread.delete(threadId);
       this.send({ type: "taskResult", taskId, status: "failed", error: message });
       rememberTask(this.stateStore, taskId, { status: "failed", error: message });
     }
@@ -457,6 +529,14 @@ class RabiAgentRuntime {
       return;
     }
     const entrypoint = await installRelease(this.config, release);
+    const npmCli = process.env.npm_execpath || path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+    if (!fs.existsSync(npmCli)) throw new Error("Node.js npm CLI is missing; update this instance using a fresh installation prompt.");
+    await new Promise((resolve, reject) => {
+      const installer = spawn(process.execPath, [npmCli, "install", "--omit=dev", "--no-audit", "--no-fund"], { cwd: path.dirname(entrypoint), windowsHide: true, stdio: "ignore" });
+      const timer = setTimeout(() => { installer.kill(); reject(new Error("Instance dependency installation timed out.")); }, 120_000);
+      installer.once("error", error => { clearTimeout(timer); reject(error); });
+      installer.once("exit", code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error("Instance dependency installation failed.")); });
+    });
     const readyFile = path.join(os.tmpdir(), `rabi-agent-ready-${process.pid}-${Date.now()}`);
     const child = spawn(process.execPath, [entrypoint, "--run", "--config", this.configPath], {
       cwd: path.dirname(entrypoint),
@@ -487,12 +567,15 @@ const ARGS = process.argv.slice(2);
 const CONFIG_PATH = configPathFromArgs(ARGS);
 
 async function main() {
+  const minimumNodeVersion = String(packageJson.engines.node).replace(/^>=/, "");
+  if (!versionAtLeast(process.versions.node, minimumNodeVersion)) throw new Error(`Rabi Agent requires Node.js ${minimumNodeVersion} or newer.`);
   if (ARGS.includes("--bootstrap")) {
     bootstrapConfig(CONFIG_PATH);
     writeCurrentRelease(CONFIG_PATH, fileURLToPath(import.meta.url));
     configureCurrentUserStartup(fileURLToPath(import.meta.url), CONFIG_PATH);
   }
   const runtime = new RabiAgentRuntime(readConfig(CONFIG_PATH), CONFIG_PATH);
+  writeLauncher(CONFIG_PATH);
   runtime.start();
   const stop = () => runtime.stop();
   process.once("SIGINT", stop);
@@ -506,4 +589,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   });
 }
 
-export const __test = { safeRelativePath, versionAtLeast, managerWebSocketUrl, verifyReleaseManifest, manifestPayload, publicKeySha256 };
+export const __test = { safeRelativePath, versionAtLeast, managerWebSocketUrl, verifyReleaseManifest, manifestPayload, publicKeySha256, bootstrapConfig };

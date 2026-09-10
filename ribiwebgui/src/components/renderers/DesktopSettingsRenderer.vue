@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../../userFacingError";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { DesktopTheme } from "@shared/desktopSettingsContract";
 import {
@@ -114,7 +115,7 @@ async function loadDesktopSettings(): Promise<void> {
     loaded.value = true;
     error.value = "";
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
   }
 }
 
@@ -135,7 +136,7 @@ async function loadSelectionSpeechSettings(): Promise<void> {
     selectionSpeechLoaded.value = true;
     selectionSpeechError.value = "";
   } catch (cause) {
-    selectionSpeechError.value = cause instanceof Error ? cause.message : String(cause);
+    selectionSpeechError.value = userFacingError(cause);
   }
 }
 
@@ -179,7 +180,7 @@ async function saveDesktopSettings(): Promise<void> {
     publishInterfaceTheme(selectedTheme.themeId);
     error.value = "";
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
     throw cause;
   }
 }
@@ -287,7 +288,7 @@ async function saveCustomTheme(): Promise<void> {
     await nextTick();
     desktopDirty.value = wasDirty;
   } catch (cause) {
-    customThemeError.value = cause instanceof Error ? cause.message : String(cause);
+    customThemeError.value = userFacingError(cause);
   } finally {
     hydrating.value = false;
     customThemeSaving.value = false;
@@ -309,7 +310,7 @@ async function saveSelectionSpeechSettings(): Promise<void> {
     selectionSpeechModel.value = saved.model;
     selectionSpeechError.value = "";
   } catch (cause) {
-    selectionSpeechError.value = cause instanceof Error ? cause.message : String(cause);
+    selectionSpeechError.value = userFacingError(cause);
     throw cause;
   }
 }

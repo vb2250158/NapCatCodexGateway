@@ -44,7 +44,7 @@ export const activate = definePlugin({
                 "value": {
                     "surface": "web.pages",
                     "label": {
-                        "fallback": "局域网 Agent"
+                        "fallback": "远端 Agent"
                     },
                     "routeId": "global.lan-agents",
                     "rendererId": "builtin.web-page.lan-agents.v1",
@@ -61,7 +61,7 @@ export const activate = definePlugin({
                 "value": {
                     "surface": "web.navigation",
                     "label": {
-                        "fallback": "局域网 Agent"
+                        "fallback": "远端 Agent"
                     },
                     "routeId": "global.lan-agents",
                     "icon": "mdi-lan-connect",
@@ -249,7 +249,20 @@ export const activate = definePlugin({
                         readJsonBody: runtime.readJsonBody,
                         jsonResponse: runtime.jsonResponse,
                         registry: runtime.lanAgentRegistry,
-                        releases: runtime.lanAgentReleaseStore,
+                          releases: runtime.lanAgentReleaseStore,
+                          localAgents: runtime.localInstanceAgents,
+                          handleInstanceHook: runtime.handleInstanceHook,
+                          manageLocalAgent: runtime.manageLocalAgent,
+                        isManagementRequestAuthorized: (candidate) => {
+                            const config = runtime.rabiGlobalConfig.read().webguiLan;
+                            const header = candidate.headers["x-rabiroute-webgui-token"];
+                            const bearer = String(candidate.headers.authorization || "").match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+                              const address = String(candidate.socket.remoteAddress || "").replace(/^::ffff:/, "");
+                              const local = address === "127.0.0.1" || address === "::1";
+                              const pathname = new URL(candidate.url || "/", "http://localhost").pathname;
+                              if (local && !config.enabled && (pathname === "/api/lan-agent/instances" || pathname.startsWith(`/api/lan-agent/instances/${runtime.lanAgentRegistry.localInstanceId}/agents/`))) return true;
+                              return (config.enabled || local) && runtime.webguiTokenMatches(bearer || (typeof header === "string" ? header : ""), config.accessToken);
+                        },
                         isReleaseRequestAuthorized: candidate => {
                             const config = runtime.rabiGlobalConfig.read().webguiLan;
                             const authorization = Array.isArray(candidate.headers.authorization)

@@ -1202,6 +1202,8 @@ test("merged replay migrates old packet wrappers without nesting their source he
     assert.equal((replayPacket?.message.match(/^\[消息源\]$/gm) ?? []).length, 1);
     assert.match(replayPacket?.message ?? "", /事件名称：失败消息合并重放/);
     assert.match(replayPacket?.message ?? "", /事件名称：历史投递记录/);
+    assert.match(replayPacket?.message ?? "", /消息包发送时间：旧记录未保存/);
+    assert.match(replayPacket?.message ?? "", /原投递记录时间：/);
     assert.match(replayPacket?.message ?? "", /旧消息正文/);
     assert.doesNotMatch(replayPacket?.message ?? "", /\[投递源\]/);
     assert.match(replayPacket?.message ?? "", /> \[伪造控制\]/);

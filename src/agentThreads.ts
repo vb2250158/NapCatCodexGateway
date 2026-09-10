@@ -1,4 +1,10 @@
+import { renderAgentReplyParameters } from "./agentRequests/replyParameters.js";
+import { AgentReplyStateError } from "./agentRequests/replyError.js";
+import { promptConfirmsDelivery } from "./agentRequests/rolloutReceipt.js";
+import type { AgentInstanceBinding } from "./shared/agentInstance.js";
 import { randomUUID } from "node:crypto";
+import { recoverAgentResponseDeliveryFromRollout } from "./agentRequests/deliveryRecovery.js";
+import { renderAgentResponseContent } from "./agentRequests/responseContent.js";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -11,10 +17,11 @@ import {
   type CodexTurnSandbox
 } from "./codexRuntime.js";
 import {
-  isCodexTaskId
+  isCodexTaskId,
+  sameCodexWorkspace
 } from "./codexTaskIdentity.js";
 import {
-  codexDesktopRolloutContainsDeliveryMarker,
+  codexDesktopDeliveryReceiptConfirmed,
   openCodexDesktopThread
 } from "./codexDesktopBridge.js";
 import {
@@ -61,7 +68,8 @@ const defaultListLimit = 100;
 const maxResolveCandidates = 10_000;
 
 export type AgentThreadRequest = {
-  action?: "list" | "read" | "open" | "resolve" | "create" | "rename" | "send";
+  instanceBinding?: AgentInstanceBinding;
+  action?: "list" | "read" | "reconcile_delivery" | "open" | "resolve" | "create" | "rename" | "send";
   agentAdapter?: AgentAdapterType;
   query?: string;
   limit?: number;
@@ -148,6 +156,7 @@ export type AgentThreadDriver = {
 };
 
 export type AgentThreadRequestOptions = {
+  onChatHistoryDelivery?: (request: AgentThreadRequest, result: AgentThreadRequestResult) => Promise<void>;
   allowedWorkspaces: string[];
   defaultWorkspace?: string;
   dshBaseUrl?: string;
@@ -156,6 +165,7 @@ export type AgentThreadRequestOptions = {
   openDshSession?: (sessionId: string, baseUrl: string) => Promise<void>;
   sessionIndexPath?: string;
   agentRequests?: AgentRequestStore;
+  confirmCodexDelivery?: (threadId: string, deliveryId: string) => boolean | Promise<boolean>;
   onMessageProcessingHandoff?: (event: {
     requirementId: string;
     sourceThreadId: string;
@@ -221,7 +231,12 @@ export function agentThreadRequestFailureData(
       stage,
       ...(relatedField ? { field: relatedField } : {}),
       message,
-      retryable: deliveryFailure
+      retryable: deliveryFailure,
+      ...(error instanceof AgentReplyStateError ? {
+        code: error.code, reason: error.reason, requestId: error.requestId,
+        currentState: error.currentState, expectedState: error.expectedState,
+        commitState: error.commitState, retryable: error.retryable, nextAction: error.nextAction
+      } : {})
     }
   };
 }
@@ -276,16 +291,6 @@ const commonWorkspaceDeliveryPolicyLines = [
   "改动进入目标工作区并完成适用验证后，才能报告已修复或可验收。"
 ];
 
-const pangHuWorkspaceDeliveryPolicyLine =
-  "PangHu 只使用正式 Main、Release 和 Art。PangHu 任务没有创建旁路工作副本的例外；禁止新建、复制、checkout、switch、稀疏检出或使用旁路目录进行调查、修改、测试、构建或冲突处理。";
-
-function workspaceDeliveryPolicyLinesFor(cwd: string): string[] {
-  const pathSegments = normalizePathForComparison(cwd).split(/[\\/]+/);
-  return pathSegments.some((segment) => segment.toLowerCase() === "panghu")
-    ? [...commonWorkspaceDeliveryPolicyLines, pangHuWorkspaceDeliveryPolicyLine]
-    : [...commonWorkspaceDeliveryPolicyLines];
-}
-
 function deliveryBlocks(value: unknown, name: "contextBlocks" | "controlBlocks"): string[] {
   if (value == null) return [];
   if (!Array.isArray(value)) throw new Error(`${name} must be an array.`);
@@ -307,12 +312,9 @@ function standaloneWorkspacePolicyPrompt(
   return renderRabiDelivery({
     messageSource,
     messageContent: rawPrompt,
+    deliveryId,
     contextBlocks,
-    controlBlocks: [
-      ...controlBlocks,
-      ...(deliveryId ? [`[投递编号]\ndeliveryId: ${deliveryId}`] : []),
-      `[协作要求]\n${workspaceDeliveryPolicyLinesFor(cwd).join("\n")}`
-    ],
+    controlBlocks,
     escapeMessageContentHeaders: messageSource.type === "agent"
   });
 }
@@ -455,37 +457,6 @@ function normalizeAgentResponsePolicy(value: unknown): AgentResponsePolicy {
   throw new Error("responsePolicy is required for Agent-to-Agent delivery and must be required or none.");
 }
 
-function agentResponseContractLines(preparation: AgentCommunicationPreparation): string[] {
-  const sourceWorkspace = preparation.source.workspace || "<原发送任务的工作目录>";
-  const lines = [
-    "[Agent 回复合同]",
-    `本次投递 deliveryId：${preparation.deliveryId}`,
-    `是否要求回复：${preparation.responsePolicy === "required" ? "是" : "否"}`
-  ];
-  if (preparation.inReplyToRequestId) {
-    lines.push(
-      `本次消息已经正式回复请求：${preparation.inReplyToRequestId}`,
-      `回复结果：${preparation.result}`,
-      `下一步：${preparation.nextAction}`
-    );
-  }
-  if (preparation.requestId) {
-    const targetWorkspace = preparation.target.workspace || "<当前接收任务的工作目录>";
-    const targetThreadName = preparation.target.threadName || preparation.target.threadId;
-    lines.push(
-      `必须回复的 requestId：${preparation.requestId}`,
-      `需要回答：${preparation.responseInstruction}`,
-      `当前接收会话 ID：${preparation.target.threadId}`,
-      `当前接收会话名称：${targetThreadName}`,
-      `当前接收会话工作目录：${targetWorkspace}`,
-      `通过 POST /api/agent/threads 回复：action=send，threadId=${preparation.source.threadId}，cwd=${sourceWorkspace}，messageSource={type=agent，agentAdapter=${preparation.target.agentAdapter || "当前 Agent 端"}，sessionId=${preparation.target.threadId}，sessionName=${targetThreadName}，workspace=${targetWorkspace}}，sourceThreadId=${preparation.target.threadId}，sourceAgentType=当前类型，inReplyToRequestId=${preparation.requestId}，result=结果，nextAction=下一步。`,
-      "继续往返时填写 responsePolicy=required 和 responseInstruction；结束往返时填写 responsePolicy=none。"
-    );
-  } else {
-    lines.push("本次投递不要求回复。后续投递仍需填写 responsePolicy=required 或 none。");
-  }
-  return lines;
-}
 
 export function resolveAgentThreadWorkspaceForTest(
   requestedWorkspace: unknown,
@@ -697,7 +668,7 @@ async function createThread(
       "运行沙箱权限不等于业务修改授权；没有明确授权时，只做读取、调查、证据整理和方案输出。",
       "开始工作前先读取当前任务的完整相关历史和已有结论，不得只看标题、摘要或最后一条消息。",
       ...proactiveCommunicationPolicyLines("internal"),
-      ...workspaceDeliveryPolicyLinesFor(cwd),
+      ...commonWorkspaceDeliveryPolicyLines,
       "多步任务开始后要让当前任务中的人看得出你准备做什么；取得阶段结果、遇到风险或进入等待时主动更新，不要等别人追问。"
     ].join("\n"),
     sandbox
@@ -795,7 +766,11 @@ export function agentThreadDeliveryStateForTest(
   deliveryId: string,
   rolloutReceiptConfirmed = false
 ): "accepted" | "in_progress" | "missing" {
-  if (rolloutReceiptConfirmed || JSON.stringify(thread).includes(deliveryId)) return "accepted";
+  const value = thread as { turns?: { items?: { type?: string; content?: { text?: string }[] }[] }[] };
+  const accepted = value?.turns?.some(turn => turn.items?.some(item => item.type === "userMessage"
+    && Array.isArray(item.content)
+    && promptConfirmsDelivery(item.content.map(part => part.text || "").join("\n"), deliveryId)));
+  if (rolloutReceiptConfirmed || accepted) return "accepted";
   return (thread as { active?: unknown })?.active === true ? "in_progress" : "missing";
 }
 
@@ -822,6 +797,23 @@ async function listThreads(
 }
 
 export async function handleAgentThreadRequest(
+  request: AgentThreadRequest,
+  options: AgentThreadRequestOptions,
+  driver: AgentThreadDriver = defaultDriver
+): Promise<AgentThreadRequestResult> {
+  const result = await executeAgentThreadRequest(request, options, driver);
+  if (request.action === "send" && request.messageSource?.type === "agent"
+    && ["delivered", "delivered_tracking_failed", "delivery_unconfirmed"].includes(String(result.data.status))) {
+    try { await options.onChatHistoryDelivery?.(request, result); }
+    catch (error) {
+      // The message may already be accepted. A history failure must never invite a resend.
+      result.data.chatHistoryWarning = error instanceof Error ? error.message : String(error);
+    }
+  }
+  return result;
+}
+
+async function executeAgentThreadRequest(
   request: AgentThreadRequest,
   options: AgentThreadRequestOptions,
   driver: AgentThreadDriver = defaultDriver
@@ -854,6 +846,23 @@ export async function handleAgentThreadRequest(
     };
   }
 
+  if (action === "reconcile_delivery") {
+    if (!options.agentRequests) throw new Error("Agent request tracking is unavailable.");
+    const threadId = normalizeThreadId(request.threadId);
+    const deliveryId = optionalText(request.deliveryId, "deliveryId", 200);
+    if (!deliveryId) throw new Error("deliveryId is required for receipt reconciliation.");
+    const communication = await recoverAgentResponseDeliveryFromRollout(options.agentRequests, threadId, deliveryId);
+    const confirmed = communication.status === "receipt_recovered" || communication.status === "already_recorded";
+    return { statusCode: confirmed ? 200 : 202, data: {
+      action, threadId, ok: confirmed, status: communication.status, communication,
+      ...(!confirmed ? { error: {
+        code: "delivery_reconciliation_pending", reason: communication.status, retryable: false,
+        commitState: "not_started",
+        nextAction: "Verify the original reservation and exact receiving task. Keep the original deliveryId; do not resend the message to repair its receipt."
+      } } : {})
+    } };
+  }
+
   if (action === "read") {
     const agentAdapter = threadAgentAdapter(request);
     const threadId = normalizeThreadId(request.threadId);
@@ -863,7 +872,7 @@ export async function handleAgentThreadRequest(
       deliveryId
       && agentAdapter === "codex"
       && driver === defaultDriver
-      && codexDesktopRolloutContainsDeliveryMarker(threadId, deliveryId)
+      && await codexDesktopDeliveryReceiptConfirmed(threadId, deliveryId)
     );
     const delivery = deliveryId
       ? {
@@ -1264,6 +1273,28 @@ export async function handleAgentThreadRequest(
     let requestedTitle = optionalText(request.title, "title", maxTitleInputLength);
     let redirectedReply = false;
     if (sendSource && inReplyToRequestId && options.agentRequests) {
+      const pending = options.agentRequests.get(inReplyToRequestId);
+      if (pending?.status === "pending_delivery") {
+        const reason = pending.target.agentAdapter !== "codex" ? "delivery_receipt_adapter_not_supported"
+          : pending.target.threadId !== sendSource.source.threadId ? "reply_sender_does_not_match_original_target"
+          : pending.source.threadId !== threadId ? "reply_destination_does_not_match_original_source"
+          : !sameCodexWorkspace(pending.target.workspace || "", sendSource.source.workspace || "") ? "reply_sender_workspace_mismatch"
+          : !sameCodexWorkspace(pending.source.workspace || "", cwd) ? "reply_destination_workspace_mismatch"
+          : undefined;
+        if (reason) throw new AgentReplyStateError(pending, reason);
+        let confirmed: boolean;
+        try {
+          confirmed = await (options.confirmCodexDelivery ?? codexDesktopDeliveryReceiptConfirmed)(pending.target.threadId, pending.deliveryId);
+        } catch {
+          throw new AgentReplyStateError(pending, "original_delivery_receipt_unreadable");
+        }
+        if (!confirmed) throw new AgentReplyStateError(pending, "original_delivery_receipt_not_found");
+        options.agentRequests.commit({
+          ...pending,
+          requestId: pending.id,
+          responsePolicy: "required"
+        }, { action: "receipt_recovered", transport: "desktop-ipc" });
+      }
       const destination = options.agentRequests.resolveReplyDestination(
         inReplyToRequestId,
         {
@@ -1467,16 +1498,14 @@ export async function handleAgentThreadRequest(
     const renderPrompt = (agentCommunication: AgentCommunicationPreparation | undefined): string => sendSource
       ? renderRabiDelivery({
           messageSource: sendSource.messageSource,
-          messageContent: rawPrompt,
+          messageContent: agentCommunication?.inReplyToRequestId
+            ? renderAgentResponseContent(rawPrompt, agentCommunication.result!, agentCommunication.nextAction!)
+            : rawPrompt,
+          escapeMessageContentHeaders: !agentCommunication?.inReplyToRequestId,
           contextBlocks: deliveryBlocks(request.contextBlocks, "contextBlocks"),
           controlBlocks: [
             ...deliveryBlocks(request.controlBlocks, "controlBlocks"),
-            [
-              "[协作要求]",
-              ...proactiveCommunicationPolicyLines("internal"),
-              ...workspaceDeliveryPolicyLinesFor(cwd)
-            ].join("\n"),
-            ...(agentCommunication ? [agentResponseContractLines(agentCommunication).join("\n")] : [])
+            ...(agentCommunication ? [renderAgentReplyParameters(agentCommunication)] : [])
           ]
         })
       : standaloneWorkspacePolicyPrompt(
@@ -1532,11 +1561,35 @@ export async function handleAgentThreadRequest(
 
     let agentCommunication = prepareAgentCommunication();
     let prompt = renderPrompt(agentCommunication);
+    const unconfirmedResult = (error: unknown): AgentThreadRequestResult | undefined => {
+      if (!(error instanceof Error) || error.name !== "CodexDesktopDeliveryUnconfirmedError") return undefined;
+      return {
+        statusCode: 202,
+        data: {
+          action, ok: false, status: "delivery_unconfirmed", threadId,
+          delivery: {
+            status: "unconfirmed", targetThreadId: threadId,
+            deliveryId: agentCommunication?.deliveryId ?? standaloneDeliveryId
+          },
+          ...(agentCommunication ? { communication: {
+            deliveryId: agentCommunication.deliveryId,
+            responsePolicy: agentCommunication.responsePolicy,
+            requestId: agentCommunication.requestId,
+            requestStatus: agentCommunication.requestId ? "pending_delivery" : undefined,
+            inReplyToRequestId: agentCommunication.inReplyToRequestId
+          } } : {}),
+          error: { stage: "target_delivery", message: error.message, retryable: false }
+        }
+      };
+    };
     let acceptedDelivery: Awaited<ReturnType<AgentThreadDriver["send"]>>;
     let replacementWarning: string | undefined;
     try {
+      if (agentCommunication) options.agentRequests?.bindResponseEvidence(agentCommunication, prompt);
       acceptedDelivery = await sendToTarget(prompt);
     } catch (error) {
+      const unconfirmed = unconfirmedResult(error);
+      if (unconfirmed) return unconfirmed;
       const staleThreadId = threadId;
       const staleWorkspace = cwd;
       const replacement = targetAgentAdapter === "codex" && requestedTitle
@@ -1567,8 +1620,11 @@ export async function handleAgentThreadRequest(
       agentCommunication = prepareAgentCommunication();
       prompt = renderPrompt(agentCommunication);
       try {
-        acceptedDelivery = await sendToTarget(prompt);
+        if (agentCommunication) options.agentRequests?.bindResponseEvidence(agentCommunication, prompt);
+      acceptedDelivery = await sendToTarget(prompt);
       } catch (replacementError) {
+        const unconfirmed = unconfirmedResult(replacementError);
+        if (unconfirmed) return unconfirmed;
         if (agentCommunication && options.agentRequests) options.agentRequests.abort(agentCommunication);
         throw new AgentThreadDeliveryError(replacementError instanceof Error ? replacementError.message : String(replacementError));
       }
@@ -1662,5 +1718,5 @@ export async function handleAgentThreadRequest(
     };
   }
 
-  throw new Error("Unsupported Agent thread action. Expected list, read, open, resolve, create, rename, or send.");
+  throw new Error("Unsupported Agent thread action. Expected list, read, reconcile_delivery, open, resolve, create, rename, or send.");
 }

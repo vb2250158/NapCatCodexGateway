@@ -45,9 +45,13 @@ const props = withDefaults(defineProps<{
   pending: boolean;
   submitLabel: string;
   submitIcon: string;
+  submitRecordOnlyLabel?: string;
+  recordOnlyDisabled?: boolean;
   footerText: string;
   notice?: FeedbackComposerNotice;
   maxLength?: number;
+  inputOnly?: boolean;
+  footerOnly?: boolean;
 }>(), {
   notice: undefined,
   maxLength: 2_000
@@ -56,6 +60,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   "update:modelValue": [value: string];
   submit: [];
+  "submit-record-only": [];
   "add-files": [payload: { files: File[]; fromClipboard: boolean }];
   "remove-attachment": [attachmentId: string];
 }>();
@@ -186,7 +191,9 @@ function handleKeydown(event: KeyboardEvent): void {
   }
   if (!plainEnter(event)) return;
   event.preventDefault();
-  if (!props.submitDisabled) emit("submit");
+  if (props.submitRecordOnlyLabel) {
+    if (!(props.recordOnlyDisabled ?? props.submitDisabled)) emit("submit-record-only");
+  } else if (!props.submitDisabled) emit("submit");
 }
 
 function plainEnter(event: KeyboardEvent): boolean {
@@ -251,7 +258,7 @@ function formatAttachmentSize(size: number): string {
 </script>
 
 <template>
-  <div class="knowledge-approval-composer">
+  <div v-if="!footerOnly" class="knowledge-approval-composer">
     <input
       ref="fileInput"
       class="knowledge-approval-file-input"
@@ -336,7 +343,7 @@ function formatAttachmentSize(size: number): string {
       </div>
     </div>
   </div>
-  <div class="knowledge-approval-attachment-tools">
+  <div v-if="!footerOnly" class="knowledge-approval-attachment-tools">
     <v-btn
       prepend-icon="mdi-paperclip-plus"
       variant="tonal"
@@ -383,16 +390,26 @@ function formatAttachmentSize(size: number): string {
   >
     {{ localError || notice?.text }}
   </v-alert>
-  <div class="knowledge-approval-actions">
+  <div v-if="!inputOnly" class="knowledge-approval-actions">
     <span>{{ footerText }}</span>
-    <v-btn
-      color="primary"
-      :prepend-icon="submitIcon"
-      :loading="pending"
-      :disabled="submitDisabled"
-      @click="emit('submit')"
-    >
-      {{ submitLabel }}
-    </v-btn>
+    <div class="knowledge-approval-action-buttons">
+      <v-btn
+        v-if="submitRecordOnlyLabel"
+        variant="outlined"
+        :disabled="recordOnlyDisabled ?? submitDisabled"
+        @click="emit('submit-record-only')"
+      >
+        {{ submitRecordOnlyLabel }}
+      </v-btn>
+      <v-btn
+        color="primary"
+        :prepend-icon="submitIcon"
+        :loading="pending"
+        :disabled="submitDisabled"
+        @click="emit('submit')"
+      >
+        {{ submitLabel }}
+      </v-btn>
+    </div>
   </div>
 </template>

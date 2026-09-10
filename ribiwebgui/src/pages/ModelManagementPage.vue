@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type {
   SpeechManagedModel,
@@ -166,7 +167,7 @@ async function loadDirectorySettings(): Promise<void> {
   } catch (error) {
     directorySettings.value = undefined;
     directoryLocalOnly.value = error instanceof SpeechModelManagementRequestError && error.status === 403;
-    if (!directoryLocalOnly.value) directoryError.value = error instanceof Error ? error.message : String(error);
+    if (!directoryLocalOnly.value) directoryError.value = userFacingError(error);
   } finally {
     directoryLoading.value = false;
   }
@@ -191,7 +192,7 @@ async function saveDirectorySettings(): Promise<void> {
       directorySettings.value = undefined;
       directoryDraft.value = "";
     } else {
-      directoryError.value = error instanceof Error ? error.message : String(error);
+      directoryError.value = userFacingError(error);
     }
   } finally {
     directorySaving.value = false;
@@ -267,7 +268,7 @@ async function loadSnapshot(): Promise<void> {
     const next = await speechModelManagementClient.snapshot();
     if (version === loadVersion) snapshot.value = next;
   } catch (error) {
-    if (version === loadVersion) actionError.value = error instanceof Error ? error.message : String(error);
+    if (version === loadVersion) actionError.value = userFacingError(error);
   } finally {
     if (version === loadVersion) loading.value = false;
   }
@@ -278,7 +279,7 @@ async function installRuntime(): Promise<void> {
   try {
     snapshot.value = await speechModelManagementClient.installRuntime();
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : String(error);
+    actionError.value = userFacingError(error);
   }
 }
 
@@ -287,7 +288,7 @@ async function installModel(model: SpeechManagedModel): Promise<void> {
   try {
     snapshot.value = await speechModelManagementClient.installModel(model.alias);
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : String(error);
+    actionError.value = userFacingError(error);
   }
 }
 

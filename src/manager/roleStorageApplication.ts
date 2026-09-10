@@ -8,7 +8,7 @@ import type {
   RecentMemoryItem,
   RoleKnowledgeCatalogSnapshot
 } from "../roleKnowledge.js";
-import { presentRoleMemory, publishCommittedRolePlan } from "../roleKnowledge.js";
+import { presentRoleMemory, publishCommittedRolePlan, publishCommittedRoleMemory } from "../roleKnowledge.js";
 import type {
   PlanFeedbackDeliveryStatus,
   PlanFeedbackPostCommit,
@@ -122,7 +122,8 @@ export class RoleStorageApplicationError extends Error {
       | "mutation_failed",
     readonly statusCode: number,
     readonly operationId?: string,
-    readonly commitState: "not_started" | "unknown" | "committed" = "not_started"
+    readonly commitState: "not_started" | "unknown" | "committed" = "not_started",
+    readonly causeCode?: string
   ) {
     super(message);
     this.name = "RoleStorageApplicationError";
@@ -267,6 +268,8 @@ function publicMutationError(error: unknown, operationId?: string): RoleStorageA
     return new RoleStorageApplicationError("Storage mutation failed.", "mutation_failed", 500, operationId, "unknown");
   }
   switch (error.code) {
+    case "validation_rejected":
+      return new RoleStorageApplicationError(error.message, "invalid_request", 400, operationId, "not_started");
     case "revision_conflict":
       return new RoleStorageApplicationError("The stored revision changed; reload before updating.", "revision_conflict", 412, operationId);
     case "idempotency_conflict":
@@ -284,22 +287,24 @@ function publicMutationError(error: unknown, operationId?: string): RoleStorageA
     case "worker_failed":
     case "termination_unconfirmed":
       return new RoleStorageApplicationError(
-        "The commit result is indeterminate. Retry only with the same Idempotency-Key.",
+        `Storage operation ${error.code}; the commit result is indeterminate. Retry only with the same Idempotency-Key.`,
         "indeterminate",
         503,
         operationId,
-        "unknown"
+        "unknown",
+        error.code
       );
     case "busy":
     case "stopped":
-      return new RoleStorageApplicationError("Role storage is temporarily unavailable.", "busy", 503, operationId);
+      return new RoleStorageApplicationError(`Role storage is temporarily unavailable (${error.code}).`, "busy", 503, operationId, "not_started", error.code);
     case "fence_mismatch":
       return new RoleStorageApplicationError(
         "The Manager storage generation changed while the commit result was unresolved. Retry only with the same Idempotency-Key.",
         "generation_mismatch",
         503,
         operationId,
-        "unknown"
+        "unknown",
+        error.code
       );
     default:
       return new RoleStorageApplicationError("Storage mutation failed.", "mutation_failed", 500, operationId, "unknown");
@@ -408,6 +413,11 @@ export class RoleStorageQueries {
     const published = publishCommittedRolePlan(this.roleDir(roleId), plan);
     this.assertCurrentGeneration();
     return published;
+  }
+
+  publishMemory(roleId: string, memory: RecentMemoryItem): Readonly<RecentMemoryItem> {
+    this.assertCurrentGeneration();
+    return publishCommittedRoleMemory(this.roleDir(roleId), memory);
   }
 
   planWorkflow(roleId: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<PersonaPlanWorkflowReadResult | null> {
@@ -798,9 +808,9 @@ export class RoleStorageCommands {
     });
   }
 
-  async createRecentMemory(roleId: string, input: Record<string, unknown>, context: RoleStorageCommandContext = {}): Promise<RoleStorageCommit<RecentMemoryItem, RoleStorageMemoryProjection>> {
+  async createRecentMemory(roleId: string, input: Record<string, unknown>, context: RoleStorageCommandContext = {}): Promise<RoleStorageProjectedCommit<RecentMemoryItem, RoleStorageMemoryProjection>> {
     let memoryId = typeof input.id === "string" && input.id.trim() ? input.id.trim() : "";
-    return this.commit({
+    return this.commitProjection({
       operation: "recent-memory-create",
       roleId,
       resourceId: memoryId || undefined,
@@ -814,15 +824,16 @@ export class RoleStorageCommands {
         return committed;
       },
       project: async () => {
-        const projection = await this.queries.memory(roleId, memoryId, context);
+        const projection = await this.queries.memory(roleId, memoryId, { ...context, fresh: true });
         if (!projection) throw new RoleStorageApplicationError("The committed memory projection is unavailable.", "projection_unavailable", 503, undefined, "committed");
+        this.queries.publishMemory(roleId, projection.memory);
         return projection;
       }
     });
   }
 
-  async updateRecentMemory(roleId: string, memoryId: string, patch: Record<string, unknown>, context: RoleStorageCommandContext = {}): Promise<RoleStorageCommit<RecentMemoryItem, RoleStorageMemoryProjection>> {
-    return this.commit({
+  async updateRecentMemory(roleId: string, memoryId: string, patch: Record<string, unknown>, context: RoleStorageCommandContext = {}): Promise<RoleStorageProjectedCommit<RecentMemoryItem, RoleStorageMemoryProjection>> {
+    return this.commitProjection({
       operation: "recent-memory-update",
       roleId,
       resourceId: memoryId,
@@ -831,8 +842,9 @@ export class RoleStorageCommands {
       expectedRevision: () => this.requiredExpectedRevision(context.expectedRevision),
       mutate: options => this.mutationPool.updateRecentMemory(roleId, memoryId, patch, options),
       project: async () => {
-        const projection = await this.queries.memory(roleId, memoryId, context);
+        const projection = await this.queries.memory(roleId, memoryId, { ...context, fresh: true });
         if (!projection) throw new RoleStorageApplicationError("The committed memory projection is unavailable.", "projection_unavailable", 503, undefined, "committed");
+        this.queries.publishMemory(roleId, projection.memory);
         return projection;
       }
     });
@@ -842,7 +854,7 @@ export class RoleStorageCommands {
     roleId: string,
     memoryId: string,
     context: RoleStorageCommandContext = {}
-  ): Promise<RoleStorageCommit<RecentMemoryItem, RoleStorageMemoryProjection>> {
+  ): Promise<RoleStorageProjectedCommit<RecentMemoryItem, RoleStorageMemoryProjection>> {
     const canonicalRoleId = canonicalStorageMutationRoleId(roleId);
     const canonicalMemoryId = requiredIdentity(memoryId, "memoryId");
     const operationId = context.idempotencyKey
@@ -868,7 +880,7 @@ export class RoleStorageCommands {
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        return await this.commit({
+        return await this.commitProjection({
           operation: "recent-memory-touch",
           roleId: canonicalRoleId,
           resourceId: canonicalMemoryId,
@@ -895,33 +907,12 @@ export class RoleStorageCommands {
             canonicalMemoryId,
             options
           ),
-          project: async catalog => {
-            const memory = catalog.recentMemories.find(item =>
-              item.id === canonicalMemoryId && !item.consolidatedAt
-            );
-            if (!memory) {
-              throw new RoleStorageApplicationError(
-                "The committed memory projection is unavailable.",
-                "projection_unavailable",
-                503,
-                operationId,
-                "committed"
-              );
-            }
-            const revision = storageMutationRevisionToken(memory);
-            if (!revision) {
-              throw new RoleStorageApplicationError(
-                "The committed memory revision is unavailable.",
-                "projection_unavailable",
-                503,
-                operationId,
-                "committed"
-              );
-            }
-            return Object.freeze({
-              memory: presentRoleMemory(memory, "recent"),
-              revision
-            });
+          project: async () => {
+            const projection = await this.queries.memory(canonicalRoleId, canonicalMemoryId, { ...stableContext, fresh: true });
+            if (!projection) throw new RoleStorageApplicationError(
+              "The committed memory projection is unavailable.", "projection_unavailable", 503, operationId, "committed");
+            this.queries.publishMemory(canonicalRoleId, projection.memory);
+            return projection;
           }
         });
       } catch (error) {
@@ -984,12 +975,12 @@ export class RoleStorageCommands {
     });
   }
 
-  submitPlanFeedback(roleId: string, planId: string, input: Omit<SubmitPlanFeedbackInput, "roleDir" | "roleId" | "planId" | "expectedRevision">, context: RoleStorageCommandContext = {}): Promise<RoleStorageCommit<SubmitPlanFeedbackResult, RoleStoragePlanFeedbackProjection>> {
+  submitPlanFeedback(roleId: string, planId: string, input: Omit<SubmitPlanFeedbackInput, "roleDir" | "roleId" | "planId" | "expectedRevision">, context: RoleStorageCommandContext = {}): Promise<RoleStorageProjectedCommit<SubmitPlanFeedbackResult, RoleStoragePlanFeedbackProjection>> {
     const canonicalPlanId = canonicalStorageMutationPlanId(planId);
     const feedbackId = typeof input.feedbackId === "string" && input.feedbackId.trim()
       ? input.feedbackId.trim()
       : undefined;
-    return this.commit({
+    return this.commitProjection({
       operation: "plan-feedback-submit",
       roleId,
       resourceId: feedbackId ? `${canonicalPlanId}:${feedbackId}` : canonicalPlanId,
@@ -1006,17 +997,17 @@ export class RoleStorageCommands {
     });
   }
 
-  updatePlanFeedbackDelivery(roleId: string, planId: string, record: PlanFeedbackRecord, status: Exclude<PlanFeedbackDeliveryStatus, "record_only">, message: string | undefined, context: RoleStorageCommandContext = {}): Promise<RoleStorageCommit<PlanFeedbackRecord, RoleStoragePlanFeedbackProjection>> {
+  updatePlanFeedbackDelivery(roleId: string, planId: string, record: PlanFeedbackRecord, status: Exclude<PlanFeedbackDeliveryStatus, "record_only">, message: string | undefined, context: RoleStorageCommandContext = {}): Promise<RoleStorageProjectedCommit<PlanFeedbackRecord, RoleStoragePlanFeedbackProjection>> {
     return this.feedbackTransition("plan-feedback-delivery-update", roleId, planId, record, { status, message }, context,
       options => this.mutationPool.updatePlanFeedbackDelivery(roleId, planId, record, status, options, message));
   }
 
-  updatePlanFeedbackQaHandling(roleId: string, planId: string, record: PlanFeedbackRecord, qaHandling: PlanQaFeedbackHandling, context: RoleStorageCommandContext = {}): Promise<RoleStorageCommit<PlanFeedbackRecord, RoleStoragePlanFeedbackProjection>> {
+  updatePlanFeedbackQaHandling(roleId: string, planId: string, record: PlanFeedbackRecord, qaHandling: PlanQaFeedbackHandling, context: RoleStorageCommandContext = {}): Promise<RoleStorageProjectedCommit<PlanFeedbackRecord, RoleStoragePlanFeedbackProjection>> {
     return this.feedbackTransition("plan-feedback-qa-update", roleId, planId, record, qaHandling, context,
       options => this.mutationPool.updatePlanFeedbackQaHandling(roleId, planId, record, qaHandling, options));
   }
 
-  updatePlanFeedbackPostCommit(roleId: string, planId: string, record: PlanFeedbackRecord, status: PlanFeedbackPostCommit["status"], message: string | undefined, context: RoleStorageCommandContext = {}): Promise<RoleStorageCommit<PlanFeedbackRecord, RoleStoragePlanFeedbackProjection>> {
+  updatePlanFeedbackPostCommit(roleId: string, planId: string, record: PlanFeedbackRecord, status: PlanFeedbackPostCommit["status"], message: string | undefined, context: RoleStorageCommandContext = {}): Promise<RoleStorageProjectedCommit<PlanFeedbackRecord, RoleStoragePlanFeedbackProjection>> {
     return this.feedbackTransition("plan-feedback-post-commit-update", roleId, planId, record, { status, message }, context,
       options => this.mutationPool.updatePlanFeedbackPostCommit(roleId, planId, record, status, options, message));
   }
@@ -1109,9 +1100,9 @@ export class RoleStorageCommands {
     payload: unknown,
     context: RoleStorageCommandContext,
     mutate: (options: { idempotencyKey: string; expectedRevision: string | null; signal?: AbortSignal; timeoutMs?: number }) => Promise<PlanFeedbackRecord>
-  ): Promise<RoleStorageCommit<PlanFeedbackRecord, RoleStoragePlanFeedbackProjection>> {
+  ): Promise<RoleStorageProjectedCommit<PlanFeedbackRecord, RoleStoragePlanFeedbackProjection>> {
     const canonicalPlanId = canonicalStorageMutationPlanId(planId);
-    return this.commit({
+    return this.commitProjection({
       operation,
       roleId,
       resourceId: `${canonicalPlanId}:${record.id}`,
@@ -1172,6 +1163,21 @@ export function roleStorageHttpError(error: unknown): Readonly<{
   const mapped = error instanceof RoleStorageApplicationError
     ? error
     : new RoleStorageApplicationError("Role storage request failed.", "mutation_failed", 500, undefined, "unknown");
+  const nextAction = mapped.commitState === "committed"
+    ? "The write succeeded. Read the resource to confirm its current contents; replay only the original payload with the same Idempotency-Key if the receipt is still needed."
+    : mapped.commitState === "unknown"
+      ? "Read the resource and original operation receipt. Retry only the original payload with the same Idempotency-Key; do not create a replacement operation."
+      : mapped.code === "revision_conflict"
+        ? "GET the latest resource and strong ETag, merge your intended changes with the current contents, then submit with If-Match."
+        : mapped.code === "idempotency_conflict"
+          ? "This key already identifies a different payload. Read that operation first; use a new key only for a separate intended change."
+          : mapped.code === "invalid_request"
+            ? "Correct the field described in message, then submit the corrected payload with a new Idempotency-Key."
+            : mapped.code === "not_found"
+              ? "Verify the role and resource ID, including archived plans. Do not recreate a plan just because this lookup failed."
+              : mapped.code === "generation_mismatch"
+                ? "Rediscover the Manager through Host, verify /meta, then read the resource again."
+                : "The operation has not started. Check Manager readiness and retry the same operation after the reported delay.";
   return Object.freeze({
     statusCode: mapped.statusCode,
     headers: Object.freeze({
@@ -1184,7 +1190,14 @@ export function roleStorageHttpError(error: unknown): Readonly<{
       state: mapped.code,
       message: mapped.message,
       commitState: mapped.commitState,
+      reason: mapped.code,
+      ...(mapped.causeCode ? { causeCode: mapped.causeCode } : {}),
+      nextAction,
+      retryable: mapped.commitState === "not_started" && mapped.code === "busy",
       ...(mapped.operationId ? { idempotencyKey: mapped.operationId } : {}),
+      ...(mapped.code === "invalid_request" && mapped.operationId
+        ? { retry: "correct_request_with_new_idempotency_key" }
+        : {}),
       ...(mapped.commitState === "unknown" || mapped.commitState === "committed"
         ? { retry: "same_idempotency_key_only" }
         : {})

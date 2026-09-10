@@ -2746,7 +2746,6 @@ class SystemScreenshotController(QObject):
             "desktop.pin-clipboard-image": self._clipboard_hotkey,
         }
         self._settings_task: QtAsyncTask | None = None
-        self._capture_task: QtAsyncTask | None = None
         self._window_candidates_task: QtAsyncTask | None = None
         self._capture_save_task: QtAsyncTask | None = None
         self._send_task: QtAsyncTask | None = None
@@ -2947,7 +2946,16 @@ class SystemScreenshotController(QObject):
 
     @Slot()
     def _capture_requested(self) -> None:
-        if not self._settings.enabled or self._capture_overlay is not None or self._capture_task is not None:
+        if not self._settings.enabled or self._capture_overlay is not None:
+            return
+        # Freeze pixels before constructing widgets or waiting for the shared
+        # worker pool. Encoding and window discovery can finish afterwards.
+        try:
+            image = capture_desktop_image()
+            if image.isNull():
+                raise RuntimeError("截图像素不可用。")
+        except Exception as error:
+            self._notify("系统截图", f"截图失败：{error}", True)
             return
         overlay = ScreenshotCaptureOverlay(
             ScreenshotHistory(()),
@@ -2961,16 +2969,11 @@ class SystemScreenshotController(QObject):
         overlay.send_requested.connect(self._send_capture_image)
         overlay.color_copy_requested.connect(self._copy_color_text)
         overlay.destroyed.connect(lambda *_: self._clear_capture_overlay(overlay))
+        self._capture_image_ready(overlay, image)
         overlay.show()
         overlay.raise_()
         overlay.activateWindow()
         overlay.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
-        QApplication.processEvents()
-        self._capture_task = start_qt_task(
-            capture_desktop_image_async,
-            lambda task, result: self._capture_image_ready(task, overlay, result),
-            on_error=lambda error: error,
-        )
         overlay_handle = int(overlay.winId())
         self._window_candidates_task = start_qt_task(
             lambda: screenshot_window_candidates((overlay_handle,)),
@@ -2984,9 +2987,7 @@ class SystemScreenshotController(QObject):
         if self._capture_overlay is overlay and isinstance(result, tuple):
             overlay.set_window_candidates(tuple(item for item in result if isinstance(item, ScreenshotWindowCandidate)))
 
-    def _capture_image_ready(self, task: QtAsyncTask, overlay: ScreenshotCaptureOverlay, result: object) -> None:
-        if self._capture_task is task:
-            self._capture_task = None
+    def _capture_image_ready(self, overlay: ScreenshotCaptureOverlay, result: object) -> None:
         if not isinstance(result, QImage) or result.isNull():
             if self._capture_overlay is overlay:
                 overlay.capture_failed()

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, markRaw, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import {
@@ -11,7 +12,10 @@ import {
   planAttachmentMentionCandidates,
   referencedPlanAttachmentIds
 } from "@shared/planAttachmentMentions";
+import PlanAttachmentGallery from "../components/PlanAttachmentGallery.vue";
 import PlanFeedbackComposer from "../components/PlanFeedbackComposer.vue";
+import PlanQuestionFields from "../components/PlanQuestionFields.vue";
+import { approvalDecisionQuestions, planQuestionReply, type PlanQuestionAnswer } from "@shared/planQuestions";
 import PlanStepDetail from "../components/PlanStepDetail.vue";
 import { useI18n } from "../i18n";
 import { knowledgeItemMatchesQuery, normalizeKnowledgeQuery } from "../knowledgeSearch";
@@ -59,7 +63,7 @@ import {
   type RolePlanPageCounts,
   type RolePlanPageFilter
 } from "../roleKnowledgeClient";
-import { planFeedbackSubmissionErrorMessage } from "../approvalFeedbackUi";
+import { localizedPlanError, planFeedbackSubmissionErrorMessage } from "../approvalFeedbackUi";
 import { planFeedbackMutationLedger } from "../planFeedbackMutationLedger";
 import { formatPlanDirectorySortLabel, formatPlanDirectorySortLabelTitle, formatPlanVideoDuration, planCardStyle, planDescriptionForDisplay, planDirectorySortPalette, planStatusDescriptionForDisplay, planStatusLabelForDisplay, planStatusStyle, plansForKnowledgeView, planTitleForDirectory } from "../planPresentationStyles";
 import type { PlanKnowledgeView, PlanListSortMode } from "../planPresentationStyles";
@@ -114,6 +118,26 @@ const planListTagOptions = ref<Array<{
   count: number;
 }>>([]);
 const approvalDrafts = reactive<Record<string, string>>({});
+const questionDrafts = reactive<Record<string, { signature: string; answers: Record<string, PlanQuestionAnswer> }>>({});
+function feedbackQuestions(plan: RolePlan) {
+  const questions = currentStep(plan)?.questions ?? [];
+  return plan.presentation.approval.state !== "none" ? approvalDecisionQuestions(questions, t) : questions;
+}
+function questionSignature(plan: RolePlan): string {
+  return JSON.stringify([roleId.value, plan.status, plan.currentStepId, currentStep(plan)?.questions ?? [], plan.presentation.approval]);
+}
+function questionAnswers(plan: RolePlan): Record<string, PlanQuestionAnswer> {
+  const draft = questionDrafts[plan.id];
+  return draft?.signature === questionSignature(plan) ? draft.answers : {};
+}
+function updateQuestionAnswer(plan: RolePlan, id: string, answer: PlanQuestionAnswer): void {
+  questionDrafts[plan.id] = { signature: questionSignature(plan), answers: { ...questionAnswers(plan), [id]: answer } };
+}
+function composedFeedback(plan: RolePlan): { text: string; valid: boolean } {
+  const reply = planQuestionReply(feedbackQuestions(plan), questionAnswers(plan));
+  const text = [reply.text, feedbackQuestions(plan).length ? "" : String(approvalDrafts[plan.id] || "").trim()].filter(Boolean).join("\n\n");
+  return { text, valid: reply.valid && text.length <= 2000 };
+}
 const approvalPending = reactive<Record<string, boolean>>({});
 const approvalDeliveryPending = reactive<Record<string, boolean>>({});
 const approvalRequestIds = reactive<Record<string, string>>({});
@@ -212,7 +236,6 @@ let planListDialogContentRequest: Promise<void> | null = null;
 const routeSummary = computed(() => store.routeSummaryForKey(String(route.params.id || "")) || store.selectedRouteSummary);
 const roleId = computed(() => String(store.selectedGateway?.agentRoleId || routeSummary.value?.agentRoleId || "").trim());
 const gatewayId = computed(() => String(store.selectedGateway?.id || routeSummary.value?.id || "").trim());
-const roleLabel = computed(() => roleId.value || t("未绑定人格"));
 const dateFormatter = computed(() => new Intl.DateTimeFormat(isEnglish.value ? "en" : "zh-CN", {
   month: "short",
   day: "2-digit",
@@ -614,7 +637,7 @@ async function refreshPlanAgentStatuses(planIds: string[], force = false): Promi
     }
   } catch (statusError) {
     if (request !== requestVersion || generation !== planAgentStatusGeneration || selectedRoleId !== roleId.value) return;
-    const message = statusError instanceof Error ? statusError.message : String(statusError);
+    const message = userFacingError(statusError);
     for (const planId of ids) {
       const plan = plans.value.find((item) => item.id === planId);
       if (plan) planAgentStatuses[planId] = unknownPlanAgentStatus(plan, message);
@@ -725,7 +748,7 @@ async function openPlanAgent(plan: RolePlan, role: PlanAgentRole): Promise<void>
   } catch (openError) {
     planAgentNotices[key] = {
       tone: "error",
-      text: openError instanceof Error ? openError.message : String(openError)
+      text: userFacingError(openError)
     };
     void refreshPlanAgentStatuses([plan.id], true);
   } finally {
@@ -761,7 +784,7 @@ function drainPlanDetailQueue(): void {
       })
       .catch((loadError) => {
         if (task.request === requestVersion) {
-          planError.value = loadError instanceof Error ? loadError.message : String(loadError);
+          planError.value = userFacingError(loadError);
         }
       })
       .finally(() => {
@@ -904,7 +927,7 @@ async function loadMoreMemory(limit = 24): Promise<void> {
     memoryNextCursor.value = page.nextCursor;
     memoryPageCounts.value = page.counts;
   } catch (loadError) {
-    if (currentRequest === requestVersion) memoryError.value = loadError instanceof Error ? loadError.message : String(loadError);
+    if (currentRequest === requestVersion) memoryError.value = userFacingError(loadError);
   } finally {
     if (currentRequest === requestVersion) memoryLoading.value = false;
     scheduleProgressiveSentinelRefresh();
@@ -966,7 +989,7 @@ async function loadMorePlans(limit = 8, fromBackground = false): Promise<void> {
     planNextCursor.value = page.nextCursor;
   } catch (loadError) {
     if (currentRequest === requestVersion) {
-      planError.value = loadError instanceof Error ? loadError.message : String(loadError);
+      planError.value = userFacingError(loadError);
     }
   } finally {
     if (currentRequest === requestVersion) loadingMorePlans.value = false;
@@ -1040,7 +1063,7 @@ async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: numb
     planListTagOptions.value = result.facets?.tags || [];
     planNextCursor.value = result.nextCursor;
   } catch (loadError) {
-    if (currentRequest === requestVersion) planError.value = loadError instanceof Error ? loadError.message : String(loadError);
+    if (currentRequest === requestVersion) planError.value = userFacingError(loadError);
   } finally {
     if (currentRequest === requestVersion) loading.value = false;
     scheduleProgressiveSentinelRefresh();
@@ -1079,7 +1102,7 @@ async function refreshMemoryKnowledge(selectedRoleId: string, currentRequest: nu
     memoryNextCursor.value = memory.nextCursor;
     memoryPageCounts.value = memory.counts;
   } catch (loadError) {
-    if (currentRequest === requestVersion) memoryError.value = loadError instanceof Error ? loadError.message : String(loadError);
+    if (currentRequest === requestVersion) memoryError.value = userFacingError(loadError);
   } finally {
     if (currentRequest === requestVersion) memoryLoading.value = false;
     scheduleProgressiveSentinelRefresh();
@@ -1141,7 +1164,7 @@ async function refreshKnowledge(): Promise<void> {
     })
     .catch((loadError) => {
       if (currentRequest === requestVersion && selectedRoleId === roleId.value) {
-        planError.value = loadError instanceof Error ? loadError.message : String(loadError);
+        planError.value = userFacingError(loadError);
       }
     });
   if (showsPlanList.value) {
@@ -1152,7 +1175,7 @@ async function refreshKnowledge(): Promise<void> {
   if (activeView.value === "recent_memory") {
     void refreshPendingMemoryConsolidationRuns(selectedRoleId).catch((loadError) => {
       if (currentRequest === requestVersion && selectedRoleId === roleId.value) {
-        memoryError.value = loadError instanceof Error ? loadError.message : String(loadError);
+        memoryError.value = userFacingError(loadError);
       }
     });
   }
@@ -1579,7 +1602,7 @@ async function loadFullPlanDetails(planId: string): Promise<void> {
     void refreshPlanMarkdownTeasers([plan], currentRequest);
   } catch (loadError) {
     if (currentRequest === requestVersion) {
-      planError.value = loadError instanceof Error ? loadError.message : String(loadError);
+      planError.value = userFacingError(loadError);
     }
   } finally {
     if (currentRequest === requestVersion) planFullDetailsLoading[planId] = false;
@@ -1747,11 +1770,17 @@ function approvalFileAction(action: string): string {
 
 async function feedbackIntentSignature(value: unknown): Promise<string> {
   const source = JSON.stringify(value);
-  if (typeof crypto === "undefined" || !crypto.subtle) {
-    throw new Error("Web Crypto SHA-256 is required for plan feedback idempotency.");
+  if (globalThis.crypto?.subtle) {
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   }
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  // 普通 HTTP 和部分 WebView 没有 Web Crypto；使用稳定摘要，不阻断计划引导提交。
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0").repeat(8);
 }
 
 function clearFeedbackRequestId(planId: string): void {
@@ -1933,23 +1962,23 @@ function canEditApprovalFeedback(plan: RolePlan): boolean {
   return approvalFeedbackBaseAvailable(plan) && !approvalPending[plan.id];
 }
 
-function canSubmitApproval(plan: RolePlan): boolean {
+function canSubmitApproval(plan: RolePlan, notifyAgent = true): boolean {
   return canEditApprovalFeedback(plan)
     && !approvalPending[plan.id]
     && !approvalDeliveryPending[plan.id]
-    && Boolean(gatewayId.value)
-    && Boolean(String(approvalDrafts[plan.id] || "").trim());
+    && (!notifyAgent || Boolean(gatewayId.value))
+    && composedFeedback(plan).valid && Boolean(composedFeedback(plan).text);
 }
 
 function canEditPlanGuidance(plan: RolePlan): boolean {
   return planAcceptsGuidance(plan) && !approvalPending[plan.id];
 }
 
-function canSubmitPlanGuidance(plan: RolePlan): boolean {
+function canSubmitPlanGuidance(plan: RolePlan, notifyAgent = true): boolean {
   return canEditPlanGuidance(plan)
     && !approvalDeliveryPending[plan.id]
-    && Boolean(gatewayId.value)
-    && Boolean(String(approvalDrafts[plan.id] || "").trim());
+    && (!notifyAgent || Boolean(gatewayId.value))
+    && composedFeedback(plan).valid && Boolean(composedFeedback(plan).text);
 }
 
 type ApprovalComposeStatus = {
@@ -1995,7 +2024,7 @@ function approvalComposeStatus(plan: RolePlan): ApprovalComposeStatus | null {
   if (!gatewayId.value) {
     return {
       icon: "mdi-routes",
-      text: t("当前没有可投递的 Route；你可以先编辑，选择或绑定 Route 后再提交。"),
+      text: t("当前没有可投递的 Route；仍可“提交”保存，绑定 Route 后才能“提交并投递”。"),
       title: t("当前 Route 不可用"),
       tone: "warning"
     };
@@ -2033,7 +2062,7 @@ function guidanceComposeStatus(plan: RolePlan): ApprovalComposeStatus | null {
   if (!gatewayId.value) {
     return {
       icon: "mdi-routes",
-      text: t("当前没有可投递的 Route；你可以先编辑，选择或绑定 Route 后再提交。"),
+      text: t("当前没有可投递的 Route；仍可“提交”保存，绑定 Route 后才能“提交并投递”。"),
       title: t("当前 Route 不可用"),
       tone: "warning"
     };
@@ -2054,11 +2083,7 @@ function approvalFeedbackPlaceholder(plan: RolePlan): string {
 function approvalFeedbackHint(plan: RolePlan): string {
   return t(plan.presentation.approval.state === "incomplete"
     ? "审批资料不完整，补齐前禁止输入或提交审批意见。"
-    : "输入 @ 可引用计划附件；Enter 直接提交，Shift+Enter 换行。提交后由 Agent 判断如何处理，不会直接改变计划状态。");
-}
-
-function approvalSubmitLabel(plan: RolePlan): string {
-  return t(plan.presentation.approval.state === "incomplete" ? "审批已禁用" : "提交审批意见");
+    : "输入 @ 可引用计划附件；Enter 仅提交保存，Shift+Enter 换行。选择“提交并投递”才会通知 Agent。");
 }
 
 function applyPlanApproval(planId: string, approval: RolePlan["approval"]): void {
@@ -2077,8 +2102,9 @@ function applyFeedbackDeliveryState(planId: string, feedback: RolePlanFeedback |
   if (!feedback || !requestId || feedback.id !== requestId) return;
   const noticeName = feedbackNoticeName(feedback);
   if (feedback.deliveryStatus === "delivered" || feedback.deliveryStatus === "record_only") {
+    delete questionDrafts[planId];
     approvalDeliveryPending[planId] = false;
-    approvalNotices[planId] = { tone: "success", text: t(`${noticeName}已记录并交给 Agent 处理。`) };
+    approvalNotices[planId] = { tone: "success", text: feedback.deliveryStatus === "record_only" ? t("已提交，尚未投递；Agent 可稍后读取审阅。") : t(`${noticeName}已记录并交给 Agent 处理。`) };
     clearFeedbackRequestId(planId);
     submittedApprovalTexts.delete(planId);
     clearSubmittedApprovalAttachments(planId);
@@ -2158,7 +2184,7 @@ function handleMemoryConsolidationChanged(raw: Event): void {
     if (data.roleId !== roleId.value) return;
     if (activeView.value === "recent_memory") {
       void refreshPendingMemoryConsolidationRuns().catch((loadError) => {
-        memoryError.value = loadError instanceof Error ? loadError.message : String(loadError);
+        memoryError.value = userFacingError(loadError);
       });
     }
     if (data.status === "completed" && showsMemoryList.value) void refreshKnowledge();
@@ -2285,23 +2311,28 @@ onBeforeUnmount(() => {
   resetApprovalAttachmentState();
 });
 
-async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
-  await sendPlanFeedback(plan, "approval_suggestion");
+async function sendApprovalSuggestion(plan: RolePlan, notifyAgent = true): Promise<void> {
+  await sendPlanFeedback(plan, "approval_suggestion", notifyAgent);
 }
 
-async function sendPlanGuidance(plan: RolePlan): Promise<void> {
-  await sendPlanFeedback(plan, "guidance");
+async function sendPlanGuidance(plan: RolePlan, notifyAgent = true): Promise<void> {
+  await sendPlanFeedback(plan, "guidance", notifyAgent);
 }
 
-async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_suggestion"): Promise<void> {
-  const text = String(approvalDrafts[plan.id] || "").trim();
+async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_suggestion", notifyAgent = true): Promise<void> {
+  const reply = composedFeedback(plan);
+  if (!reply.valid) {
+    approvalNotices[plan.id] = { tone: "error", text: t("请回答必填问题，回答与补充说明合计不超过 2000 字。") };
+    return;
+  }
+  const text = reply.text;
   const guidance = kind === "guidance";
   const noticeName = guidance ? "计划引导" : "审批建议";
   if (!text) {
     approvalNotices[plan.id] = { tone: "error", text: t(guidance ? "请先填写计划引导。" : "请先填写审批建议。") };
     return;
   }
-  if (!gatewayId.value) {
+  if (notifyAgent && !gatewayId.value) {
     approvalNotices[plan.id] = { tone: "error", text: t("当前没有可投递的 Route。") };
     return;
   }
@@ -2314,24 +2345,31 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
     const signature = await feedbackIntentSignature({
       roleId: roleId.value,
       planId: plan.id,
-      gatewayId: gatewayId.value,
+      gatewayId: notifyAgent ? gatewayId.value : undefined,
       stepId,
       text,
       attachments,
       planAttachmentIds,
       source: "webgui",
-      kind
+      kind,
+      notifyAgent
     });
     const feedbackId = feedbackRequestId(plan.id, signature);
     // A mutation must fence against a GET from the current Manager generation,
     // never against an ETag retained from an earlier page refresh or generation.
     const resource = await loadPlanFeedbackWithRevision(roleId.value, plan.id);
+    if (feedbackQuestions(plan).length) {
+      const latestPlan = await loadRolePlan(roleId.value, plan.id);
+      if (questionSignature(latestPlan) !== questionSignature(plan)) {
+        throw new Error(t("计划问题已更新，请刷新计划后重新确认回答。"));
+      }
+    }
     approvalRevisions[plan.id] = resource.etag;
     applyPlanApproval(plan.id, resource.approval);
     const committed = await submitPlanFeedback({
       roleId: roleId.value,
       planId: plan.id,
-      gatewayId: gatewayId.value,
+      gatewayId: notifyAgent ? gatewayId.value : undefined,
       stepId,
       feedbackId,
       text,
@@ -2339,6 +2377,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       planAttachmentIds,
       source: "webgui",
       kind,
+      notifyAgent,
       expectedRevision: approvalRevisions[plan.id]
     });
     approvalRevisions[plan.id] = committed.etag;
@@ -2360,17 +2399,18 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         text: t(`${noticeName}已记录，但通知 Agent 失败；可以保留内容后重试。`)
       };
     } else if (result.deliveryStatus === "pending") {
-      submittedApprovalTexts.set(plan.id, text);
+      submittedApprovalTexts.set(plan.id, approvalDrafts[plan.id] || "");
       submittedApprovalAttachments.set(plan.id, takeApprovalAttachments(plan.id));
       approvalDeliveryPending[plan.id] = true;
       approvalDrafts[plan.id] = "";
       approvalNotices[plan.id] = { tone: "success", text: t(`${noticeName}已记录，正在后台通知 Agent。`) };
     } else {
+      delete questionDrafts[plan.id];
       approvalDrafts[plan.id] = "";
       clearFeedbackRequestId(plan.id);
       submittedApprovalTexts.delete(plan.id);
       clearApprovalAttachments(plan.id);
-      approvalNotices[plan.id] = { tone: "success", text: t(`${noticeName}已记录并交给 Agent 处理。`) };
+      approvalNotices[plan.id] = { tone: "success", text: result.deliveryStatus === "record_only" ? t("已提交，尚未投递；Agent 可稍后读取审阅。") : t(`${noticeName}已记录并交给 Agent 处理。`) };
     }
   } catch (submitError) {
     if (submitError instanceof ManagerRequestError && submitError.status === 412) {
@@ -2383,7 +2423,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
     }
     approvalNotices[plan.id] = {
       tone: "error",
-      text: t(planFeedbackSubmissionErrorMessage(submitError))
+      text: localizedPlanError(submitError, isEnglish.value)
     };
   } finally {
     approvalPending[plan.id] = false;
@@ -2393,21 +2433,6 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
 
 <template>
   <div class="page-shell knowledge-page">
-    <section class="knowledge-hero app-card">
-      <div class="knowledge-hero-copy">
-        <div class="eyebrow">ROLE KNOWLEDGE LEDGER</div>
-        <h1>计划与记忆</h1>
-        <p>{{ isEnglish
-          ? "Plan content and memory are maintained by the Agent. plan.status stores the configured status key; labels, colors, order, views, and guidance availability come from the current persona."
-          : "计划主体与记忆由 Agent 维护。plan.status 只记录配置中的状态 key；名称、颜色、顺序、视图归属和是否接受引导均来自当前人格配置。" }}</p>
-      </div>
-      <div class="knowledge-identity">
-        <span>当前人格</span>
-        <strong data-no-i18n>{{ roleLabel }}</strong>
-        <small>{{ isEnglish ? "Sorted by the configured status order, then update time" : "按人格配置中的状态顺序，再按更新时间排序" }}</small>
-      </div>
-    </section>
-
     <div class="knowledge-metrics">
       <div class="knowledge-metric blocked"><span>当前计划文件</span><b>{{ planCounts.plans }}</b><small>plans/active/&lt;planId&gt;</small></div>
       <div class="knowledge-metric qa"><span>已归档计划文件</span><b>{{ planCounts.archived }}</b><small>plans/archive/&lt;planId&gt;</small></div>
@@ -2808,115 +2833,19 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                 <span><v-icon size="16">mdi-paperclip</v-icon>{{ t("计划附件") }}</span>
                 <small>{{ plan.attachments.length }}</small>
               </div>
-              <div class="knowledge-plan-attachment-grid">
-                <button
-                  v-for="attachment in plan.attachments.filter((item) => item.kind === 'image' || item.kind === 'video')"
-                  :key="attachment.id"
-                  type="button"
-                  class="knowledge-plan-attachment media"
-                  :class="attachment.kind"
-                  :aria-label="`${t(attachment.kind === 'video' ? '查看视频预览' : '查看图片预览')}：${attachment.name}`"
-                  @click="openPlanMediaPreview(plan, attachment)"
-                >
-                  <span
-                    class="knowledge-plan-attachment-visual"
-                    :data-load-state="planMediaLoadState(plan.id, attachment.id)"
-                  >
-                    <span class="knowledge-plan-attachment-loading" aria-live="polite">
-                      <v-progress-circular
-                        v-if="planMediaLoadState(plan.id, attachment.id) === 'loading'"
-                        indeterminate
-                        size="22"
-                        width="2"
-                      />
-                      <v-icon v-else size="22">mdi-image-broken-variant</v-icon>
-                      <small>{{ t(planMediaLoadState(plan.id, attachment.id) === "error" ? "附件加载失败" : "附件加载中") }}</small>
-                    </span>
-                    <video
-                      v-if="attachment.kind === 'video'"
-                      :src="planVideoThumbnailUrl(plan.id, attachment.id)"
-                      preload="metadata"
-                      muted
-                      playsinline
-                      aria-hidden="true"
-                      @loadedmetadata="capturePlanVideoDuration(plan.id, attachment.id, $event); setPlanMediaLoadState(plan.id, attachment.id, 'loaded')"
-                      @error="setPlanMediaLoadState(plan.id, attachment.id, 'error')"
-                    ></video>
-                    <img
-                      v-else
-                      :src="planAttachmentUrl(plan.id, attachment.id)"
-                      :alt="attachment.name"
-                      loading="lazy"
-                      decoding="async"
-                      fetchpriority="low"
-                      data-no-i18n
-                      @load="setPlanMediaLoadState(plan.id, attachment.id, 'loaded')"
-                      @error="setPlanMediaLoadState(plan.id, attachment.id, 'error')"
-                    >
-                    <span class="knowledge-plan-attachment-overlay">
-                      <v-icon v-if="attachment.kind === 'image'" size="20">mdi-magnify-plus-outline</v-icon>
-                      {{ t(attachment.kind === "video" ? "点击预览视频" : "点击查看大图") }}
-                    </span>
-                    <span v-if="attachment.kind === 'video'" class="knowledge-plan-video-play" aria-hidden="true">
-                      <v-icon size="21">mdi-play</v-icon>
-                    </span>
-                    <span v-if="attachment.kind === 'video'" class="knowledge-plan-video-duration" data-no-i18n aria-hidden="true">
-                      {{ displayedPlanVideoDuration(plan.id, attachment.id) }}
-                    </span>
-                  </span>
-                  <span class="knowledge-plan-attachment-meta">
-                    <b data-no-i18n>{{ attachment.name }}</b>
-                    <small data-no-i18n>{{ formatAttachmentSize(attachment.size) }}</small>
-                  </span>
-                </button>
-                <button
-                  v-for="attachment in plan.attachments.filter((item) => item.kind === 'file' && isPlanMarkdownAttachment(item.name, item.mimeType))"
-                  :key="attachment.id"
-                  type="button"
-                  class="knowledge-plan-attachment media markdown"
-                  :aria-label="`${t('预览 Markdown')}：${attachment.name}`"
-                  @click="openPlanMarkdownPreview(plan, attachment)"
-                >
-                  <span class="knowledge-plan-attachment-visual knowledge-plan-markdown-visual">
-                    <span class="knowledge-plan-markdown-paper">
-                      <span class="knowledge-plan-markdown-kicker">
-                        <v-icon size="14">mdi-language-markdown-outline</v-icon>
-                        <span data-no-i18n>MARKDOWN</span>
-                      </span>
-                      <span v-if="planMarkdownTeaser(plan.id, attachment.id).loading" class="knowledge-plan-markdown-teaser loading">
-                        {{ t("正在加载 Markdown…") }}
-                      </span>
-                      <span v-else class="knowledge-plan-markdown-teaser" data-no-i18n>
-                        {{ planMarkdownTeaser(plan.id, attachment.id).text || attachment.name }}
-                      </span>
-                    </span>
-                    <span class="knowledge-plan-attachment-overlay">
-                      <v-icon size="20">mdi-eye-outline</v-icon>
-                      {{ t("预览 Markdown") }}
-                    </span>
-                  </span>
-                  <span class="knowledge-plan-attachment-meta">
-                    <b data-no-i18n>{{ attachment.name }}</b>
-                    <small data-no-i18n>Markdown · {{ formatAttachmentSize(attachment.size) }}</small>
-                  </span>
-                </button>
-                <a
-                  v-for="attachment in plan.attachments.filter((item) => item.kind === 'file' && !isPlanMarkdownAttachment(item.name, item.mimeType))"
-                  :key="attachment.id"
-                  class="knowledge-plan-attachment file"
-                  :href="planAttachmentUrl(plan.id, attachment.id)"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  :aria-label="`${t('打开附件')}：${attachment.name}`"
-                >
-                  <span class="knowledge-plan-attachment-file-icon"><v-icon size="24">mdi-file-outline</v-icon></span>
-                  <span class="knowledge-plan-attachment-meta">
-                    <b data-no-i18n>{{ attachment.name }}</b>
-                    <small data-no-i18n>{{ attachment.mimeType || t("文件") }} · {{ formatAttachmentSize(attachment.size) }}</small>
-                  </span>
-                  <v-icon size="17">mdi-open-in-new</v-icon>
-                </a>
-              </div>
+              <PlanAttachmentGallery
+                :plan="plan"
+                :plan-attachment-url="planAttachmentUrl"
+                :plan-video-thumbnail-url="planVideoThumbnailUrl"
+                :plan-media-load-state="planMediaLoadState"
+                :set-plan-media-load-state="setPlanMediaLoadState"
+                :capture-plan-video-duration="capturePlanVideoDuration"
+                :displayed-plan-video-duration="displayedPlanVideoDuration"
+                :plan-markdown-teaser="planMarkdownTeaser"
+                :open-plan-media-preview="openPlanMediaPreview"
+                :open-plan-markdown-preview="openPlanMarkdownPreview"
+                :format-attachment-size="formatAttachmentSize"
+              />
             </section>
 
             <div class="knowledge-plan-summary">
@@ -3126,26 +3055,40 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                     <span>{{ guidanceComposeStatus(plan)?.text }}</span>
                   </span>
                 </div>
+                <PlanQuestionFields
+                  v-if="feedbackQuestions(plan).length"
+                  :questions="feedbackQuestions(plan)" :answers="questionAnswers(plan)" :form-id="`guidance-${plan.id}`"
+                    :plan-attachments="plan.attachments" :attachment-url="(id) => planAttachmentUrl(plan.id, id)"
+                    :submit-disabled="!canSubmitPlanGuidance(plan, false)"
+                    @add-files="addApprovalFiles(plan.id, $event.files, $event.fromClipboard)"
+                    @submit="sendPlanGuidance(plan, false)"
+                  :disabled="!canEditPlanGuidance(plan) || Boolean(approvalDeliveryPending[plan.id])"
+                  @change="(id, answer) => updateQuestionAnswer(plan, id, answer)"
+                />
                 <PlanFeedbackComposer
                   :composer-id="`guidance-${plan.id}`"
+                    :footer-only="Boolean(feedbackQuestions(plan).length)"
                   :model-value="approvalDrafts[plan.id] || ''"
                   :plan-attachments="plan.attachments"
                   :attachments="approvalAttachmentsFor(plan.id)"
                   :attachment-url="(attachmentId) => planAttachmentUrl(plan.id, attachmentId)"
                   :label="t('计划引导')"
                   :placeholder="t('例如：先确认入口关闭后的整体体验，再根据结果调整后续步骤。')"
-                  :hint="t('输入 @ 可引用计划附件；Enter 直接提交，Shift+Enter 换行。引导会投递给当前计划绑定的 Agent，不会作为步骤审批。')"
+                  :hint="t('输入 @ 可引用计划附件；Enter 仅提交保存，Shift+Enter 换行。选择“提交并投递”才会通知 Agent。')"
                   :disabled="!canEditPlanGuidance(plan)"
                   :submit-disabled="!canSubmitPlanGuidance(plan)"
                   :pending="Boolean(approvalPending[plan.id])"
                   :notice="approvalNotices[plan.id]"
-                  :submit-label="t('提交计划引导')"
+                  :submit-label="t('提交并投递')"
+                  :submit-record-only-label="t('提交')"
+                  :record-only-disabled="!canSubmitPlanGuidance(plan, false)"
                   submit-icon="mdi-send-outline"
-                  :footer-text="t('引导只关联当前 planId；Agent 可据此更新计划说明和后续步骤。')"
+                  :footer-text="t('提交仅保存；提交并投递会通知 Agent。')"
                   @update:model-value="approvalDrafts[plan.id] = $event"
                   @add-files="addApprovalFiles(plan.id, $event.files, $event.fromClipboard)"
                   @remove-attachment="removeApprovalAttachment(plan.id, $event)"
                   @submit="sendPlanGuidance(plan)"
+                  @submit-record-only="sendPlanGuidance(plan, false)"
                 />
               </section>
               <div v-if="planFullDetailsLoaded[plan.id] && plan.steps.length" class="knowledge-steps">
@@ -3173,7 +3116,11 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                         <b data-no-i18n>{{ step.title }}</b>
                         <span v-if="step.id === plan.currentStepId">{{ blocker(plan) ? t("当前阻塞") : t("正在执行") }}</span>
                       </div>
-                      <PlanStepDetail v-if="step.detail" class="knowledge-step-detail" :text="step.detail" />
+                      <details v-if="step.detail && isApprovalStep(plan, step)" class="knowledge-approval-disclosure">
+                        <summary>{{ t('步骤说明') }}</summary>
+                        <PlanStepDetail class="knowledge-step-detail" :text="step.detail" />
+                      </details>
+                      <PlanStepDetail v-else-if="step.detail" class="knowledge-step-detail" :text="step.detail" />
                       <small v-if="step.waitingFor" data-no-i18n>等待：{{ step.waitingFor }}</small>
                       <small v-if="stepIsBlocked(plan, step) && step.blockedBy" data-no-i18n>{{ step.blockedBy }}</small>
                       <small v-if="step.id === plan.currentStepId && step.startedAt" class="knowledge-step-time">
@@ -3195,13 +3142,12 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   <div class="knowledge-approval-head">
                     <div>
                       <span>{{ plan.presentation.approval.label }}</span>
-                      <b>核对本步骤的执行边界后提交审批意见</b>
+                      <b>{{ t("审批确认") }}</b>
                     </div>
                     <v-chip :color="plan.presentation.approval.state === 'ready' ? 'primary' : 'warning'" size="x-small" variant="tonal">
                       {{ plan.presentation.approval.state === "ready" ? "可审批" : "审批资料不完整 · 禁止审批" }}
                     </v-chip>
                   </div>
-                  <p>{{ plan.presentation.approval.helper }}</p>
                   <v-alert
                     v-if="plan.presentation.approval.missing.length"
                     type="warning"
@@ -3215,47 +3161,71 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   </v-alert>
                   <div v-if="plan.presentation.approval.contract" class="knowledge-approval-contract">
                     <div class="knowledge-approval-contract-lead">
-                      <span>审批人 / 责任人</span>
-                      <b data-no-i18n>{{ plan.presentation.approval.contract.approver || "未填写" }}</b>
-                      <span>要批准、调整或否决的具体决定</span>
+                      <span>{{ t("待决定事项") }}</span>
                       <b data-no-i18n>{{ plan.presentation.approval.contract.request || "未填写" }}</b>
                       <span>推荐方案</span>
                       <b data-no-i18n>{{ plan.presentation.approval.contract.recommendation || "未填写" }}</b>
-                      <span>必要备选</span>
+
+                    </div>
+
+                    <section v-if="plan.attachments.length" class="knowledge-approval-evidence">
+                      <h4>{{ t('附件与预览') }} <small>{{ plan.attachments.length }}</small></h4>
+              <PlanAttachmentGallery
+                :plan="plan"
+                :plan-attachment-url="planAttachmentUrl"
+                :plan-video-thumbnail-url="planVideoThumbnailUrl"
+                :plan-media-load-state="planMediaLoadState"
+                :set-plan-media-load-state="setPlanMediaLoadState"
+                :capture-plan-video-duration="capturePlanVideoDuration"
+                :displayed-plan-video-duration="displayedPlanVideoDuration"
+                :plan-markdown-teaser="planMarkdownTeaser"
+                :open-plan-media-preview="openPlanMediaPreview"
+                :open-plan-markdown-preview="openPlanMarkdownPreview"
+                :format-attachment-size="formatAttachmentSize"
+              />
+                    </section>
+                    <details class="knowledge-approval-disclosure">
+                      <summary>{{ t('方案依据与备选') }}</summary>
+                      <div class="knowledge-approval-disclosure-body">
+                      <h4>必要备选</h4>
                       <ul class="knowledge-approval-alternatives">
                         <li v-for="(item, index) in (plan.presentation.approval.contract.alternatives || [])" :key="`alternative-${index}`" data-no-i18n>{{ item }}</li>
                         <li v-if="!(plan.presentation.approval.contract.alternatives || []).length">未填写</li>
                       </ul>
-                      <span>Reason</span>
+                      <h4>{{ t("方案依据") }}</h4>
                       <small data-no-i18n>{{ plan.presentation.approval.contract.reason || "未填写审批原因" }}</small>
-                    </div>
-                    <section class="knowledge-approval-contract-section">
-                      <h4>文件改动</h4>
+                      </div>
+                    </details>
+                    <details v-if="plan.presentation.approval.contract.files.length" class="knowledge-approval-disclosure">
+                      <summary>{{ t("文件改动") }} <small>{{ plan.presentation.approval.contract.files.length }}</small></summary>
+                      <div class="knowledge-approval-disclosure-body">
                       <div v-for="(item, index) in plan.presentation.approval.contract.files" :key="`file-${index}`" class="knowledge-approval-contract-item">
                         <div><v-chip size="x-small" variant="tonal">{{ approvalFileAction(item.action) }}</v-chip><code data-no-i18n>{{ item.path }}</code></div>
                         <p data-no-i18n>{{ item.change }}</p>
                         <small v-if="item.destination" data-no-i18n>目标：{{ item.destination }}</small>
                       </div>
-                      <p v-if="!plan.presentation.approval.contract.files.length">无文件改动；如实际涉及文件，必须补充真实路径、动作和具体改法。</p>
-                    </section>
-                    <section class="knowledge-approval-contract-section">
-                      <h4>执行命令</h4>
+                    </div>
+                    </details>
+                    <details v-if="plan.presentation.approval.contract.commands.length" class="knowledge-approval-disclosure">
+                      <summary>{{ t("执行命令") }} <small>{{ plan.presentation.approval.contract.commands.length }}</small></summary>
+                      <div class="knowledge-approval-disclosure-body">
                       <div v-for="(item, index) in plan.presentation.approval.contract.commands" :key="`command-${index}`" class="knowledge-approval-contract-item">
                         <code data-no-i18n>{{ item.command }}</code>
                         <p data-no-i18n>{{ item.purpose }}</p>
                         <small v-if="item.expectedEffect" data-no-i18n>预期影响：{{ item.expectedEffect }}</small>
                       </div>
-                      <p v-if="!plan.presentation.approval.contract.commands.length">无执行命令；如实际需运行命令，必须补充完整命令、用途和影响。</p>
-                    </section>
-                    <section class="knowledge-approval-contract-section">
-                      <h4>配置、数据或外部环境变更</h4>
+                    </div>
+                    </details>
+                    <section v-if="plan.presentation.approval.contract.changes.length" class="knowledge-approval-contract-section knowledge-approval-impact">
+                      <h4>{{ t("配置与外部影响") }}</h4>
                       <div v-for="(item, index) in plan.presentation.approval.contract.changes" :key="`change-${index}`" class="knowledge-approval-contract-item">
                         <b data-no-i18n>{{ item.target }}</b>
                         <p data-no-i18n>{{ item.change }}</p>
                         <small v-if="item.impact" data-no-i18n>影响：{{ item.impact }}</small>
                       </div>
-                      <p v-if="!plan.presentation.approval.contract.changes.length">无配置、数据或外部系统变更；如实际涉及，必须补充目标、改动和影响。</p>
                     </section>
+                    <details class="knowledge-approval-disclosure">
+                      <summary>{{ t('验收、回退与范围') }}</summary>
                     <div class="knowledge-approval-contract-grid">
                       <section>
                         <h4>批准后如何验证</h4>
@@ -3270,16 +3240,13 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                         <ul><li v-for="(item, index) in plan.presentation.approval.contract.outOfScope" :key="`scope-${index}`" data-no-i18n>{{ item }}</li></ul>
                       </section>
                     </div>
-                    <section class="knowledge-approval-contract-section">
-                      <h4>审批附件 / 效果图 / 报告</h4>
-                      <div v-for="attachment in plan.attachments" :key="attachment.id" class="knowledge-approval-contract-item">
-                        <b data-no-i18n>{{ attachment.name }}</b>
-                        <small data-no-i18n>{{ attachment.mimeType || attachment.kind }} · {{ formatAttachmentSize(attachment.size) }}</small>
-                      </div>
-                      <p v-if="!plan.attachments.length">当前计划没有审批附件；已有产物时必须作为计划附件提交，不能只写本机路径。</p>
-                    </section>
-                    <section class="knowledge-approval-contract-section">
-                      <h4>审批请求与回执</h4>
+                    </details>
+
+                    <details class="knowledge-approval-disclosure">
+                      <summary>{{ t("审批请求与回执") }}</summary>
+                      <div class="knowledge-approval-disclosure-body">
+                        <span>审批人 / 责任人</span>
+                        <p data-no-i18n>{{ plan.presentation.approval.contract.approver || "未填写" }}</p>
                       <div class="knowledge-approval-contract-item">
                         <b>最近请求时间</b>
                         <p data-no-i18n>{{ plan.presentation.approval.contract.requestedAt ? formatDate(plan.presentation.approval.contract.requestedAt) : "未填写" }}</p>
@@ -3289,8 +3256,11 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                         <p>{{ approvalResponseStatusLabel(plan.presentation.approval.contract.responseStatus) }}</p>
                         <small v-if="plan.approval.latest" data-no-i18n>最近记录：{{ plan.approval.latest.id }} · {{ plan.approval.latest.deliveryStatus }} · {{ formatDate(plan.approval.latest.updatedAt) }}</small>
                       </div>
-                    </section>
+                    </div>
+                    </details>
                   </div>
+                  <details v-if="approvalRecordsForDisplay(plan).length" class="knowledge-approval-disclosure">
+                    <summary>{{ t('审批意见记录') }} <small>{{ approvalRecordsForDisplay(plan).length }}</small></summary>
                   <div v-if="approvalRecordsForDisplay(plan).length" class="knowledge-approval-history" :aria-label="t('审批意见记录')">
                     <article
                       v-for="feedback in approvalRecordsForDisplay(plan)"
@@ -3327,6 +3297,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                       </div>
                     </article>
                   </div>
+                  </details>
                   <div
                     v-if="approvalComposeStatus(plan)"
                     class="knowledge-approval-compose-status"
@@ -3341,8 +3312,19 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                       <span>{{ approvalComposeStatus(plan)?.text }}</span>
                     </span>
                   </div>
+                  <PlanQuestionFields
+                    v-if="feedbackQuestions(plan).length"
+                    :questions="feedbackQuestions(plan)" :answers="questionAnswers(plan)" :form-id="`approval-${plan.id}`"
+                    :plan-attachments="plan.attachments" :attachment-url="(id) => planAttachmentUrl(plan.id, id)"
+                    :submit-disabled="!canSubmitApproval(plan, false)"
+                    @add-files="addApprovalFiles(plan.id, $event.files, $event.fromClipboard)"
+                    @submit="sendApprovalSuggestion(plan, false)"
+                    :disabled="!canEditApprovalFeedback(plan) || Boolean(approvalDeliveryPending[plan.id])"
+                    @change="(id, answer) => updateQuestionAnswer(plan, id, answer)"
+                  />
                   <PlanFeedbackComposer
                     :composer-id="`approval-${plan.id}`"
+                    :footer-only="Boolean(feedbackQuestions(plan).length)"
                     :model-value="approvalDrafts[plan.id] || ''"
                     :plan-attachments="plan.attachments"
                     :attachments="approvalAttachmentsFor(plan.id)"
@@ -3354,13 +3336,16 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                     :submit-disabled="!canSubmitApproval(plan)"
                     :pending="Boolean(approvalPending[plan.id])"
                     :notice="approvalNotices[plan.id]"
-                    :submit-label="approvalSubmitLabel(plan)"
+                    :submit-label="t('提交并投递')"
+                    :submit-record-only-label="t('提交')"
+                    :record-only-disabled="!canSubmitApproval(plan, false)"
                     submit-icon="mdi-send-check-outline"
-                    footer-text="意见会关联当前 planId 与 stepId，QQ 和本页面可使用同一记录接口。"
+                    footer-text="提交仅保存；提交并投递会通知 Agent。"
                     @update:model-value="approvalDrafts[plan.id] = $event"
                     @add-files="addApprovalFiles(plan.id, $event.files, $event.fromClipboard)"
                     @remove-attachment="removeApprovalAttachment(plan.id, $event)"
-                    @submit="sendApprovalSuggestion(plan)"
+                    @submit="sendApprovalSuggestion(plan, true)"
+                    @submit-record-only="sendApprovalSuggestion(plan, false)"
                   />
                     </section>
                 </div>

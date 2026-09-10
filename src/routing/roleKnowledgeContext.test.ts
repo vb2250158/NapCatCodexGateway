@@ -48,31 +48,18 @@ test("AgentPacket plan hints explain shared guidance and approval feedback workf
   assert.match(hints, /412[^\n]*废弃[^\n]*重新 GET[^\n]*新[^\n]*Idempotency-Key/);
 });
 
-test("focused AgentPacket hints keep plan attachment discovery available", () => {
+test("focused hints require on-demand contracts and omit unrelated operation tutorials", () => {
   const view = buildRoleKnowledgeContextView("Rabi Test", {
     contextInjection: { mode: "focused" },
-    requiredReadItems: [],
-    matchedSkills: [],
-    activePlans: [],
-    activeSkills: [],
-    recentMemories: [],
-    matchedItems: []
+    agentInterfaceDocPath: "runtime/docs/rabi-agent-interfaces.md",
+    requiredReadItems: [], matchedSkills: [], activePlans: [], activeSkills: [], recentMemories: [], matchedItems: []
   } as unknown as Parameters<typeof buildRoleKnowledgeContextView>[1]);
   const hints = view.apiHintLines.join("\n");
-
-    assert.match(hints, /待审批计划/);
-    assert.match(hints, /计划 attachments/);
-    assert.match(hints, /图片、视频预览/);
-    assert.match(hints, /plan\.status 只保存/);
-    assert.match(hints, /无法形成可审批具体方案/);
-    assert.match(hints, /roles\.analysis、roles\.informationNeeded、roles\.approval、roles\.execution/);
-    assert.match(hints, /roles\.waitingPackage/);
-    assert.match(hints, /roles\.waitingQa/);
-    assert.match(hints, /roles\.closed/);
-    assert.match(hints, /POST \/api\/personas\/\{personaId\}\/messages/);
-    assert.match(hints, /Idempotency-Key/);
-    assert.match(hints, /有界超时/);
-    assert.match(hints, /applicationGenerationId/);
-    assert.match(hints, /managerInstanceId/);
-    assert.match(hints, /412[^\n]*废弃[^\n]*新[^\n]*Idempotency-Key/);
-  });
+  assert.match(hints, /runtime\/docs\/rabi-agent-interfaces.md/);
+  assert.match(hints, /无法读取时停止该操作/);
+  assert.match(hints, /Idempotency-Key/);
+  assert.match(hints, /强 ETag \/ If-Match/);
+  assert.match(hints, /写后回读/);
+  assert.doesNotMatch(hints, /roles\.waitingPackage|contentBase64|hopCount/);
+  assert.ok(hints.length < 500);
+});

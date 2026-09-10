@@ -16,7 +16,6 @@ import {
   type CodexHookContextRequest,
   type PlanTaskCompletionDelivery
 } from "./codexHookContext.js";
-import type { PangHuProgressNotificationDelivery, PangHuProgressNotificationResult } from "./panghuProgressNotificationGate.js";
 
 function publishFixtureRoleKnowledge(roleDir: string): void {
   publishRoleKnowledgeCatalogSnapshot(roleDir, readRoleKnowledgeCatalogSnapshot(roleDir));
@@ -24,11 +23,10 @@ function publishFixtureRoleKnowledge(roleDir: string): void {
 
 function fixture(options: {
   deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
+  deliverAgentCompletion?: (request: CodexHookContextRequest) => Promise<import("./agentCompletionDelivery.js").CompletionDeliveryResult[]>;
   hookEnabled?: (request: CodexHookContextRequest) => boolean;
   isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
   recordAgentRequestStop?: (request: CodexHookContextRequest) => { status: "scheduled"; reason: string; requestIds: string[]; turnId?: string };
-  findPangHuProgressIssue?: (plan: any) => PangHuProgressNotificationDelivery["issue"] | undefined;
-  deliverPangHuProgressNotification?: (delivery: PangHuProgressNotificationDelivery) => Promise<PangHuProgressNotificationResult>;
   planStorageReady?: () => boolean;
 } = {}): { root: string; rolesRoot: string; roleDir: string; storePath: string; service: CodexHookContextService } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-"));
@@ -79,11 +77,10 @@ function fixture(options: {
       rolesRoot: () => rolesRoot,
       storePath,
       deliverPlanTaskCompletion: options.deliverPlanTaskCompletion,
+      deliverAgentCompletion: options.deliverAgentCompletion,
       hookEnabled: options.hookEnabled,
       isManagedAgentSession: options.isManagedAgentSession,
       recordAgentRequestStop: options.recordAgentRequestStop,
-      findPangHuProgressIssue: options.findPangHuProgressIssue,
-      deliverPangHuProgressNotification: options.deliverPangHuProgressNotification,
       planStorageReady: options.planStorageReady
     })
   };
@@ -109,6 +106,25 @@ test("Stop completion is rejected before internal plan reads or mutations while 
   );
   assert.equal(deliveries, 0);
   assert.equal(fs.existsSync(storePath), false);
+});
+
+test("persona followup reads saved config, deduplicates and delays completion delivery", async (t) => {
+  let deliveries = 0;
+  const { root, roleDir, storePath, service } = fixture({ deliverPlanTaskCompletion: async () => { deliveries++; } });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configPath = path.join(roleDir, "personaConfig.json");
+  const saved = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
+  fs.writeFileSync(configPath, JSON.stringify({ ...saved, codexHooks: { ...saved.codexHooks,
+    planFollowup: { enabled: true, cooldownSeconds: 0, rules: [
+      { id: "execution", enabled: true, statusKeys: ["执行中"], prompt: "Check the approved work" }
+    ] } } }));
+  const request: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", turnId: "followup", cwd: root, lastAssistantMessage: "Result" };
+  assert.match((await service.handleHook(request)).followup!.reason, /Check the approved work/);
+  assert.equal(deliveries, 0);
+  assert.equal(Object.keys(JSON.parse(fs.readFileSync(storePath, "utf8")).planFollowups).length, 1);
+  assert.equal((await service.handleHook({ ...request, stopHookActive: true })).followup, undefined);
+  assert.equal(deliveries, 1);
+  assert.equal((await service.handleHook({ ...request, turnId: "later" })).followup, undefined);
 });
 
 test("Codex hook control markers remain strict", () => {
@@ -691,129 +707,17 @@ test("Stop hook delivery failures are recorded without blocking the Codex turn",
 });
 
 
-test("PangHu read-only investigation progress requires a verified group receipt before Stop completes", async (t) => {
-  const deliveries: PangHuProgressNotificationDelivery[] = [];
-  const { root, roleDir, service } = fixture({
-    findPangHuProgressIssue: () => ({ groupId: "example-managed-group", sourceMessageId: "source-progress-1", module: "调查", summary: "只读核对" }),
-    deliverPangHuProgressNotification: async (delivery) => {
-      deliveries.push(delivery);
-      return { status: "failed", reason: "platform_reference_readback_incomplete", sentMessageId: "sent-1", platformReferenceReadback: false };
-    }
+
+
+test("bound tasks forward the entire final to configured event delivery without business-specific progress", async t => {
+  const messages: string[] = [];
+  const { root, service } = fixture({
+    deliverPlanTaskCompletion: async () => {},
+    deliverAgentCompletion: async request => { messages.push(request.lastAssistantMessage!); return [{ ruleId: "configured", status: "sent" }]; }
   });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const planPath = planJsonFile(roleDir, "plan-hook", "active");
-  const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
-  plan.taskBinding.workspace = "C:\\Data\\CottonProject\\PangHu";
-  fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf8");
-  publishFixtureRoleKnowledge(roleDir);
-
-  const result = await service.handleHook({
-    sessionId: "session-plan-worker",
-    eventName: "Stop",
-    turnId: "panghu-readonly-turn",
-    cwd: "C:\\Data\\CottonProject\\PangHu",
-    lastAssistantMessage: "只读调查已核对 Manager、Outbox 和群回执链，确认现有完成提醒不会发送工作群消息。"
-  });
-  assert.equal(deliveries.length, 1);
-  assert.equal(result.pangHuProgressNotification?.status, "failed");
-  assert.equal(result.planTaskCompletion?.reason, "panghu_progress_notification_required");
-  assert.match(result.additionalContext, /工作群同步没有取得完整回执/);
-});
-
-test("PangHu progress without an issue mapping blocks Stop and does not send", async (t) => {
-  let sends = 0;
-  const { root, roleDir, service } = fixture({
-    findPangHuProgressIssue: () => undefined,
-    deliverPangHuProgressNotification: async () => {
-      sends += 1;
-      return { status: "sent", reason: "unexpected", sentMessageId: "sent-unexpected", platformReferenceReadback: true };
-    }
-  });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const planPath = planJsonFile(roleDir, "plan-hook", "active");
-  const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
-  plan.taskBinding.workspace = "C:\\Data\\CottonProject\\PangHu";
-  fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf8");
-  publishFixtureRoleKnowledge(roleDir);
-
-  const result = await service.handleHook({
-    sessionId: "session-plan-worker",
-    eventName: "Stop",
-    turnId: "panghu-mapping-missing-turn",
-    cwd: "C:\\Data\\CottonProject\\PangHu",
-    lastAssistantMessage: "已完成只读调查，确认工作群映射仍缺失。"
-  });
-  assert.equal(sends, 0);
-  assert.equal(result.pangHuProgressNotification?.status, "failed");
-  assert.equal(result.pangHuProgressNotification?.reason, "PANGHU_PROGRESS_NOTIFICATION_CONTEXT_REQUIRED");
-  assert.equal(result.planTaskCompletion?.reason, "panghu_progress_notification_required");
-  assert.match(result.additionalContext, /工作群同步没有取得完整回执/);
-});
-
-test("PangHu progress passes only after sentMessageId and platform reference readback", async (t) => {
-  let completionDeliveries = 0;
-  const { root, roleDir, service } = fixture({
-    deliverPlanTaskCompletion: async () => { completionDeliveries += 1; },
-    findPangHuProgressIssue: () => ({ groupId: "example-managed-group", sourceMessageId: "source-progress-2", module: "实现", summary: "群同步门禁" }),
-    deliverPangHuProgressNotification: async () => ({
-      status: "sent",
-      reason: "outbox_sent_and_napcat_reference_readback",
-      sentMessageId: "sent-2",
-      platformReferenceReadback: true
-    })
-  });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const planPath = planJsonFile(roleDir, "plan-hook", "active");
-  const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
-  plan.taskBinding.workspace = "C:\\Data\\CottonProject\\PangHu";
-  fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf8");
-  publishFixtureRoleKnowledge(roleDir);
-
-  const first = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId: "panghu-sent-turn", cwd: "C:\\Data\\CottonProject\\PangHu", lastAssistantMessage: "实现完成：Stop Hook 已接入 Outbox 和 NapCat 引用回读。" });
-  assert.equal(first.pangHuProgressNotification?.status, "sent");
-  assert.equal(first.pangHuProgressNotification?.sentMessageId, "sent-2");
-  assert.equal(first.pangHuProgressNotification?.platformReferenceReadback, true);
-  assert.equal(first.planTaskCompletion?.status, "delivered");
-  assert.equal(completionDeliveries, 1);
-});
-
-test("non-PangHu workspaces and unchanged poll messages do not trigger group progress sends", async (t) => {
-  let sends = 0;
-  const { root, roleDir, service } = fixture({
-    findPangHuProgressIssue: () => ({ groupId: "example-managed-group", sourceMessageId: "source-progress-3" }),
-    deliverPangHuProgressNotification: async () => { sends += 1; return { status: "sent", reason: "ok", sentMessageId: "sent-3", platformReferenceReadback: true }; }
-  });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const planPath = planJsonFile(roleDir, "plan-hook", "active");
-  const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
-  plan.taskBinding.workspace = root;
-  fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf8");
-  publishFixtureRoleKnowledge(roleDir);
-  await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId: "non-panghu-turn", cwd: root, lastAssistantMessage: "调查已完成。" });
-  assert.equal(sends, 0);
-
-  plan.taskBinding.workspace = "C:\\Data\\CottonProject\\PangHu";
-  fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf8");
-  publishFixtureRoleKnowledge(roleDir);
-  const unchanged = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId: "unchanged-turn", cwd: "C:\\Data\\CottonProject\\PangHu", lastAssistantMessage: "重复轮询，无变化。" });
-  assert.notEqual(unchanged.pangHuProgressNotification?.status, "sent");
-  assert.equal(sends, 0);
-});
-
-test("PangHu progress send is deduplicated by unchanged progress fingerprint, not merged across plans", async (t) => {
-  let sends = 0;
-  const { root, roleDir, service } = fixture({
-    findPangHuProgressIssue: () => ({ groupId: "example-managed-group", sourceMessageId: "source-progress-4" }),
-    deliverPangHuProgressNotification: async () => { sends += 1; return { status: "sent", reason: "ok", sentMessageId: `sent-${sends}`, platformReferenceReadback: true }; }
-  });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const planPath = planJsonFile(roleDir, "plan-hook", "active");
-  const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
-  plan.taskBinding.workspace = "C:\\Data\\CottonProject\\PangHu";
-  fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf8");
-  publishFixtureRoleKnowledge(roleDir);
-  for (const turnId of ["progress-first", "progress-second"]) {
-    await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId, cwd: "C:\\Data\\CottonProject\\PangHu", lastAssistantMessage: "实现已写入并完成静态检查。" });
-  }
-  assert.equal(sends, 1);
+  const final = "文档已写好：\n\n[说明](https://example.com/mechanism)\n\n机制：保留完整内容。\n验证：等待实际验收。";
+  const result = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId: "full-final", cwd: root, lastAssistantMessage: final });
+  assert.deepEqual(messages, [final]);
+  assert.deepEqual(result.completionDeliveries, [{ ruleId: "configured", status: "sent" }]);
 });

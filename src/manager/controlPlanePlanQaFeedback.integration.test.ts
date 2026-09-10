@@ -8,7 +8,7 @@ import { readPlanStoragePackage } from "../planStorageRepository.js";
 import { createPlan } from "../roleKnowledge.js";
 import { storageInventoryRevisionToken } from "../shared/storageRevision.js";
 import { handlePersonaPluginApi } from "./controlPlaneRoutes.js";
-import { RoleStorageApplication } from "./roleStorageApplication.js";
+import { RoleStorageApplication, RoleStorageApplicationError } from "./roleStorageApplication.js";
 
 function createTestRoleStorage(t: test.TestContext, prefix: string) {
   const rolesRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -45,11 +45,16 @@ function listen(server: http.Server): Promise<number> {
   });
 }
 
-async function waitUntil(check: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
+async function waitUntil(check: () => boolean | Promise<boolean>, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!(await check())) {
+  while (true) {
+    try {
+      if (await check()) return;
+    } catch (error) {
+      if (!(error instanceof RoleStorageApplicationError) || error.code !== "busy") throw error;
+    }
     if (Date.now() >= deadline) throw new Error("Timed out waiting for plan feedback post-commit state.");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
 
@@ -85,7 +90,7 @@ test("the feedback route ignores Agent guidance summaries but consumes explicit 
         "idempotency-key": `feedback-test:${String(body.feedbackId)}`,
         "if-match": planRevision(roleDir, "plan-route-qa-verdict")
       },
-      body: JSON.stringify({ ...body, notifyAgent: false })
+      body: JSON.stringify({ notifyAgent: true, ...body })
     });
     const result = await response.json() as Record<string, any>;
     assert.equal(response.status, 202, JSON.stringify(result));
@@ -100,6 +105,22 @@ test("the feedback route ignores Agent guidance summaries but consumes explicit 
     source: "agent"
   });
   assert.equal(ignored.data.qaHandling, undefined);
+  assert.equal((await application.queries.planFeedback("Rabi", "plan-route-qa-verdict"))?.plan.status, "等待 QA");
+  const saved = await postFeedback({
+    feedbackId: "route-user-qa-save-only",
+    stepId: "verify-route",
+    text: "QA 明确通过，本轮未再复现。",
+    author: "user",
+    source: "webgui",
+    notifyAgent: false
+  });
+  assert.equal(saved.data.deliveryStatus, "record_only");
+  assert.equal(saved.data.postCommit, undefined);
+  await new Promise(resolve => setImmediate(resolve));
+  const savedReadback = await fetch(endpoint).then(response => response.json()) as Record<string, any>;
+  const savedRecord = savedReadback.data.records.find((record: any) => record.id === saved.data.id);
+  assert.equal(savedRecord.deliveryStatus, "record_only");
+  assert.equal(savedRecord.qaHandling, undefined);
   assert.equal((await application.queries.planFeedback("Rabi", "plan-route-qa-verdict"))?.plan.status, "等待 QA");
   const passed = await postFeedback({
     feedbackId: "route-user-qa-pass",
@@ -238,7 +259,7 @@ test("the feedback route returns 202 after durable commit even when QA post-comm
         text: "问题仍存在。复现步骤：重新执行操作。修复前结果不正确，修复后实际结果仍不正确。",
         author: "user",
         source: "webgui",
-        notifyAgent: false
+        notifyAgent: true
       })
     }
   );

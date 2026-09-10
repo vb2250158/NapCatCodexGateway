@@ -9,14 +9,15 @@ import { ManagerConfigRepository, migrateLegacyCopilotThreadName } from "./confi
 import {
   executeDurableRouteCatalogMutation,
   recoverRouteCatalogTransactions,
+  readCommittedReceipt,
   RouteCatalogIdempotencyConflictError
 } from "./routeCatalogDurableTransaction.js";
 import { routeCatalogSnapshotIdentities } from "./routeCatalogIdentity.js";
 
 export type RouteCatalogTransactionOperation =
-  | Readonly<{ kind: "capture" }>
+  | Readonly<{ kind: "capture"; resolveOperationId?: string }>
   | Readonly<{ kind: "replace"; config: GatewayConfigFile; expectedContentHash?: string }>
-  | Readonly<{ kind: "upsert"; definition: GatewayDefinition; expectedContentHash?: string }>
+  | Readonly<{ kind: "upsert"; definition: GatewayDefinition; expectedContentHash?: string; previousId?: string }>
   | Readonly<{ kind: "remove"; routeId: string; expectedContentHash?: string }>
   | Readonly<{ kind: "ensure_persona"; roleId: string }>
   | Readonly<{ kind: "ensure_role_file"; roleId: string; roleFile: string }>
@@ -35,6 +36,7 @@ export type RouteCatalogTransactionInput = Readonly<{
 }>;
 
 export type RouteCatalogSnapshot = Readonly<{
+  resolvedMutation?: { operationId: string; state: "committed" | "not_committed" };
   requestId: string;
   attemptToken: string;
   contentHash: string;
@@ -372,7 +374,15 @@ export function executeRouteCatalogTransaction(input: RouteCatalogTransactionInp
   const operation = input.operation;
   switch (operation.kind) {
     case "capture":
-      return capture(repository, input.readOnly, input);
+      return {
+        ...capture(repository, input.readOnly, input),
+        ...(operation.resolveOperationId ? {
+          resolvedMutation: {
+            operationId: operation.resolveOperationId,
+            state: readCommittedReceipt({ routeRoot: input.routeRoot, operationId: operation.resolveOperationId }) ? "committed" as const : "not_committed" as const
+          }
+        } : {})
+      };
     case "replace":
       requireWritable(input);
       return executeDurableRouteCatalogMutation(input, {
@@ -386,11 +396,18 @@ export function executeRouteCatalogTransaction(input: RouteCatalogTransactionInp
       if (!targetName) throw new Error("Route catalog upsert requires a valid config name.");
       return executeDurableRouteCatalogMutation(input, {
         capture: () => capture(repository, false, input),
-        prepare: current => assertExpectedContentHash(operation, current),
+        prepare: current => {
+          assertExpectedContentHash(operation, current);
+          if (operation.previousId && current.gateways.some(definition =>
+            routeConfigName(definition) === targetName && definition.id !== operation.previousId
+          )) throw new Error("A different Route already uses this config name.");
+        },
         mutate: currentSnapshot => {
           let replaced = false;
           const gateways = currentSnapshot.gateways.map(definition => {
-            if (routeConfigName(definition) !== targetName && definition.id !== operation.definition.id) {
+            if (operation.previousId
+              ? definition.id !== operation.previousId
+              : routeConfigName(definition) !== targetName && definition.id !== operation.definition.id) {
               return definition;
             }
             replaced = true;
@@ -398,7 +415,7 @@ export function executeRouteCatalogTransaction(input: RouteCatalogTransactionInp
           });
           repository.writeConfig({
             gateways: replaced ? gateways : [...gateways, operation.definition]
-          });
+          }, operation.previousId ? { configName: targetName, previousId: operation.previousId } : undefined);
         }
       });
     }

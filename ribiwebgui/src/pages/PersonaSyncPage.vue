@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import PersonaSyncCard from "../components/PersonaSyncCard.vue";
 import { managerEventSource } from "../managerApi";
@@ -60,12 +60,6 @@ function startEvents(): void {
   managerEvents.addEventListener("rabilink_status", () => { peerVersion.value += 1; });
   managerEvents.addEventListener("persona_sync_lan_status", () => { peerVersion.value += 1; });
 }
-
-watch([() => route.params.id as string, () => store.gateways], ([id]) => {
-  if (!id || !store.gateways.length) return;
-  const found = store.gateways.find(item => configNameFor(item) === id || item.id === id);
-  if (found && found.id !== store.selectedGatewayId) store.selectGateway(found.id);
-}, { immediate: true });
 
 onMounted(startEvents);
 

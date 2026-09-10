@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { startManagerStallDiagnostics } from "./managerStallDiagnostics.js";
 import { projectDirectoryLayout } from "./shared/projectDirectoryLayout.js";
 
 type RuntimeEventKind =
   | "process_start"
+  | "startup_cpu_sample"
   | "startup_failure"
   | "uncaught_exception"
   | "process_exit";
@@ -20,6 +22,7 @@ export type ManagerRuntimeEvent = {
   nodeVersion: string;
   platform: NodeJS.Platform;
   exitCode?: number;
+  cpuSample?: Parameters<Parameters<typeof startManagerStallDiagnostics>[0]>[0];
   error?: {
     name: string;
     message: string;
@@ -43,7 +46,7 @@ export type ManagerRuntimeDiagnosticsOptions = {
 export type ManagerRuntimeDiagnostics = {
   startedAt: string;
   logDirectory: string;
-  record(event: RuntimeEventKind, detail?: { error?: unknown; exitCode?: number }): ManagerRuntimeEvent | null;
+  record(event: RuntimeEventKind, detail?: { error?: unknown; exitCode?: number; cpuSample?: ManagerRuntimeEvent["cpuSample"] }): ManagerRuntimeEvent | null;
   summary(): {
     pid: number;
     parentPid: number;
@@ -129,6 +132,7 @@ export function createManagerRuntimeDiagnostics(
         nodeVersion,
         platform,
         exitCode: Number.isInteger(detail.exitCode) ? detail.exitCode : undefined,
+        cpuSample: detail.cpuSample,
         error: detail.error === undefined ? undefined : safeError(detail.error, projectRoot)
       };
       try {
@@ -162,10 +166,12 @@ export function installManagerRuntimeDiagnostics(
 ): ManagerRuntimeDiagnostics {
   const diagnostics = createManagerRuntimeDiagnostics(options);
   diagnostics.record("process_start");
+  const stopSampling = startManagerStallDiagnostics(cpuSample => diagnostics.record("startup_cpu_sample", { cpuSample }));
   process.on("uncaughtExceptionMonitor", (error) => {
     diagnostics.record("uncaught_exception", { error });
   });
   process.once("exit", (exitCode) => {
+    stopSampling();
     diagnostics.record("process_exit", { exitCode });
   });
   installedDiagnostics = diagnostics;

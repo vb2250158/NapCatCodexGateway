@@ -1,3 +1,4 @@
+import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import http from "node:http";
 import {
   CodexHookContextService,
@@ -6,6 +7,7 @@ import {
 } from "./codexHookContext.js";
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
+  body = errorResponsePresentation(body, statusCode);
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body, null, 2));
 }
@@ -42,7 +44,7 @@ function managerBaseUrl(request: http.IncomingMessage): string {
   return `http://${host}`;
 }
 
-function hookContextRequest(body: Record<string, unknown>, request: http.IncomingMessage) {
+export function hookContextRequest(body: Record<string, unknown>, request: http.IncomingMessage) {
   return {
     agentType: typeof body.agentType === "string" ? body.agentType : "codex",
     sessionId: String(body.session_id || body.sessionId || ""),

@@ -11,9 +11,16 @@ android {
     compileSdk 34
 
     def velaDebugKeystore = rootProject.file("signing/vela-debug.p12")
+    def restoredDebugKeystore = rootProject.file("secrets/rokid/signing/debug.keystore")
     def rokidAiSdkAssetsDir = rootProject.file("out/reference/RokidAiSdkDemo/app/src/main/assets")
 
     signingConfigs {
+        restoredDebug {
+            storeFile restoredDebugKeystore
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
         velaDebug {
             storeFile velaDebugKeystore
             storeType "pkcs12"
@@ -35,8 +42,8 @@ android {
         testInstrumentationRunner "com.rabi.link.test.DirectVideoInstrumentation"
         // The thin-phone package must always be an installable upgrade over
         // the prior diagnostic build.  Keep the normal build metadata intact.
-        versionCode mobileSlim ? 23 : 4
-        versionName mobileSlim ? "0.3.20" : "0.3.1"
+        versionCode mobileSlim ? 25 : 4
+        versionName mobileSlim ? "0.3.22" : "0.3.1"
         buildConfigField "boolean", "MOBILE_SLIM", mobileSlim ? "true" : "false"
         buildConfigField "boolean", "ROKID_VIDEO", (!mobileSlim || rokidVideo) ? "true" : "false"
         buildConfigField "String", "BUILD_TIME", "\"${new Date().format("yyyy-MM-dd HH:mm:ss Z")}\""
@@ -44,7 +51,9 @@ android {
 
     buildTypes {
         debug {
-            if (velaDebugKeystore.exists()) {
+            if (restoredDebugKeystore.exists()) {
+                signingConfig signingConfigs.restoredDebug
+            } else if (velaDebugKeystore.exists()) {
                 signingConfig signingConfigs.velaDebug
             }
         }
@@ -63,21 +72,21 @@ android {
         jvmTarget = "1.8"
     }
 
-    // The regular phone build must not accidentally ship the glass test APK,
-    // reference AI models, or desktop/legacy ABIs.  Keep those only in the
-    // explicitly requested diagnostics build.
+    // The companion APK is required for automatic glasses streaming. Reference
+    // models and phone-side legacy ABIs remain excluded from the slim build.
     sourceSets {
         main {
+            jniLibs.srcDir("$rootDir/out/live-recorder/jniLibs")
+            assets.srcDir("$rootDir/out/live-recorder/assets")
             java.srcDir("$rootDir/../../packages/android-sdk/rabiroute-sdk/src/main/java")
             java.srcDir("$rootDir/shared/src/main/java")
             if (!mobileSlim && rokidAiSdkAssetsDir.exists()) {
                 assets.srcDir(rokidAiSdkAssetsDir)
             }
         }
-        if (!mobileSlim) {
-            debug {
-            assets.srcDir("$buildDir/generated/assets/glassApp/debug")
-            }
+        debug {
+            assets.srcDir("$buildDir/generated/assets/glassVideo/debug")
+            if (!mobileSlim) assets.srcDir("$buildDir/generated/assets/glassApp/debug")
         }
     }
 
@@ -88,11 +97,18 @@ android {
     }
 
     packagingOptions {
+        jniLibs { useLegacyPackaging = true }
         pickFirst "lib/armeabi-v7a/librlog.so"
         pickFirst "lib/armeabi-v7a/libcaps.so"
         pickFirst "lib/armeabi-v7a/libflora-cli.so"
     }
 }
+
+tasks.register("prepareLiveRecorderRuntime", Exec) {
+    workingDir rootProject.projectDir
+    commandLine "node", "scripts/Prepare-LiveRecorderRuntime.mjs"
+}
+tasks.named("preBuild").configure { dependsOn("prepareLiveRecorderRuntime") }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = "UTF-8"
@@ -105,13 +121,21 @@ tasks.register("copyGlassAppDebugApk", Copy) {
     rename { "rabi-glass-debug.apk" }
 }
 
-if (!project.hasProperty("mobileSlim")) {
-    tasks.matching { it.name == "mergeDebugAssets" }.configureEach {
-        dependsOn("copyGlassAppDebugApk")
-    }
+tasks.matching { it.name == "mergeDebugAssets" }.configureEach {
+    if (!mobileSlim) dependsOn("copyGlassAppDebugApk")
+    dependsOn("copyGlassVideoDebugApk")
+}
+tasks.register("copyGlassVideoDebugApk", Copy) {
+    dependsOn(":glass-video-app:assembleDebug")
+    from(rootProject.file("glass-video-app/build/outputs/apk/debug/glass-video-app-debug.apk"))
+    into("$buildDir/generated/assets/glassVideo/debug")
+    rename { "rabi-glass-video.apk" }
 }
 
 dependencies {
+    implementation "androidx.media3:media3-exoplayer:1.3.1"
+    implementation "androidx.media3:media3-exoplayer-rtsp:1.3.1"
+    implementation "androidx.media3:media3-ui:1.3.1"
     implementation "io.github.webrtc-sdk:android-prefixed:144.7559.09"
     implementation fileTree(dir: "libs", include: ["*.jar"])
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"

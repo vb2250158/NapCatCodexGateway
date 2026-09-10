@@ -42,7 +42,10 @@ test("Windows release explicitly includes only the dynamic Manager discovery hel
     releaseScript,
     /function Copy-RequiredPortableRuntimeFiles[\s\S]*Required portable runtime file is missing:[\s\S]*Copy-Item[\s\S]*Required portable runtime file was not copied:/
   );
-  assert.match(releaseScript, /Copy-RequiredPortableRuntimeFiles\s*\r?\n\s*if \(\$IncludeSpeech\)/);
+  assert.match(
+    releaseScript,
+    /Copy-RequiredPortableRuntimeFiles\s*\r?\n\s*foreach \(\$relative in @\("apps\\rabi-agent\\runtime", "apps\\rabi-agent\\dist\\agent-hooks", "skills\\rabi-knowledge-search"\)\)[\s\S]*?if \(\$IncludeSpeech\)/
+  );
 });
 
 test("Windows PowerShell 5.1 can parse every release path without a source-code code page", () => {

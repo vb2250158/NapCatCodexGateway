@@ -12,6 +12,40 @@
 
 这些接口用于让 Agent 主动维护计划和记忆，并把普通回复交回 RabiRoute。RabiRoute 负责存储、权限边界、符合人格配置条件的计划延迟归档、到点或显式发起的记忆整理请求、上下文注入和回复回传；Agent 需要关注的是：什么时候新增或更新计划、什么时候记录近期记忆、收到记忆整理请求时如何返回沉淀记忆，以及需要普通聊天回复时把内容交给回传接口。
 
+## 计划与记忆写入合同
+
+`focused` 消息包只给出本节入口。涉及计划、近期记忆、反馈或整理结果的写入前，必须先读本节及目标接口章节；文档不可读时停止该操作。写入仍受当前授权和 Action Gate 约束。计划状态先读取当前人格的 `plan-statuses`，不猜 key；附件通过计划 `attachments` 提交。
+
+1. 从 Host 状态（安装版）、结构化 READY（源码版）或测试显式注入取得当前完整 Manager URL。每次请求设置最长 12 秒的有界超时。写入前 GET `/meta`，核对 `health.state=healthy`、`health.requiredReady=true`，保存非空 `applicationGenerationId` 和 `managerInstanceId`。
+2. 每项逻辑写入先生成并保存稳定 `Idempotency-Key` 与完整请求体。PATCH 计划/近期记忆、POST 计划反馈或回传记忆整理结果前，先 GET 对应单项资源或 feedback，把返回的强 ETag 原样放入 `If-Match`。禁止使用弱 ETag、`*` 或 `updatedAt` 替代版本。新增计划、新增近期记忆和发起整理带幂等键，不带 `If-Match`。
+3. 超时、HTTP 503 或结果不确定时，保留原请求和原键，先权威读回；重试只能使用相同请求体和相同键，不创建第二项操作。HTTP 412 明确表示旧前置版本未提交：废弃旧键和旧 `If-Match`，重新 GET；原意仍适用时保存新键，以新强 ETag 提交。
+4. 成功响应必须回显完全相同的 `Idempotency-Key`、返回强 ETag，且 body 的资源身份必须与目标一致。任一条件不满足时不得宣布成功。
+5. 响应后再次有界 GET `/meta`，两项身份必须与写前一致；缺失、请求失败或切代均视为结果不确定，重新发现当前地址，保留原请求和键做权威读回或安全重试。通过资源读回核对实际结果。
+
+跨人格投递另读“查询其它人格并投递消息”，保留 deliveryId、来源能力、目标 Route 和跳数合同；远端任务另读“远端 Agent 设备接口”。按需加载说明不会放宽这些要求。
+
+## 消息投递：Rabi 可用时统一走 Rabi
+
+此规则覆盖 Rabi 管理的群聊/私聊、附件、跨人格、持久 Agent 任务正文与续投、任务结果、callback / knowledge-callback 和 Outbox。普通界面对用户的答复、只读任务核对及同一任务内临时子 Agent 协作不属于旁路投递。发送仍须有原动作授权。
+
+群聊/私聊和文件使用 `POST /api/agent/send`；跨人格使用 `POST /api/personas/{targetPersonaId}/messages`；持久任务正文与续投使用 Rabi 线程桥 `POST /api/agent/threads`；正式 callback 按来源需求合同调用。保留原 taskBinding、来源身份、requestId、tracking、引用和稳定幂等字段。Rabi 的 adapter 最终调用 NapCat、Desktop IPC 或其它平台是受管链路的一部分；调用方绕开 Rabi 才属于旁路。
+
+只有按上节动态发现、核对身份并有界重试后确认 Rabi 不可用，才允许在原授权内使用已核实的当前平台入口。旧端口拒绝连接、Hook 概括提示、参数错误、权限/策略拒绝、owner 未加载或接口能力不足，都不能单独证明 Rabi 已挂。截图或旧任务中的地址不能替代当前 generation。Rabi 健康时应解决具体接口问题，不因工具方便而直发。
+
+超时、断连和 5xx 可能发生在接收后；先读正式回执和目标接收证据。原投递结果不明时不换通道、不换 ID、不重复发送。旁路前须确认原消息未生效或具备跨通道去重证据，并核实目标身份；不得启动第二 Runtime、写会话文件、换目标或逃避审批。
+
+旁路送达只证明平台接收，不能冒充 callback、knowledge-callback、Outbox 或计划状态已记录。保留原标识、目标、时间、摘要和真实平台回执；恢复后先查状态，再按接口支持方式补录，不为补回执重发正文，不直接修改真实存储。没有补录能力时明确保留“旁路已送达，正式回传待恢复”。下一次独立投递仍从 Rabi 开始。
+
+## 消息查询：先 Rabi，无法完成时才绕过
+
+正常群聊、私聊和最新反馈查询先走 Rabi。安装版通过 `RabiRouteHost.exe --command status --json` 获取当前 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`；源码模式使用结构化 READY 地址。读取 `<managerBaseUrl>/meta`，核对 `health.state=healthy`、`health.requiredReady=true` 和 generation/实例身份。旧地址或瞬时失败时重新发现并有界重试；Hook 的概括性“Host 未运行”提示不能替代实际失败原因。不扫描端口、不读取退役实例锁、不直接启停 Manager。
+
+当前 `GET <managerBaseUrl>/api/gateways` 提供 Route 诊断，其 `messageFiles` 包含近期消息摘要。NapCat 摘要合并群聊和私聊后仅返回最近 8 条，须按目标 Route、群/私聊、消息 ID 和时间筛选；它不是完整历史检索接口。`GET /api/roles/{roleId}/chat-history` 读取的是 Agent 最终回复，不能替代 QQ 群聊历史。
+
+只有 Rabi 无法访问、接口不可用或已确认摘要无法覆盖所需历史时，才使用当前 NapCat 或正式日志补查。Rabi 可用时从当前 Route 绑定和状态取得连接；不可用时只使用当前任务明确提供的连接、当前运行实例配置或已确认的正式日志。直连前用 `get_status`、`get_login_info` 核对在线状态及账号，再调用只读历史/消息接口。不得从旧任务、记忆或安装残留逐个试账号和端口；凭据不回显。鉴权拒绝不得通过旁路逃避权限。
+
+空结果先核对目标及时间覆盖，不应归为连接故障。返回结果时区分“连接失败”“查到零条”“历史未覆盖”；绕过时说明原因、实际来源与时间范围。查询不授权发送、重放消息、修改配置或重启服务。下一次独立查询仍从 Rabi 开始。
+
 ## 上下文注入
 
 RabiRoute 投递消息给 Agent 时，应在上下文中注入本接口文档链接，让 Agent 知道当前可以关注和使用哪些 Rabi 接口：
@@ -869,7 +903,7 @@ POST <managerBaseUrl>/api/agent/threads
 | `plan` | `planName`、`planId` | 只有实际 Agent 发起且能核对时才附带 `sourceAgent` |
 | `system` | `eventType`、`eventName`、`eventId` | `actorType`、`actorName`、`actorId`、消息路线名称/ID |
 
-RabiRoute 渲染后的正文固定从以下两段开始，协作要求、回复合同、事件信息和最近消息只能放在它们之后：
+RabiRoute 渲染后的正文固定从以下两段开始，相关上下文和回传参数只能放在它们之后：
 
 ```text
 [消息源]
@@ -880,11 +914,15 @@ RabiRoute 渲染后的正文固定从以下两段开始，协作要求、回复�
 <prompt>
 ```
 
+正式回复使用精简模板：`[消息内容]` 内只保留一份 `[回复结果]` 和 `[下一步]`；`prompt` 中与这两个字段完全相同的文字不重复输出，其余文字保留为 `[补充说明]`。模板不概括或截断证据。回复合同保留投递 ID、原请求 ID、后续请求 ID、回复要求和完整 POST 参数；不再另列一遍接收任务身份或重复说明无需回复。工作区限制由目标 `AGENTS.md` 提供，投递模板不再添加通用协作提醒，也不按项目名称硬编码。
+
+新投递使用 `[回传参数]` 和完整 JSON 请求。发送前由请求记录保存结构化回复与实际正文校验值；`reconcile_delivery` 核对接收正文后从记录恢复结果，不依赖展示标题。旧格式仅用于尚未关闭的历史预留；详见[模板归属与退出条件](message-delivery-templates.md)。
+
 Agent 调用线程桥时通常使用 `type=agent`。`agentAdapter` 填实际 Agent 端，例如 `codex`、`dsh`、`copilotCli`、`marvis` 或 `astrbot`；`sessionName` 和完整 `sessionId` 都不能省略。Agent 间投递还必须提供自己的完整 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`，且 `messageSource.sessionId` 必须等于 `sourceThreadId`。`sourceAgentType` 可为 `primary_persona`、`message_processing`、`plan_secretary`、`plan_agent` 或通用的 `agent`；`responsePolicy` 只能是 `required` 或 `none`。选择 `required` 时还必须填写 `responseInstruction`，Manager 会生成 `requestId` 并把正式回复参数写进目标任务收到的内容。选择 `none` 表示本次投递不要求目标返回。
 
 带正文的 `create` 与 `send` 使用同一来源核对规则。`type=agent` 时两者都必须提供 `sourceThreadId`；Manager 从实际 Codex Desktop 或 DSH owner 读取来源会话名称并覆盖调用方提交的旧名称。计划进展、审批和 QA 等 Manager 计划事件只显示计划名称和计划 ID；只有计划任务本人回传结果时才附带并核对 `sourceAgent`。
 
-`contextBlocks` 排在消息内容之后，`controlBlocks` 再排在上下文之后。初始化、回复合同和协作要求应放入控制块。两个字段都不能包含 `[消息源]`、`[消息内容]` 或 `[投递源]`。旧 `[投递源]`、旧嵌套信封和旧 Agent 回复会自动迁移；旧重放记录无法还原来源时显示“历史投递记录”，不猜来源身份。
+`contextBlocks` 排在消息内容之后，`controlBlocks` 再排在上下文之后。回传参数与本次必要的发送要求放入控制块；通用协作段不再注入。两个字段都不能包含 `[消息源]`、`[消息内容]` 或 `[投递源]`。旧 `[投递源]`、旧嵌套信封和旧 Agent 回复会自动迁移；旧重放记录无法还原来源时显示“历史投递记录”，不猜来源身份。
 
 正式回复仍使用同一个 `send` 动作。回复方必须把 `inReplyToRequestId`、`result` 和 `nextAction` 送回原请求任务，并再次填写 `responsePolicy`：如果新的下一步还要求原请求方处理后返回，使用 `required` 并填写新的 `responseInstruction`；如果本次往返到此结束，使用 `none`。回复中的 `messageSource.agentAdapter`、`messageSource.sessionId`、`sourceThreadId` 和 workspace 必须描述当前正在回复的接收会话；`inReplyToRequestId` 单独指向原请求，不能把原请求会话或回复目标写成回复来源。
 
@@ -911,7 +949,13 @@ Agent 调用线程桥时通常使用 `type=agent`。`agentAdapter` 填实际 Age
 
 普通 Codex 最终回答不算正式回复。目标 Agent 每轮结束时，`Stop` Hook 会检查待回复请求；仍未回复时，从该轮结束起五分钟后向同一个精确任务投递提醒。提醒触发的新一轮结束后仍未回复，会再从该轮结束起等待五分钟。请求状态可通过 `GET /api/agent/requests` 或 `GET /api/agent/requests/:requestId` 查询；维护者可用 `POST /api/agent/requests/:requestId/cancel` 取消不再需要的请求。
 
-Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮次超时。Manager 会用正文中的唯一 `deliveryId` 回读目标任务最近的 rollout：确认该标记已经写入时，仍按送达成功提交请求/回复状态；没有标记时才返回可重试失败。调用方遇到超时不得立即重复发送，应先读取请求状态和目标任务最近一轮。
+Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮次超时。Manager 会用正文中的唯一 `deliveryId` 回读目标任务最近的 rollout：确认标记后提交请求/回复状态；有界等待后仍未确认时返回 HTTP `202`、`code=-1`、`status=delivery_unconfirmed` 和 `error.retryable=false`，保留原 `deliveryId`、`requestId` 及 `pending_delivery` 请求，不删除记录、不再次发送。调用方先查询原请求和目标任务，不把 HTTP `202` 当成送达成功。
+
+原目标任务正式回复一个 `pending_delivery` 请求时，线程桥先核对双方完整任务 ID、工作目录和原目标 rollout 的精确投递标记；按需流式读取该任务记录，不再因标记超出最后 4 MiB 而漏判。证据齐全才恢复为 `awaiting_response` 并继续原回复。缺少标记或身份不符时返回 `error.code=agent_reply_state_conflict`，并包含 `requestId`、`currentState`、`expectedState`、`reason`、`commitState` 和 `nextAction`。原因区分发送任务不符、接收任务不符、工作目录不符、原始接收证据缺失或不可读；`commitState=not_started` 仅表示这次回复没有发送，不能据此重发原任务。迟到的原投递提交不会把已回复请求重新打开。
+
+核对已送达但未入账的回复，调用 `POST /api/agent/threads`，正文为 `{"action":"reconcile_delivery","threadId":"<接收回复的原来源任务 ID>","deliveryId":"<原回复投递 ID>"}`。此动作不投递正文，也不接受调用方提供的结果：按需流式读取指定 Desktop 任务的原始用户消息，核对原 reservation、双方任务/工作目录、投递 ID 和后续请求合同，再经请求存储提交。读取限定于开始时的文件长度及 30 秒期限；超时或不可读保留未确认状态，不重发。成功返回 `receipt_recovered`；重复核对返回 `already_recorded`。原请求变为 `responded`，同次要求继续返回的新请求只恢复为 `awaiting_response`，不视为业务已完成。普通工具输出、助手引用或单独 ID 不构成恢复证据。
+
+提醒触发前也执行上述核对。证据仍不完整时保留 reservation、写入 `lastReminderError` 并停止本次“未回复”提醒，不无限重试或要求重发；下一次任务结束或显式核对可重新检查。读取超时、身份/合同不符及旧版本已删除的 `404` 请求均不凭猜测重建，必须保留正式回传未记录的差异。
 
 Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapter + sourceThreadId` 向实际 owner 核对来源会话。Codex 读取 Desktop 任务状态和左侧聊天栏名称；DSH 通过 apiproxy `session.list` 读取会话名称、工作目录和运行状态。来源不存在、工作目录冲突或来源 ID 与 `messageSource.sessionId` 不一致时失败关闭。所有 RabiRoute 非空投递都先显示 `[消息源]`，再显示 `[消息内容]`。消息端来源显示消息端、会话、发送者和消息 ID；Agent 来源显示 Agent 端、会话名称和完整会话 ID；计划来源显示计划名称和计划 ID；系统来源显示事件类型、名称和 ID。提醒、初始化消息、RabiLink 复盘和重放也使用同一信封。
 
@@ -922,7 +966,7 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 - Agent 互投正文必须是针对目标任务重新编写的交接内容。Manager 拒绝含 `[rabi:bind]`、消息处理 Agent 初始化或计划秘书初始化的正文，也拒绝来源与目标为同一任务；整份注入上下文不能跨任务复制。消息处理 Agent 的任务 ID如果与主人格 ID相同，消息池会拒绝初始化和投递。
 - `sandbox` 字段仅为接口兼容参数，不能覆盖目标 Desktop 任务的模型、工具、沙箱或审批；这些能力以 Desktop owner 为唯一真源。
 - 创建线程使用固定的调查边界；没有明确实施授权时，只能调查、整理证据和输出方案。
-- `create` 的固定开发说明和所有 `send` 续投都会追加工作区交付约束；未经当前用户明确授权，不得新建额外工作副本、稀疏检出、复制工程或旁路目录；工作区 `AGENTS.md` 有更严格限制时以它为准。PangHu 没有任务级例外，只能使用正式 Main、Release 和 Art，旧任务或历史记录里的隔离、稀疏、clean working copy 安排已经撤销。只有改动已经进入用户实际运行或验收的目标工作区，并完成适用的资源关联、构建或编译及运行验证，才能称为“已修复”或“可验收”。
+- `create` 的固定开发说明和所有 `send` 续投都会追加工作区交付约束；未经当前用户明确授权，不得新建额外工作副本、稀疏检出、复制工程或旁路目录；工作区 `AGENTS.md` 有更严格限制时以它为准。具体项目允许的工作副本、同步方向及历史指令的有效性由该工作区当前规则决定。只有改动已经进入用户实际运行或验收的目标工作区，并完成适用的资源关联、构建或编译及运行验证，才能称为“已修复”或“可验收”。
 - `create` 按“任务名 + 工作目录”幂等解析。相同创建请求并发到达、调用方等待超时后重试，或任务刚创建但 Desktop 索引尚未及时显示时，都会复用同一次创建结果；不得因为第一次 HTTP 超时再次创建同名任务。返回 `resolution=created` 表示本次新建，`resolution=name` 表示复用了同名同工作目录任务。
 - Manager 在运行期 `data/.runtime/codex-thread-creations/` 持久保存创建 reservation。状态按 `reserved → creating → thread_created → naming → initial_turn → completed` 推进。`creating` 超过 5 分钟、没有 `threadId`，并且第二次 `action=list + lookupMode=state_db` 明确确认同名同工作目录任务不存在时，Manager 才先转为 `failed_before_create`，再允许同键重试。记录已有 `threadId`、索引查询失败、查到候选任务或其它证据不足时转为 `uncertain`，后续请求返回 `409` 并禁止自动再次创建。
 - `create` 返回 `initialTurnStatus`。若任务已经创建但初始 turn 启动失败，应记录返回的 `threadId` 并用 `send` 重试，不能重复创建同名任务。
@@ -949,7 +993,15 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 关闭
 ```
 
-默认“待补充信息”只表示：分析已完成，但现有信息仍无法形成可审批的具体方案，且缺失信息会影响原因、改法、实施范围或验收合同。暂未复现、疑似历史已修复、等待目标包、等待 QA 或等待是否关闭都不使用该状态；这些情况应继续分析，或按证据进入“等待打包”“等待 QA”“关闭”。
+默认模板的稳定状态 key `等待 QA` 显示为“等待 QA 验收”，英文显示为“Awaiting QA acceptance”；状态 key 不变。
+
+默认“待补充信息”只表示：分析已完成，但现有信息仍无法形成可审批的具体方案，且缺失信息会影响原因、改法、实施范围或验收合同。暂未复现、疑似历史已修复、等待目标包、等待 QA 验收或等待是否关闭都不使用该状态；这些情况应继续分析，或按证据进入“等待打包”“等待 QA 验收”“关闭”。
+
+Agent 可以在已授权任务范围内主动创建和调整计划、修改步骤及更新真实进度，无需为每次计划维护另行审批。实际业务动作的授权、验收证据与计划维护分开判断。版本校验只防止覆盖并发修改，不限制由 Agent 维护计划。
+
+计划、状态目录和反馈写入失败时，响应包含 `message`（具体原因）、`reason`（错误类别）、`commitState`（`not_started/unknown/committed`）、`nextAction` 和 `retryable`。`412 revision_conflict` 要先读取最新计划并合并；`committed` 表示写入已完成、回读暂不可用；`unknown` 只能保留原载荷和原幂等键核对，不应新建替代计划。反馈提交和后台反馈更新只回读目标计划，不再因无关计划目录读取失败而把已提交反馈报错。
+
+计划审批、QA 续投和完成通知检查线程桥的结构化送达状态；HTTP 202 的 `delivery_unconfirmed` 或 `delivered_tracking_failed` 保留待确认，不标记已通知，也不自动重发正文。
 
 查询计划：
 
@@ -1020,7 +1072,7 @@ POST /roles/:roleId/plans
 
 仍在调查、分析完成但无法形成可审批具体方案、完整审批等待和获批执行分别写 `planWorkflow.roles.analysis`、`roles.informationNeeded`、`roles.approval`、`roles.execution` 所指的 key。包体、QA、讨论和暂停同样通过 roles 查找；步骤名称、说明、`waitingFor` 与审批合同不再覆盖 `plan.status`。
 
-只有代码、Prefab、资源、配置等会产生项目内容变动的计划才应采用“实施/开发验证/适用同步提交 → 等待打包 → 等待 QA → QA 通过完成；失败回实施”的流程。调查、设计评审、运营、资料收集、外部依赖与控制面维护按自身真实步骤推进；Agent 或批处理不得为这些计划虚构 package 或 QA 步骤。Manager 不根据标题、说明或 `kind` 自动补流程。
+只有代码、Prefab、资源、配置等会产生项目内容变动的计划才应采用“实施/开发验证/适用同步提交 → 等待打包 → 等待 QA 验收 → QA 通过完成；失败回实施”的流程。调查、设计评审、运营、资料收集、外部依赖与控制面维护按自身真实步骤推进；Agent 或批处理不得为这些计划虚构 package 或 QA 步骤。Manager 不根据标题、说明或 `kind` 自动补流程。
 
 `attachments` 可选。新附件可提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`；最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。Manager 把内容复制到人格私有 `plans/attachments/<planId>/`，计划文件只保留安全元数据，不保存 Base64。PATCH 未提供 `attachments` 时保留原列表，提供空数组时清空记录；如需在 PATCH 中保留指定旧附件，可把 GET 返回的对应附件对象原样带回。Manager 对外计划 DTO 不返回本机 `path`。
 
@@ -1430,3 +1482,12 @@ GET /roles/:roleId/skills/:skillId
 ```
 
 列表接口只返回元信息。单项接口返回完整正文。Agent 在 `[处理前上下文确认]` 里看到 `role_skill` 条目时，回复、更新计划/记忆或执行外部动作前应先按 GET 路径读取技能全文。
+
+计划可选 `messageChannels` 列表，Agent 可在创建计划或 PATCH 时绑定；省略或 `[]` 均合法，不阻断建计划、执行或人格事件投递。每项为 `{channel, gatewayId, params}`，复用事件投递的 NapCat 群／个人 QQ 与语音参数。计划渠道只用于绑定 Codex 任务的最终结果；与人格规则共同匹配，同一任务、轮次、目标去重。Hook 自动通知不要求原始群消息编号，也不被旧引用式进度通知的失败阻断；Agent 主动回复仍尽量引用来源。
+
+
+计划与记忆摘要搜索及自动增量缓存接口见 [搜索合同](knowledge-search.md)。
+
+### 错误原因与语言
+
+Manager 失败响应附带 `errorMessages`，包含 zh-CN 和 `en`，并保留原始 message、机器码、提交状态和请求编号。WebGUI 按当前语言显示。已登记的参数、附件、版本冲突和存储错误显示本地化原因；未登记的第三方异常保留诊断原文，不推断未知原因。

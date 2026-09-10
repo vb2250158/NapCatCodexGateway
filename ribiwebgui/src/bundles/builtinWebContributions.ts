@@ -53,7 +53,7 @@ export function activateCore(api: BaseWebBundleApi): readonly Dispose[] {
       {
         routeId: "global.lan-agents", rendererId: "builtin.web-page.lan-agents.v1",
         loader: () => import("../pages/LanAgentsPage.vue"),
-        paths: [{ path: "/lan-agents", title: "局域网 Agent" }],
+        paths: [{ path: "/lan-agents", title: "远端 Agent" }],
         navigation: { resolvePath: () => "/lan-agents", allowedSlots: ["utility"], allowedIcons: ["mdi-lan-connect"] }
       },
       {

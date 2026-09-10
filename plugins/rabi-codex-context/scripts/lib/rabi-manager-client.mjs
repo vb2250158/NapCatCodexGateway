@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import os from "node:os";
+import { pathToFileURL } from "node:url";
 
 const DEFAULT_TIMEOUT_MS = 8000;
 
@@ -51,6 +53,15 @@ async function responseBody(response) {
 }
 
 export async function requestManager(pathname, init = {}, options = {}) {
+  if (pathname === "/api/codex-hook/context" && !options.managerUrl && !options.env) {
+    const directory = process.platform === "win32" ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "RabiAgent") : process.platform === "darwin" ? path.join(os.homedir(), "Library", "Application Support", "RabiAgent") : path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"), "RabiAgent");
+    const helper = path.join(directory, "hook-client.mjs");
+    if (fs.existsSync(helper)) {
+      const { requestInstanceHook } = await import(pathToFileURL(helper).href);
+      const result = await requestInstanceHook(JSON.parse(init.body || "{}"), path.join(directory, "config.json"));
+      if (result !== undefined) return result;
+    }
+  }
   const managerUrl = String(options.managerUrl || resolveManagerUrl(options.env)).replace(/\/+$/, "");
   const controller = new AbortController();
   const timeoutMs = Number(options.timeoutMs || DEFAULT_TIMEOUT_MS);
@@ -115,16 +126,15 @@ export async function handleHookInput(input, options = {}) {
       };
     }
     if (eventName === "Stop") {
+      if (!input.stop_hook_active && data?.followup?.decision === "block" && data.followup.reason) {
+        return { decision: "block", reason: String(data.followup.reason) };
+      }
       const completion = data?.planTaskCompletion;
-      const progress = data?.pangHuProgressNotification;
       const projectFileChangeReminder = data?.projectFileChangeReminder;
       const agentRequestStop = data?.agentRequestStop;
       const messages = [];
       if (agentRequestStop?.status === "failed") {
         messages.push(`Rabi Agent request Stop check failed: ${agentRequestStop.error || agentRequestStop.reason || "unknown error"}`);
-      }
-      if (progress?.status === "failed") {
-        messages.push(`PangHu 工作群进度同步未取得完整回执，当前任务保持进行中：${progress.error || progress.reason || "unknown error"}`);
       }
       if (projectFileChangeReminder?.status === "failed") {
         messages.push(`Rabi 项目文件改动后的计划检查提醒未完成：${projectFileChangeReminder.error || projectFileChangeReminder.reason || "unknown error"}`);

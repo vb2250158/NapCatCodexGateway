@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, ref, watch } from "vue";
 import { translateText } from "../i18n";
 import {
@@ -122,7 +123,7 @@ async function refreshPeers(): Promise<void> {
     }
   } catch (error) {
     peers.value = [];
-    peerError.value = error instanceof Error ? error.message : String(error);
+    peerError.value = userFacingError(error);
   } finally {
     peerLoading.value = false;
   }
@@ -140,7 +141,7 @@ async function refreshPreview(): Promise<void> {
     comparison.value = await personaSyncClient.preview(peerId, props.roleId);
   } catch (error) {
     comparison.value = null;
-    localError.value = error instanceof Error ? error.message : String(error);
+    localError.value = userFacingError(error);
   } finally {
     comparisonLoading.value = false;
   }
@@ -158,7 +159,7 @@ async function refreshLocalState(): Promise<void> {
     indexStatus.value = status;
     autoStatus.value = automatic;
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : String(error);
+    localError.value = userFacingError(error);
   } finally {
     localLoading.value = false;
   }
@@ -176,7 +177,7 @@ async function refreshConflicts(): Promise<void> {
       notice.value = "历史冲突正在后台整理，Manager 仍可正常使用；稍后再次点击“检查冲突”即可查看结果。";
     }
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : String(error);
+    localError.value = userFacingError(error);
   } finally {
     conflictLoading.value = false;
   }
@@ -202,7 +203,7 @@ async function syncPeer(peer: PersonaSyncPeer): Promise<void> {
     await Promise.all([refreshLocalState(), refreshConflicts()]);
     await refreshPreview();
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : String(error);
+    localError.value = userFacingError(error);
   } finally {
     syncingPeerId.value = "";
   }
@@ -227,7 +228,7 @@ async function openConflict(conflict: PersonaSyncConflict): Promise<void> {
     if (remote.status === "rejected") throw remote.reason;
     remotePreview.value = remote.value ? previewText(remote.value, conflict.path) : "对方已删除这个文件";
   } catch (error) {
-    previewError.value = error instanceof Error ? error.message : String(error);
+    previewError.value = userFacingError(error);
   } finally {
     previewLoading.value = false;
   }
@@ -254,7 +255,7 @@ async function resolveConflict(action: "keep_local" | "use_remote"): Promise<voi
     previewOpen.value = false;
     await Promise.all([refreshLocalState(), refreshConflicts()]);
   } catch (error) {
-    previewError.value = error instanceof Error ? error.message : String(error);
+    previewError.value = userFacingError(error);
   } finally {
     resolvingConflictId.value = "";
   }

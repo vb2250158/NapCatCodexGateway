@@ -120,11 +120,11 @@ function collectReleaseAssetPaths(root: string, relative = ""): string[] {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
     const child = relative ? `${relative}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
-      if (child === "node_modules" || child === "dist" || child === "test") return [];
+      if (child === "node_modules" || child === "test") return [];
       return collectReleaseAssetPaths(root, child);
     }
     if (!entry.isFile()) return [];
-    if (entry.name === "package.json" || entry.name.endsWith(".mjs")) return [normalizeAssetPath(child)];
+    if (entry.name === "package.json" || entry.name.endsWith(".mjs") || (child.startsWith("dist/agent-hooks/") && /\.(json|md)$/.test(entry.name))) return [normalizeAssetPath(child)];
     return [];
   });
 }
@@ -178,7 +178,7 @@ export class LanAgentReleaseStore {
     const unsigned: ReleaseManifestPayload = {
       version,
       platform: "node",
-      minNodeVersion: "22.0.0",
+      minNodeVersion: "22.13.0",
       files
     };
     return {

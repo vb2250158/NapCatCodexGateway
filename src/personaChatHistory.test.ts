@@ -5,12 +5,14 @@ import path from "node:path";
 import test from "node:test";
 import { appendPersonaChatReply, readPersonaChatHistory } from "./personaChatHistory.js";
 import { CodexHookContextService } from "./manager/codexHookContext.js";
+import { publishRoleKnowledgeCatalogSnapshot, readRoleKnowledgeCatalogSnapshot } from "./roleKnowledge.js";
 
 async function fixture(t: test.TestContext) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-chat-history-"));
   const roleDir = path.join(root, "roles", "Example");
   await fs.mkdir(roleDir, { recursive: true });
   await fs.writeFile(path.join(roleDir, "persona.md"), "# Example");
+  publishRoleKnowledgeCatalogSnapshot(roleDir, readRoleKnowledgeCatalogSnapshot(roleDir));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return { root, roleDir };
 }

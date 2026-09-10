@@ -44,11 +44,13 @@ async function bootstrap(): Promise<void> {
   installFrontendPerformanceReporter();
   if (await redirectLoopbackWebguiToLan()) return;
 
-  createApp(App)
+  const app = createApp(App)
     .use(createPinia())
     .use(router)
-    .use(vuetify)
-    .mount("#app");
+    .use(vuetify);
+
+  await router.isReady();
+  app.mount("#app");
 
   installDomLocalizer();
   void refreshWebPluginCatalogInBackground();

@@ -78,6 +78,8 @@ export const activate = definePlugin({
                     },
                     gatewayPayload: options => runtime.standaloneGatewayPayload(options?.includeDiagnostics ?? true, options?.includeConfigDefinitions ?? (options?.includeDiagnostics ?? true)),
                     writeConfig: runtime.writeConfig,
+                    writeGatewayConfig: runtime.writeGatewayConfig,
+                    resolveRouteMutation: runtime.resolveRouteMutation,
                     loadRuntimes: runtime.loadRuntimes,
                     syncRunningGateways: runtime.syncRunningGateways,
                     runtimeStatuses: () => [...runtime.runtimes.values()].map(runtime.runtimeStatus),

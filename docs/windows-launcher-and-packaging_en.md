@@ -10,6 +10,14 @@ The Windows package has one application-lifecycle entry: `RabiRouteHost.exe`. Ma
 
 ## Lifecycle ownership
 
+Background failures are separate from core API readiness: memory-consolidation and other background incidents alone do not degrade `health.state`. `health.backgroundState` and `health.backgroundIncidentCount` retain the failure state, with details in `backgroundLifecycle` and logs. Required capabilities, plan-storage startup and Route readiness checks remain unchanged. Background work backs off independently without blocking unrelated APIs. Uncertain memory delivery persists a pending receipt; subsequent attempts only read the original receipt and never automatically resend an unconfirmed message. Removed schedule targets no longer contribute to current failure summaries.
+
+Each health probe has a five-second deadline; rebuilding still requires three consecutive failures so brief CPU contention can recover. Generation, instance and required-capability checks remain unchanged. This tolerance does not replace diagnosis of long stalls.
+
+When discovering allowed workspaces for the thread bridge, Manager queries only task IDs, directories and archive flags from the Desktop index, retaining the latest ten-thousand-record scope. It does not load task bodies or the sidebar-name index. Task-name resolution and model settings remain governed by the existing Desktop owner contract; workspace discovery does not replace delivery identity checks.
+
+Host enters `faulted` after five generation failures within fifteen minutes and stops automatic rebuilding until an explicit Host restart command, bounding minute-long failure cycles. During the first three minutes, Manager samples CPU at 10 ms and writes `startup_cpu_sample` every ten seconds to `logs/manager/manager-runtime-YYYY-MM-DD.jsonl`. Records contain elapsed time, timer delay and the top twelve function locations, not messages, arguments or full absolute paths. Sampling opens no debug port, stops automatically and does not block startup on failure.
+
 | Component | Owns | Does not own |
 | --- | --- | --- |
 | RabiRoute Host | Per-user singleton, application generation, child Job, startup order, bounded restart, local control commands | Routes, plugin business logic, WebGUI state, desktop presentation |
@@ -82,6 +90,10 @@ Ordinary code changes do not require rebuilding the compressed Setup/ZIP. Materi
 ```
 
 The Developer Channel runs the incremental build locally, derives a manifest-identified candidate from the current immutable version, then uses the single Host for a fenced quit, an atomic `current.json` switch, and a complete new application generation. It verifies Host→Manager/Tray ownership plus the dynamic URL and `/meta` identity. A failed candidate restores the previous pointer and runtime automatically. It never runs code from NAS, starts Manager or Tray directly, or creates release archives. Changes to `package-lock.json`, the root Bootstrap, or dependency runtimes still require a full release. By default it rebuilds both the tray Desktop runtime and Host Core so a candidate cannot silently reuse stale binaries from its base. Pass `-RebuildDesktopRuntime:$false` or `-RebuildHostCore:$false` only when deliberately reusing the installed build.
+
+Candidates fully replace `docs/`, `plugins/`, `skills/`, and `source-patches/` from the current source tree, removing retired files in those candidate layers. This prevents stale interface contracts, missing module development guides, and old plugin entrypoints or catalogs. Missing input directories fail candidate construction without changing the previous version. Business data, patch operation receipts, and dynamic registration records are not release directories and are not cleaned by the build.
+
+Both root README language versions and changelogs must also come from the current build source. A missing file fails construction instead of retaining the base release's old instructions.
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe"

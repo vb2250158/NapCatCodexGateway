@@ -41,6 +41,27 @@ test("plan styles pass through the Manager-owned palette", () => {
   });
 });
 
+test("WebGUI renders the Manager QA label and purple palette without reclassifying the status", () => {
+  const qaPlan = {
+    status: "等待 QA",
+    presentation: {
+      status: "等待 QA",
+      label: "等待 QA 验收",
+      labelEn: "Awaiting QA acceptance",
+      description: "目标包已确认，正在等待 QA 验收结论。",
+      descriptionEn: "The target package is confirmed and awaiting QA acceptance.",
+      palette: { accent: "#7c3aed", background: "#f3e8ff", foreground: "#6d28d9" },
+      importance: undefined,
+      urgency: undefined
+    }
+  } as unknown as RolePlan;
+
+  assert.equal(planStatusLabelForDisplay(qaPlan.presentation), "等待 QA 验收");
+  assert.equal(planStatusLabelForDisplay(qaPlan.presentation, "en"), "Awaiting QA acceptance");
+  assert.deepEqual(planDirectorySortPalette(qaPlan, "status"), qaPlan.presentation.palette);
+  assert.equal(qaPlan.status, "等待 QA");
+});
+
 test("invalid or missing Manager colors use one neutral compatibility palette", () => {
   assert.deepEqual(
     normalizePlanPresentationPalette({ accent: "red", background: "", foreground: "#123" }),
@@ -66,10 +87,10 @@ test("plan descriptions hide legacy title fallbacks but preserve a real focus", 
 });
 
 test("plan directory titles hide repeated leading bracket tags without changing ordinary titles", () => {
-  assert.equal(planTitleForDirectory("[PangHu][Bug] 赛季目标 - 培养道具"), "赛季目标 - 培养道具");
-  assert.equal(planTitleForDirectory("  [PangHu] [查询] 月卡配置  "), "月卡配置");
+  assert.equal(planTitleForDirectory("[ExampleProject][Bug] 赛季目标 - 培养道具"), "赛季目标 - 培养道具");
+  assert.equal(planTitleForDirectory("  [ExampleProject] [查询] 月卡配置  "), "月卡配置");
   assert.equal(planTitleForDirectory("普通计划标题"), "普通计划标题");
-  assert.equal(planTitleForDirectory("[PangHu]"), "[PangHu]");
+  assert.equal(planTitleForDirectory("[ExampleProject]"), "[ExampleProject]");
 });
 
 test("plan directory relative time uses one largest suitable unit", () => {
@@ -147,7 +168,7 @@ test("approval submission turns browser fetch failures into an actionable retry 
   const message = approvalSubmissionErrorMessage(new TypeError("Failed to fetch"));
   assert.match(message, /无法连接 Manager/);
   assert.match(message, /计划反馈内容已保留/);
-  assert.equal(approvalSubmissionErrorMessage(new Error("Plan step not found")), "Plan step not found");
+  assert.equal(approvalSubmissionErrorMessage(new Error("Plan step not found")), "原因：Plan step not found");
 });
 
 test("knowledge page avoids full-list refresh after feedback and keeps details animation-free", () => {
@@ -185,12 +206,13 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.doesNotMatch(openAttachmentPickerBody, /approvalDeliveryPending/);
   assert.doesNotMatch(removeAttachmentBody, /approvalDeliveryPending/);
   assert.match(page, /上一条意见已记录，正在通知 Agent；你可以继续编辑下一条，通知完成后即可提交。/);
-  assert.match(page, /当前没有可投递的 Route；你可以先编辑，选择或绑定 Route 后再提交。/);
+  assert.match(page, /当前没有可投递的 Route；仍可“提交”保存，绑定 Route 后才能“提交并投递”。/);
   assert.match(page, /class="knowledge-approval-compose-status"/);
   assert.match(page, /审批资料不完整，补齐前禁止输入或提交审批意见。/);
   assert.doesNotMatch(page, /该意见不会被视为批准/);
-  assert.match(page, /提交审批意见/);
-  assert.match(page, /planFeedbackSubmissionErrorMessage\(submitError\)/);
+  assert.match(page, /提交并投递/);
+  assert.match(page, /submit-record-only-label/);
+  assert.match(page, /localizedPlanError\(submitError, isEnglish\.value\)/);
   assert.match(page, /const feedbackId = feedbackRequestId\(plan\.id, signature\)/);
   assert.match(page, /审批资料不完整 · 禁止审批/);
   assert.match(page, /审批资料不完整，禁止审批。缺少/);
@@ -203,7 +225,7 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(styles, /\.knowledge-approval-contract-grid > section\s*\{[\s\S]*?min-width:\s*0/);
   assert.match(styles, /\.knowledge-approval-contract-grid ul\s*\{[\s\S]*?min-width:\s*0/);
   assert.match(styles, /\.knowledge-approval-contract-grid li\s*\{[\s\S]*?overflow-wrap:\s*anywhere/);
-  assert.match(page, /审批附件 \/ 效果图 \/ 报告/);
+  assert.match(page, /附件与预览/);
   assert.match(page, /最近请求时间/);
   assert.match(page, /来源消息 \/ Feedback/);
   assert.match(page, /当前回执状态/);
@@ -236,7 +258,7 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /引导属于整个计划，不绑定某个步骤/);
   assert.match(page, /调整后续步骤/);
   assert.match(page, /:composer-id="`guidance-\$\{plan\.id\}`"[\s\S]*?@submit="sendPlanGuidance\(plan\)"/);
-  assert.match(page, /async function sendPlanGuidance[\s\S]*?sendPlanFeedback\(plan, "guidance"\)/);
+  assert.match(page, /async function sendPlanGuidance[\s\S]*?sendPlanFeedback\(plan, "guidance", notifyAgent\)/);
   assert.match(page, /const stepId = guidance \? undefined : plan\.presentation\.approval\.stepId/);
   assert.match(page, /const attachments = await approvalAttachmentUploads\(plan\.id\)/);
   assert.match(page, /const planAttachmentIds = referencedPlanAttachmentIds\(text, allApprovalMentionCandidates\(plan\)\)/);
@@ -245,7 +267,7 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /<section v-if="planAcceptsGuidance\(plan\)"[\s\S]*?<PlanFeedbackComposer[\s\S]*?:attachments="approvalAttachmentsFor\(plan\.id\)"[\s\S]*?@add-files="addApprovalFiles\(plan\.id, \$event\.files, \$event\.fromClipboard\)"/);
   assert.match(page, /v-for="feedback in guidanceRecordsForDisplay\(plan\)"[\s\S]*?feedback\.attachments[\s\S]*?feedback\.planAttachments/);
   assert.match(client, /kind: input\.kind/);
-  assert.match(page, /提交计划引导/);
+  assert.match(page, /提交并投递/);
 });
 
 test("plan guidance and approval reuse one feedback composer", () => {
@@ -380,7 +402,7 @@ test("plan cards use isolated work-item framing and a three-level execution hier
 
 test("plan cards render managed attachments and preview 16:9 image and video media", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8") + fs.readFileSync(path.join(root, "src/components/PlanAttachmentGallery.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
 
   assert.match(page, /v-if="planDetailsLoaded\[plan\.id\] && plan\.attachments\.length" class="knowledge-plan-attachments"/);
@@ -391,7 +413,7 @@ test("plan cards render managed attachments and preview 16:9 image and video med
   assert.match(page, /item\.kind === 'image' \|\| item\.kind === 'video'/);
   assert.match(page, /@click="openPlanMediaPreview\(plan, attachment\)"/);
   assert.match(page, /function planVideoThumbnailUrl[\s\S]*?#t=0\.001/);
-  assert.match(page, /v-if="attachment\.kind === 'video'"[\s\S]*?<video/);
+  assert.match(page, /<video\b[^>]*v-if="attachment\.kind === 'video'"/);
   assert.match(page, /@loadedmetadata="capturePlanVideoDuration\(plan\.id, attachment\.id, \$event\); setPlanMediaLoadState\(plan\.id, attachment\.id, 'loaded'\)"/);
   assert.match(page, /class="knowledge-plan-attachment-loading"/);
   assert.match(page, /附件加载中/);
@@ -451,4 +473,36 @@ test("plan steps derive current and completed presentation without a stored stat
   assert.match(page, /step\.id === plan\.currentStepId && step\.startedAt[\s\S]*?开始时间[\s\S]*?formatDate\(step\.startedAt\)/);
   assert.match(page, /v-else-if="step\.completedAt"[\s\S]*?完成时间[\s\S]*?formatDate\(step\.completedAt\)/);
   assert.doesNotMatch(page, /未开始/);
+});
+
+
+test("feedback actions keep both submit buttons in one compact group", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const composer = fs.readFileSync(path.join(root, "src/components/PlanFeedbackComposer.vue"), "utf8");
+  const styles = fs.readFileSync(path.join(root, "src/styles.css"), "utf8");
+  const group = composer.match(/<div class="knowledge-approval-action-buttons">([\s\S]*?)<\/div>/)?.[1] ?? "";
+  assert.equal((group.match(/<v-btn/g) ?? []).length, 2);
+  assert.match(group, /submit-record-only/);
+  assert.match(group, /emit\('submit'\)/);
+  assert.match(styles, /\.knowledge-approval-action-buttons\s*\{[^}]*display: flex;[^}]*gap: 8px;/);
+  assert.doesNotMatch(styles, /\.knowledge-approval-actions \.v-btn\s*\{[^}]*width: 100%;/);
+});
+
+
+test("approval review prioritizes decisions and shared previews without hiding validation guards", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const page = fs.readFileSync(path.join(root, "src/pages/RoleKnowledgePage.vue"), "utf8");
+  const styles = fs.readFileSync(path.join(root, "src/styles.css"), "utf8");
+  const app = fs.readFileSync(path.join(root, "src/App.vue"), "utf8");
+  assert.equal((page.match(/<PlanAttachmentGallery/g) ?? []).length, 2);
+  assert.match(page, /class="knowledge-approval-evidence">[\s\S]*?<PlanAttachmentGallery/);
+  assert.ok(page.indexOf('class="knowledge-approval-evidence"') < page.indexOf("方案依据与备选"));
+  assert.match(page, /<details v-if="plan.presentation.approval.contract.files.length"/);
+  assert.match(page, /<details v-if="plan.presentation.approval.contract.commands.length"/);
+  assert.match(page, /<section v-if="plan.presentation.approval.contract.changes.length"/);
+  assert.doesNotMatch(page, /无执行命令；如实际|无文件改动；如实际|当前计划没有审批附件；/);
+  assert.match(page, /v-if="plan.presentation.approval.missing.length"/);
+  assert.match(page, /:submit-disabled="!canSubmitApproval\(plan\)"/);
+  assert.match(app, /'navigation-collapsed': !drawer/);
+  assert.match(styles, /\.navigation-collapsed \.knowledge-page\s*\{[^}]*max-width: min\(1880px, 100%\);/);
 });

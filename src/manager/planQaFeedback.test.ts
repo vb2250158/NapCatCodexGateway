@@ -120,7 +120,7 @@ test("QA post-commit confirms an uncertain send by deliveryId and never replays 
     text: "问题仍存在。复现步骤：重新执行操作。修复前结果不正确，修复后实际结果仍不正确。",
     author: "user",
     source: "webgui",
-    notifyAgent: false
+    notifyAgent: true
   }));
   let sends = 0;
   let readbacks = 0;
@@ -165,7 +165,7 @@ test("QA post-commit reads back persisted dispatching before any replay", async 
     text: "问题仍存在。复现步骤：重新执行操作。修复前结果不正确，修复后实际结果仍不正确。",
     author: "user",
     source: "webgui",
-    notifyAgent: false
+    notifyAgent: true
   }));
   const dispatching = updateStoredPlanFeedbackQaHandling(roleDir, created, {
     outcome: "failed",
@@ -204,7 +204,7 @@ test("QA post-commit retries dispatch-failed only after readback proves it missi
     text: "问题仍存在。复现步骤：重新执行操作。修复前结果不正确，修复后实际结果仍不正确。",
     author: "user",
     source: "webgui",
-    notifyAgent: false
+    notifyAgent: true
   }));
   const failed = updateStoredPlanFeedbackQaHandling(roleDir, created, {
     outcome: "failed",
@@ -253,7 +253,7 @@ test("QA plan transition rejects a stale projection instead of overwriting a con
     text: "问题仍存在。复现步骤：重新执行操作。修复前结果不正确，修复后实际结果仍不正确。",
     author: "user",
     source: "webgui",
-    notifyAgent: false
+    notifyAgent: true
   }));
   const contexts: PlanQaMutationContext[] = [];
   let injected = false;
@@ -314,7 +314,7 @@ test("QA feedback transition rejects a stale record revision and preserves the c
     text: "QA 明确通过，本轮未再复现。",
     author: "user",
     source: "webgui",
-    notifyAgent: false
+    notifyAgent: true
   });
   const feedback = appendPlanFeedback(roleDir, {
     ...preparedFeedback,

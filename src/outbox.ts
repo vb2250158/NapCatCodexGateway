@@ -297,7 +297,8 @@ function rolePanelAttachmentsForRequest(request: AgentReplyRequest, content: Rep
 
 function requestContent(request: AgentReplyRequest): ReplyContent {
   const payload = payloadObject(request);
-  const text = valueString(request.text ?? request.message ?? request.content ?? payload.text ?? payload.message ?? payload.content) ?? "";
+  const rawText = request.text ?? request.message ?? request.content ?? payload.text ?? payload.message ?? payload.content;
+  const text = valueString(rawText) ? String(rawText) : "";
   const kind = valueString(request.payloadType ?? payload.type ?? payload.payloadType) as MessagePayloadKind | undefined;
   if (kind === "image") {
     const file = payloadValue(request, payload, "imageUrl", "imagePath", "url", "file", "path");

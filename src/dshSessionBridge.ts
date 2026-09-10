@@ -1,6 +1,6 @@
 /**
  * DSH (DeepSeek Harness) session bridge — the DSH-side counterpart of the
- * Codex Desktop bridge. The XinghaiBuilder route can bind its primary persona
+ * Codex Desktop bridge. A route can bind its primary persona
  * (主人格) to a local DSH session; incoming RabiRoute deliveries are then
  * injected into that live session through the DSH apiproxy HTTP API
  * (`POST /api/session.prompt`, `POST /api/session.list`).
@@ -19,7 +19,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const DEFAULT_DSH_BASE_URL = "http://127.0.0.1:3080";
-export const DEFAULT_DSH_SESSION_NAME = "DSH CottonGame Luna Max";
+export const DEFAULT_DSH_SESSION_NAME = "Rabi Agent";
 export const DSH_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 export const EXPECTED_DSH_RABIROUTE_PLUGIN_VERSION = "0.1.2";
 export const DSH_RABIROUTE_TOOL_NAMES = [
@@ -65,7 +65,7 @@ export function dshRouteConfigPath(): string {
       "..",
       "data",
       "route",
-      "XinghaiBuilder-main",
+      "main",
       "adapterConfig.json"
     );
 }
@@ -773,7 +773,7 @@ function buildImagePathDegradedPrompt(prompt: string, imagePaths: string[]): str
  */
 export async function notifyDshSession(message: string, imagePaths: string[] = []): Promise<{ sessionId: string }> {
   const binding = readDshPrimaryBinding();
-  if (!binding) throw new Error("XinghaiBuilder route has no DSH primary binding.");
+  if (!binding) throw new Error("The configured route has no DSH primary binding.");
   await sendDshSessionMessage({
     sessionId: binding.sessionId,
     prompt: message,

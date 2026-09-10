@@ -549,6 +549,22 @@ public final class RabiDurableAudioSpoolTest {
     }
 
     @Test
+    public void legacyAuditRowsRecoverWithoutRewritingEvidenceOrResettingNewSequences() throws Exception {
+        File root = temporary.newFolder();
+        File legacyFile = new File(root, "audit-segment-00000000000000000001.jsonl");
+        String legacy = "{\"time\":1000,\"event\":\"gap\",\"details\":{}}\n";
+        Files.write(legacyFile.toPath(), legacy.getBytes(StandardCharsets.UTF_8));
+        Files.write(new File(root, "audit.jsonl").toPath(),
+                "{\"id\":\"prior\",\"eventSequence\":41,\"time\":2000,\"event\":\"gap\",\"details\":{}}\n".getBytes(StandardCharsets.UTF_8));
+        RabiDurableAudioSpool spool = new RabiDurableAudioSpool(root, policy(16L), () -> 30_000L, file -> Long.MAX_VALUE);
+        spool.recordGap("new", 2L, "phone", "route-a");
+        assertEquals(legacy, new String(Files.readAllBytes(legacyFile.toPath()), StandardCharsets.UTF_8));
+        JSONObject index = new JSONObject(new String(Files.readAllBytes(new File(root, "audit-index.json").toPath()), StandardCharsets.UTF_8));
+        assertEquals(1, index.getJSONArray("segments").getJSONObject(0).getInt("legacyRecords"));
+        assertTrue(new String(Files.readAllBytes(new File(root, "audit.jsonl").toPath()), StandardCharsets.UTF_8).contains("\"eventSequence\":42"));
+    }
+
+    @Test
     public void concurrentCaptureAndUploadPreservePendingByteConservation() throws Exception {
         RabiDurableAudioSpool spool = new RabiDurableAudioSpool(temporary.newFolder(), policy(16L),
                 System::currentTimeMillis, file -> Long.MAX_VALUE);

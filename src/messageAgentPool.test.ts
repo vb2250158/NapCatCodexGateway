@@ -96,6 +96,23 @@ test("Message Agent delivery rejects an omitted messageSource before allocation"
   );
 });
 
+test("Manager HTTP 202 preserves the uncertain delivery identity instead of losing its receipt", async (context) => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(202, { "content-type": "application/json" });
+    response.end(JSON.stringify({ code: -1, status: "delivery_unconfirmed", delivery: { deliveryId: "original-delivery" } }));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  await assert.rejects(requestMessageAgentManager(`http://127.0.0.1:${address.port}`, { action: "send" }), error => {
+    const failure = error as Error & { statusCode: number; response: { delivery: { deliveryId: string } } };
+    assert.equal(failure.statusCode, 202);
+    assert.equal(failure.response.delivery.deliveryId, "original-delivery");
+    return true;
+  });
+});
+
 test("Message Agent Manager requests use a one-shot connection and close it after the response", async (t) => {
   let requestConnection = "";
   let socketClosed = false;
@@ -248,7 +265,7 @@ test("Message Agent pool creates a Desktop task and sends the first group with L
   assert.match(deliveryText, /要求回传发送回执或决定/);
   assert.match(deliveryText, /处理结果：无需对外回复/);
   assert.match(deliveryText, /计划操作与外部回复分开判断/);
-  assert.match(deliveryText, /没有新增价值时保持安静/);
+  assert.doesNotMatch(deliveryText, /\[主动协作要求\]/);
   assert.match(deliveryText, /调查类请求先查清事实/);
   assert.match(deliveryText, /附件必须实际查看/);
   assert.match(deliveryText, /params\.replyImageDescriptions/);
@@ -386,9 +403,9 @@ test("direct replies default to a visible acknowledgement even when no plan chan
   }), "[消息组 direct-reply]\n我先搭效果，你之后再关联。");
 
   const prompt = deliveryPayloadText(calls.find((call) => call.action === "send"));
-  assert.match(prompt, /明确面向本角色的消息默认回复/);
-  assert.match(prompt, /明确面向本角色的消息默认回复/);
-  assert.match(prompt, /纯结束语、重复消息、自身消息/);
+  assert.match(prompt, /明确 @、回复和私聊默认需要回应/);
+  assert.match(prompt, /明确 @、回复和私聊默认需要回应/);
+  assert.match(prompt, /结束语、重复、自身消息/);
 });
 
 test("Message Agent initialization resolves the current Primary Persona displayed Name by complete task id", async () => {

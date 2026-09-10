@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, ref } from "vue";
 import { storeToRefs } from "pinia";
 import {
@@ -104,7 +105,7 @@ async function refresh(): Promise<void> {
     await Promise.all([speech.refreshMicrophone(), speech.refreshPlayback()]);
     localError.value = "";
   } catch (cause) {
-    localError.value = cause instanceof Error ? cause.message : String(cause);
+    localError.value = userFacingError(cause);
   } finally {
     refreshing.value = false;
   }

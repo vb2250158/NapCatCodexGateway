@@ -60,6 +60,8 @@ export type RabiDeliveryEnvelope = {
   escapeMessageContentHeaders?: boolean;
   /** The time this envelope is rendered for delivery. Tests and replays may provide a stable value. */
   sentAt?: string;
+  /** Transport identity for a delivery without an Agent reply contract. */
+  deliveryId?: string;
 };
 
 function optionalLine(label: string, value: unknown): string | undefined {
@@ -67,11 +69,11 @@ function optionalLine(label: string, value: unknown): string | undefined {
   return text ? `${label}：${text}` : undefined;
 }
 
-function agentSourceLines(source: Omit<RabiAgentMessageSource, "type">): Array<string | undefined> {
+function agentSourceLines(source: Omit<RabiAgentMessageSource, "type">, standalone = false): Array<string | undefined> {
   return [
-    `Agent 端：${source.agentAdapter}`,
-    optionalLine("Agent 类型", source.agentType),
-    `会话名称：${source.sessionName}`,
+    `${standalone ? "类型：Agent｜" : ""}处理端：${source.agentAdapter}`,
+    source.agentType?.trim().toLowerCase() === "agent" ? undefined : optionalLine("角色", source.agentType),
+    `会话：${source.sessionName}`,
     `会话 ID：${source.sessionId}`,
     optionalLine("工作目录", source.workspace)
   ];
@@ -85,7 +87,7 @@ function deliverySentAt(value: unknown): string {
 export function rabiMessageSourceLines(source: RabiMessageSource, sentAt?: string): string[] {
   const lines: Array<string | undefined> = [RABI_MESSAGE_SOURCE_HEADER];
   if (source.type === "agent") {
-    lines.push("消息源类型：Agent", ...agentSourceLines(source));
+    lines.push(...agentSourceLines(source, true));
   } else if (source.type === "plan") {
     lines.push(
       "消息源类型：计划",
@@ -120,7 +122,7 @@ export function rabiMessageSourceLines(source: RabiMessageSource, sentAt?: strin
       optionalLine("消息路线 ID", source.routeId)
     );
   }
-  lines.push(`消息包发送时间：${deliverySentAt(sentAt)}`);
+  lines.push(`${source.type === "agent" ? "投递时间" : "消息包发送时间"}：${deliverySentAt(sentAt)}`);
   return lines.filter((line): line is string => Boolean(line));
 }
 
@@ -177,6 +179,17 @@ export function normalizeRabiMessageContent(value: unknown, escapeReservedHeader
 export function renderRabiDelivery(envelope: RabiDeliveryEnvelope): string {
   const messageSource = normalizeRabiMessageSource(envelope.messageSource);
   const sentAt = deliverySentAt(envelope.sentAt);
+  return [
+    ...rabiMessageSourceLines(messageSource, sentAt),
+    ...(envelope.deliveryId ? [`投递 ID：${envelope.deliveryId}`] : []),
+    "", RABI_MESSAGE_CONTENT_HEADER,
+    renderRabiDeliveryContent(envelope)
+  ].join("\n").trimEnd();
+}
+
+/** Compose the same content for direct delivery and mediated Message Agent delivery. */
+export function renderRabiDeliveryContent(envelope: Pick<RabiDeliveryEnvelope,
+  "messageContent" | "escapeMessageContentHeaders" | "contextBlocks" | "controlBlocks">): string {
   const messageContent = normalizeRabiMessageContent(
     envelope.messageContent,
     envelope.escapeMessageContentHeaders !== false
@@ -188,10 +201,8 @@ export function renderRabiDelivery(envelope: RabiDeliveryEnvelope): string {
     .map((block, index) => normalizeRabiDeliveryBlock(block, `controlBlocks[${index}]`))
     .filter(Boolean);
   return [
-    ...rabiMessageSourceLines(messageSource, sentAt),
-    "",
-    RABI_MESSAGE_CONTENT_HEADER,
     messageContent,
+    ...(contextBlocks.length ? ["", "[相关上下文]"] : []),
     ...contextBlocks.flatMap((block) => ["", block]),
     ...controlBlocks.flatMap((block) => ["", block])
   ].join("\n").trimEnd();

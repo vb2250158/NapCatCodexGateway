@@ -290,7 +290,7 @@ function restorePendingJournal(journal: PendingJournal): void {
   }
 }
 
-function readCommittedReceipt(
+export function readCommittedReceipt(
   input: Pick<RouteCatalogTransactionInput, "routeRoot" | "operationId">
 ): CommittedReceipt | undefined {
   const target = receiptPath(input.routeRoot, input.operationId);
@@ -331,7 +331,7 @@ function operationForDigest(operation: RouteCatalogTransactionOperation): unknow
     case "replace":
       return { kind: operation.kind, config: operation.config };
     case "upsert":
-      return { kind: operation.kind, definition: operation.definition };
+      return { kind: operation.kind, definition: operation.definition, ...(operation.previousId ? { previousId: operation.previousId } : {}) };
     case "remove":
       return { kind: operation.kind, routeId: operation.routeId };
     case "ensure_persona":

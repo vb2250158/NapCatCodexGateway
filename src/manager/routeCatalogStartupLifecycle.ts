@@ -438,12 +438,17 @@ export class RouteCatalogStartupLifecycle {
     }, operationId);
   }
 
-  upsert(definition: GatewayDefinition, expectedContentHash?: string, operationId?: string): Promise<RouteCatalogSnapshot> {
+  upsert(definition: GatewayDefinition, expectedContentHash?: string, operationId?: string, previousId?: string): Promise<RouteCatalogSnapshot> {
     return this.enqueue({
       kind: "upsert",
       definition: structuredClone(definition),
+      ...(previousId ? { previousId } : {}),
       expectedContentHash
     }, operationId);
+  }
+
+  resolveMutation(operationId: string): Promise<RouteCatalogSnapshot> {
+    return this.enqueue({ kind: "capture", resolveOperationId: operationId });
   }
 
   remove(routeId: string, expectedContentHash?: string, operationId?: string): Promise<RouteCatalogSnapshot> {

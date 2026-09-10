@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import {
@@ -109,7 +110,7 @@ function clearRequestError(): void {
 }
 
 function recordRequestError(error: unknown): void {
-  requestError.value = error instanceof Error ? error.message : String(error);
+  requestError.value = userFacingError(error);
   requestErrorDetail.value = error instanceof SpeechControlRequestError ? error.detail : "";
   requestErrorResolution.value = error instanceof SpeechControlRequestError ? error.resolution : "";
 }

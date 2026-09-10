@@ -30,12 +30,18 @@ export const activate = definePlugin({
         const sync = async () => runtime.syncRabiLinkRelayRuntime(() => runtime.syncActiveRabiLinkRelay === sync ? sync() : undefined);
         runtime.syncActiveRabiLinkRelay = sync;
         const video = runtime.createDirectVideoReceiver();
+        const peer = runtime.createPeerRuntime();
         const videoRequests = new runtime.ManagerPluginRequestTracker();
         const unregisterVideo = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes,
             "manager:rabilink-relay", "manager.rabilink.video", [videoRequests.wrap(runtime.createDirectVideoRoutes(video))],
             [{ routeId: "rabilink-video", kind: "prefix", pathPrefix: "/api/rabilink/video/" }]);
+        const unregisterPeer = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes,
+            "manager:rabilink-relay", "manager.rabilink.peer", [videoRequests.wrap(peer.handler)],
+            [{ routeId: "rabilink-peer", kind: "prefix", pathPrefix: "/api/rabilink/peer/" }]);
         ctx.effect(() => async () => {
             unregisterVideo();
+            unregisterPeer();
+            await peer.stop();
             await video.stop();
             await videoRequests.stop();
             if (runtime.syncActiveRabiLinkRelay === sync) {

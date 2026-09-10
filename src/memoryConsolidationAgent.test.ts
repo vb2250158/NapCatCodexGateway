@@ -17,6 +17,35 @@ function deliveryPayloadText(payload: Record<string, any> | undefined): string {
   ].filter(Boolean).join("\n\n");
 }
 
+test("uncertain memory delivery survives reload and verifies its receipt without resending", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-receipt-"));
+  const options = { statePath: memoryConsolidationAgentStatePath(root), managerBaseUrl: "http://localhost:1", sourceThreadId: "primary", sourceThreadName: "Primary", workspace: "C:/Project", roleId: "role-a" };
+  let sends = 0;
+  let accepted = false;
+  const request = async (payload: Record<string, unknown>) => {
+    if (payload.action === "resolve") return { thread: { id: "worker", title: "Worker", cwd: options.workspace } };
+    if (payload.action === "send") {
+      sends++;
+      throw Object.assign(new Error("Manager returned HTTP 202."), { statusCode: 202, response: { code: -1, delivery: { deliveryId: "delivery-original" } } });
+    }
+    assert.equal(payload.action, "read");
+    assert.equal(payload.deliveryId, "delivery-original");
+    return { delivery: { state: accepted ? "accepted" : "missing" } };
+  };
+  try {
+    await assert.rejects(new MemoryConsolidationAgent(options, { request }).deliver("batch", primaryMessageSource()), { code: "MEMORY_DELIVERY_UNCONFIRMED" });
+    const resumed = new MemoryConsolidationAgent(options, { request });
+    await assert.rejects(resumed.deliver("batch", primaryMessageSource()), { code: "MEMORY_DELIVERY_UNCONFIRMED" });
+    await assert.rejects(resumed.deliver("different batch", primaryMessageSource()), { code: "MEMORY_DELIVERY_UNCONFIRMED" });
+    accepted = true;
+    assert.equal((await resumed.deliver("batch", primaryMessageSource())).threadId, "worker");
+    assert.equal(sends, 1);
+    assert.equal(JSON.parse(fs.readFileSync(options.statePath, "utf8")).pendingDelivery, undefined);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function primaryMessageSource(
   sessionId = "019f0000-0000-7000-8000-000000000001",
   sessionName = "主人格",

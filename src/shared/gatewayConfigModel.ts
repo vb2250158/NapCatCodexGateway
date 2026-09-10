@@ -1,3 +1,4 @@
+import { normalizeAgentInstanceBindings, type AgentInstanceBinding } from "./agentInstance.js";
 import { normalizeAgentCompletionDeliveries, type AgentCompletionDeliveryRule } from "./agentHookAutomation.js";
 export { normalizeAgentCompletionDeliveries, type AgentCompletionDeliveryRule } from "./agentHookAutomation.js";
 import {
@@ -85,7 +86,10 @@ export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" |
 export type MessagePayloadKind = "text" | "image" | "voice" | "file";
 export type CodexReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 export type SpeechPushMode = "hot" | "keyword";
+import { normalizePlanFollowup } from "./planFollowup.js";
+
 export type CodexHookSettings = {
+  planFollowup?: import("./planFollowup.js").PlanFollowupSettings;
   sessionContextEnabled: boolean;
   reasoningContextEnabled: boolean;
   planTaskCompletionEnabled: boolean;
@@ -162,7 +166,8 @@ export function normalizeCodexHookSettings(value: unknown): CodexHookSettings {
     planTaskCompletionEnabled: raw.planTaskCompletionEnabled !== false,
     agentCommunicationEnforcementEnabled: raw.agentCommunicationEnforcementEnabled !== false,
     onlyPrimaryPersonaCanSendMessages: raw.onlyPrimaryPersonaCanSendMessages === true,
-    completionDeliveries: normalizeAgentCompletionDeliveries(raw.completionDeliveries)
+    completionDeliveries: normalizeAgentCompletionDeliveries(raw.completionDeliveries),
+    planFollowup: normalizePlanFollowup(raw.planFollowup)
   };
 }
 
@@ -367,6 +372,7 @@ export type GatewayDefinition = {
   copilotCwd?: string;
   copilotCliBin?: string;
   marvisAppId?: string;
+  agentInstanceBindings?: Record<string, AgentInstanceBinding>;
   astrbotUrl?: string;
   astrbotUsername?: string;
   astrbotPassword?: string;
@@ -1405,6 +1411,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     ignoredNapcatInstanceIds: normalizeIgnoredNapcatInstanceIds(definition.ignoredNapcatInstanceIds),
     codexThreadId: isCodexTaskId(rawCodexThreadId) ? rawCodexThreadId : undefined,
     codexThreadName: definition.codexThreadName?.trim() || legacyCodexThreadName || undefined,
+    agentInstanceBindings: normalizeAgentInstanceBindings(definition.agentInstanceBindings),
     dshSessionId: normalizeDshSessionId(definition.dshSessionId),
     dshSessionName: definition.dshSessionName?.trim() || undefined,
     dshCwd,

@@ -338,6 +338,7 @@ foreach ($tree in @(
     "assets",
     "docs",
     "examples\data",
+    "apps\rabi-agent",
     "plugin-adapters",
     "plugins\contracts\plugin-sdk",
     "scripts"
@@ -345,7 +346,32 @@ foreach ($tree in @(
     Copy-TrackedTree $tree
 }
 
+foreach ($relative in @(
+    "scripts\compile-hot-patch.mjs",
+    "scripts\compile-hot-patch-worker.mjs",
+    "scripts\lib\source-patch-dependencies.mjs",
+    "scripts\build-source-patches.mjs",
+    "scripts\lib\hot-patch-compiler.mjs",
+    "source-patches\modules.json",
+    "docs\source-hot-patches.md",
+    "docs\source-hot-patches_en.md",
+    "skills\source-hot-patch-development\SKILL.md"
+)) {
+    $source = Join-Path $repo $relative
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Required hot patch release file is missing: $relative" }
+    $destination = Join-Path $payload $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+    Copy-Item -LiteralPath $source -Destination $destination -Force
+}
+
 Copy-RequiredPortableRuntimeFiles
+foreach ($relative in @("apps\rabi-agent\runtime", "apps\rabi-agent\dist\agent-hooks", "skills\rabi-knowledge-search")) {
+    $source = Join-Path $repo $relative
+    if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Instance Agent runtime was not built: $relative" }
+    $destination = Join-Path $payload $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+    Copy-Item -LiteralPath $source -Destination $destination -Recurse -Force
+}
 
 if ($IncludeSpeech) {
     $speechHostDestination = Join-Path $payload $speechHostRelative

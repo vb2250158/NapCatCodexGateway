@@ -42,7 +42,7 @@ function hasRecoverableQa(record: PlanFeedbackRecord): boolean {
 }
 
 export function isRecoverablePlanFeedback(record: PlanFeedbackRecord): boolean {
-  if (record.author === "agent") return false;
+  if (record.author === "agent" || record.deliveryStatus === "record_only") return false;
   const recoverableDelivery = (record.deliveryStatus === "pending" || record.deliveryStatus === "failed")
     && (record.kind === "guidance" || record.kind === "approval_suggestion")
     && !record.qaHandling;

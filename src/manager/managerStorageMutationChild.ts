@@ -26,6 +26,7 @@ import {
   updateRecentMemory
 } from "../roleKnowledge.js";
 import path from "node:path";
+import { RoleStorageValidationError } from "../shared/roleStorageValidationError.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ROLE_MEMORY_CATALOG_LEASE_ID } from "../memoryStorageIdentity.js";
@@ -42,6 +43,7 @@ import {
 } from "../personaPlanWorkflow.js";
 import {
   readPlanStoragePackage,
+  resolveCanonicalPlanStorageLocation,
   recoverPlanLifecycleTransitions,
   recoverPlanStorageTransactions,
   assertPlanStorageLeaseOwner,
@@ -87,12 +89,13 @@ function serializable<T>(value: T): T {
 }
 
 function currentPlanRevision(roleDir: string, planId: string | undefined): string | null {
-  const plan = readPlansFromStorageInWorker(roleDir).find(item => item.id === planId);
-  if (!plan) return null;
+  if (!planId) return null;
+  const location = resolveCanonicalPlanStorageLocation(roleDir, planId);
+  if (!location) return null;
   return storageInventoryRevisionToken(readPlanStoragePackage(
     roleDir,
-    plan.id,
-    plan.archiveStatus === "已归档" ? "archive" : "active"
+    location.planId,
+    location.bucket
   ).inventoryHash);
 }
 
@@ -250,6 +253,9 @@ type DomainDeliveryResult =
   | Readonly<{ domain: "rejected"; error: string }>;
 
 function deterministicDomainRejection(error: unknown): string | undefined {
+  if (error instanceof RoleStorageValidationError) {
+    return `STORAGE_MUTATION_VALIDATION_REJECTED: ${error.message}`;
+  }
   if (error instanceof Error
     && (error as Error & { code?: string }).code === "PLAN_STORAGE_LEASE_LOST") return undefined;
   const message = error instanceof Error ? error.message : String(error);

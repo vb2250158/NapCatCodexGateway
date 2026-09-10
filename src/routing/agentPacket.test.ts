@@ -12,8 +12,46 @@ import type { RouteDecision } from "./routeDecision.js";
 import { buildAgentPacket as buildPublishedAgentPacket, type AgentPacket, type AgentRoleContext } from "./agentPacket.js";
 import { createPlan, publishRoleKnowledgeCatalogSnapshot, readRoleKnowledgeCatalogSnapshot } from "../roleKnowledge.js";
 import { migrateRolePlanLayoutAtStartup } from "../manager/planStorageStartupMigration.js";
+import { DEFAULT_FOCUSED_CONTEXT_INJECTION, type RoleKnowledgeSnapshot } from "../roleKnowledge.js";
 
 process.env.GATEWAY_MANAGER_URL ||= "http://127.0.0.1:8790";
+
+test("focused packets render one required item and gate optional remote instructions", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-compact-packet-"));
+  const previousEndpoints = config.messageEndpointTypes;
+  config.messageEndpointTypes = [...new Set([...previousEndpoints, "remoteAgent" as const])];
+  try {
+    const rule: NotificationRule = { id: "compact", name: "compact", enabled: true, routeKinds: ["manual_trigger"], template: "" };
+    const route: RouteProfile = {
+      id: "compact", name: "compact", enabled: true, recentMessageLimit: 0,
+      resolvedPipeline: resolvePipeline("agent"), agentRoleId: "TestRole", agentRoleFile: "persona.md",
+      rolesDir: path.dirname(roleDir), dataDir: roleDir, routeVariables: {}, notificationRules: [rule]
+    };
+    const knowledge: RoleKnowledgeSnapshot = {
+      roleDir, plansDir: path.join(roleDir, "plans"), memoryDir: path.join(roleDir, "memory"),
+      agentInterfaceDocPath: path.resolve("docs/rabi-agent-interfaces.md"),
+      activePlans: [], activeSkills: [], recentMemories: [], matchedItems: [], matchedSkills: [],
+      contextInjection: DEFAULT_FOCUSED_CONTEXT_INJECTION,
+      requiredReadItems: [{ id: "memory-example", type: "recent_memory", title: "唯一召回标题", summary: "唯一召回摘要",
+        score: 100, endpoint: "/api/roles/TestRole/memory/recent/memory-example", revisionAt: "2026-09-08T00:00:00.000Z" }]
+    };
+    const build = (rawMessage: string) => buildPublishedAgentPacket({
+      route, routeKind: "manual_trigger", record: { time: 1, source: "manual", rawMessage },
+      extraValues: {}, matchedRules: [rule], routeVariables: {}, routeText: rawMessage
+    }, rule, { roleId: "TestRole", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir }, { roleKnowledge: knowledge });
+    const ordinary = build("你好").content;
+    assert.equal(ordinary.split("唯一召回标题").length - 1, 1);
+    assert.equal(ordinary.split("唯一召回摘要").length - 1, 1);
+    assert.match(ordinary, /GET \/api\/roles\/TestRole\/memory\/recent\/memory-example/);
+    assert.doesNotMatch(ordinary, /\[远端 Agent 设备\]|命中召回：|当前计划：|可用技能：/);
+    assert.match(build("请在远端执行任务").content, /\[远端 Agent 设备\]/);
+    config.messageEndpointTypes = previousEndpoints.filter(endpoint => endpoint !== "remoteAgent");
+    assert.doesNotMatch(build("请在远端执行任务").content, /\[远端 Agent 设备\]/);
+  } finally {
+    config.messageEndpointTypes = previousEndpoints;
+    fs.rmSync(roleDir, { recursive: true, force: true });
+  }
+});
 
 function buildAgentPacket(
   decision: RouteDecision,
@@ -135,9 +173,9 @@ test("AgentPacket expands CQ reply chains and centralizes at mappings", () => {
   assert.match(packet.message, /\[CQ:at,qq=10001\] : 星海/);
   assert.match(packet.message, /\[CQ:at,qq=10003\] : 秋雨Memories/);
   assert.match(packet.message, /\[CQ:at,qq=10002\] : 定位同学/);
-  assert.match(packet.message, /\[主动协作要求\]/);
-  assert.match(packet.message, /明确面向本角色的消息默认回复/);
-  assert.match(packet.message, /说明理解、下一步和负责人/);
+  assert.doesNotMatch(packet.message, /\[主动协作要求\]/);
+  assert.match(packet.message, /发送要求/);
+  assert.ok(packet.message.indexOf("[相关上下文]") < packet.message.indexOf("[回传参数]"));
   assert.doesNotMatch(packet.message, /当前消息 messageId/);
   assert.doesNotMatch(packet.message, /纯文本/);
 });
@@ -604,6 +642,8 @@ test("AgentPacket presents broad history before the current message and keeps fo
   assert.match(packet.message, /改动原因是为了更长的底框/);
   assert.match(packet.message, /不是为了单纯把底框做长/);
   assert.match(packet.message, /“动态显示的”/);
+  assert.equal(packet.content.split("改动原因是为了更长的底框").length - 1, 1);
+  assert.match(packet.content, /messageId=1000：见\[最近消息\]同 ID 内容/);
   const recentMessagesSectionIndex = packet.message.indexOf("[最近消息]");
   const currentMessageSectionIndex = packet.message.indexOf("[消息内容]");
   const focusedDiscussionSectionIndex = packet.message.indexOf("[当前讨论片段]");
@@ -675,17 +715,12 @@ test("AgentPacket exposes exact plan secretary sessions without replacing busine
     assert.match(packet.message, /\n\[消息内容\]\n推进计划/);
     assert.match(packet.message, /\[计划协助会话\]/);
     assert.match(packet.message, /threadId=019fa314-2c07-7523-896f-9bb6b638054b/);
-    assert.match(packet.message, /持久计划秘书/);
-    assert.match(packet.message, /secretaryBinding 记录秘书/);
-    assert.match(packet.message, /taskBinding\.sessionId \+ workspace 只指向独立业务任务/);
-    assert.match(packet.message, /业务任务执行调查、实现、测试、构建、发布和外部操作/);
-    assert.match(packet.message, /计划引导、审批和业务结果优先送达负责秘书/);
-    assert.match(packet.message, /委派完成以精确 threadId、workspace 和阶段回执为准/);
-    assert.match(packet.message, /approvalRequest 完整且 responseStatus=pending 时由 Manager 派生阻塞/);
-    assert.match(packet.message, /秘书轮转或计划暂停不清空 taskBinding/);
-    assert.match(packet.message, /仅把决定、批准、授权、缺少输入或最终复核升级给主人格/);
-    assert.match(packet.message, /没有无人管理或可推进但空闲的计划/);
-    assert.match(packet.message, /同一 planId 只有一个控制面 writer/);
+    assert.match(packet.message, /秘书负责计划控制面，业务执行交 taskBinding 指定任务/);
+    assert.match(packet.message, /skills\/plan-task-orchestration\/SKILL.md/);
+    const ordinaryPacket = buildAgentPacket({ ...decision, record: { ...decision.record, rawMessage: "你好" } }, rule, {
+      roleId: "XinghaiBuilder", roleDir: dataDir, rolePath: path.join(dataDir, "AGENTS.md"), dataDir
+    });
+    assert.doesNotMatch(ordinaryPacket.content, /\[计划协助会话\]/);
   } finally {
     config.codexPlanAssistantSessions = previousSessions;
   }
@@ -1314,7 +1349,7 @@ test("AgentPacket injects identity context without turning another project's dis
   assert.match(packet.message, /\[身份定位\]/);
   assert.match(packet.message, /已确认参与者：COTTON/);
   assert.match(packet.message, /不能单独证明项目归属、委托、决策权或执行授权/);
-  assert.match(packet.message, /identity-relations API/);
+  assert.match(packet.message, /identity-relations 合同/);
   assert.match(packet.message, /\[情景记录\]/);
   assert.match(packet.message, /已确认项目关系：edge-space（参与讨论）/);
   assert.match(packet.message, /可以自然参与有价值的讨论、澄清问题或提出建议/);
@@ -1386,16 +1421,18 @@ test("AgentPacket requires a bound latest-context review before a message-proces
 
   assert.match(packet.message, /requirements\/requirement-1\/send-context/);
   assert.match(packet.message, /核对最新消息，取得 sendContextReviewToken/);
+  const sendTemplate = String(packet.templateValues.sendRequestJson);
+  assert.equal(packet.content.split(sendTemplate).length - 1, 1, "send request appears exactly once");
   assert.match(packet.message, /sendContextReviewToken/);
   assert.match(packet.message, /发送目标或正文变化时重新审核/);
   assert.match(packet.message, /replyImageDescriptions/);
   assert.match(packet.message, /逐张填写 params\.replyImageDescriptions/);
-  assert.match(packet.message, /\[本轮工作契约\]/);
-  assert.match(packet.message, /事实、合理推断、未知/);
-  assert.match(packet.message, /旧日志、工具成功、文件生成、退出码或 delivered 都不是现实完成/);
+  assert.doesNotMatch(packet.message, /\[本轮工作契约\]/);
+  assert.match(packet.message, /projectFactAssessment/);
+  assert.match(packet.message, /渠道回执齐全后/);
 });
 
-test("AgentPacket gives a persona heartbeat a local-first work contract", () => {
+test("AgentPacket keeps persona heartbeat behavior in its persona and template", () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-heartbeat-contract-"));
   const rule: NotificationRule = {
     id: "heartbeat-contract",
@@ -1439,7 +1476,8 @@ test("AgentPacket gives a persona heartbeat a local-first work contract", () => 
     dataDir: roleDir
   });
 
-  assert.match(packet.message, /\[本轮工作契约\]/);
-  assert.match(packet.message, /心跳不是考勤或项目巡检/);
+  assert.doesNotMatch(packet.message, /\[本轮工作契约\]/);
+  assert.match(packet.message, /按本次事件和模板执行/);
   assert.match(packet.message, /先恢复当前场景，再决定是否读取本机现场/);
+  assert.doesNotMatch(packet.content, /秋雨|夜雨|只推进一个/);
 });

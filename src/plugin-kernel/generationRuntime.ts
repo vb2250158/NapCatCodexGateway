@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { runPluginActivation } from "./pluginActivationContext.js";
 import { planCapabilityGraph, type CapabilityGraphPlan } from "./capabilityGraph.js";
 import { ContributionRegistryDraft, type ContributionRegistrySnapshot, type RegisteredPluginContribution } from "./contributionRegistry.js";
 import { EffectScope } from "./effectScope.js";
@@ -316,6 +317,14 @@ export class GenerationRuntime {
     return this.#current;
   }
 
+  publishSourcePatch<T>(expectedGenerationId: string, operation: () => Promise<T>): Promise<T> {
+    return this.#enqueue(async () => {
+      if (this.#disposed) throw new Error("Plugin GenerationRuntime is disposed.");
+      if (this.#current.id !== expectedGenerationId) throw new Error("Source patch plugin generation is no longer active.");
+      return operation();
+    });
+  }
+
   switch(candidates: readonly PluginCandidate[], options: GenerationSwitchOptions = {}): Promise<GenerationSwitchResult> {
     return this.#enqueue(() => this.#switchNow(candidates, options));
   }
@@ -544,7 +553,7 @@ export class GenerationRuntime {
     for (const state of preparedToCommit) {
       if (nextActive.get(state.identity.instanceId)?.scope !== state.scope) continue;
       try {
-        await state.scope.commit();
+        await runPluginActivation(state.identity, () => state.scope.commit());
       } catch (error) {
         const component = componentForInstance.get(state.identity.instanceId) ?? [state.identity.instanceId];
         const componentSet = new Set(component);

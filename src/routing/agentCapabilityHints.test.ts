@@ -2,10 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   personaSyncCapabilityHint,
-  voiceIdentityReviewCapabilityHint
+  voiceIdentityReviewCapabilityHint,
+  needsPlanAssistantHint,
+  needsRemoteAgentHint
 } from "./agentCapabilityHints.js";
 
 const context = { managerPort: "9000", roleId: "Rabi A" };
+
+test("operation tutorials are selected by current intent instead of installed capabilities", () => {
+  for (const text of ["你好", "这个按钮再向下挪一点", "今天吃什么"]) {
+    assert.equal(needsPlanAssistantHint(text, "group_message"), false);
+    assert.equal(needsRemoteAgentHint(text), false);
+  }
+  assert.equal(needsPlanAssistantHint("推进计划", "manual_trigger"), true);
+  assert.equal(needsPlanAssistantHint("可以", "plan_feedback"), true);
+  assert.equal(needsRemoteAgentHint("请在另一台电脑执行构建"), true);
+  assert.equal(needsRemoteAgentHint("dispatch a remote agent task"), true);
+});
 
 test("persona sync capability appears only for explicit multi-PC persona intent", () => {
   const hint = personaSyncCapabilityHint("把当前人格同步到另一台电脑", context);

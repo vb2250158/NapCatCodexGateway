@@ -6,14 +6,15 @@ import { rabiContextManager } from "../context/rabiContextManager.js";
 import { buildRoleKnowledgeContextView } from "./roleKnowledgeContext.js";
 import {
   personaSyncCapabilityHint,
-  voiceIdentityReviewCapabilityHint
+  voiceIdentityReviewCapabilityHint,
+  needsPlanAssistantHint,
+  needsRemoteAgentHint
 } from "./agentCapabilityHints.js";
 import { toProjectRelativePath } from "../shared/projectPaths.js";
 import { resolveSpeechRouteProfile } from "../shared/speechControlContract.js";
 import { recentMessageLimitFor } from "../shared/gatewayConfigModel.js";
 import { memoryConsolidationResultMutationLines } from "../shared/roleStorageMutationContract.js";
-import { communicationModeForRouteKind, proactiveCommunicationPolicyLines } from "../shared/agentCommunicationPolicy.js";
-import { normalizeRabiMessageContent, renderRabiMessage, type RabiMessageSource } from "../shared/rabiMessage.js";
+import { normalizeRabiMessageContent, renderRabiDelivery, renderRabiDeliveryContent, type RabiDeliveryEnvelope, type RabiMessageSource } from "../shared/rabiMessage.js";
 import {
   currentPlanStep,
   getPlan,
@@ -27,6 +28,7 @@ import {
   messageContextArchiveDir,
   messageContextCurrentPath,
   recentMessageContextItems,
+  formatMessageContextItem,
   recentMessageContextText
 } from "../messageContextStore.js";
 import { resolvePersonaVoiceIdentities, type PersonaVoiceIdentity } from "../personaVoiceIdentities.js";
@@ -72,6 +74,7 @@ export type AgentPacket = {
   rule: NotificationRule;
   templateValues: ForwardTemplateValues;
   messageSource: RabiMessageSource;
+  delivery: RabiDeliveryEnvelope;
   content: string;
   message: string;
   /** Shadow assessment persisted only after this packet enters the delivery path. */
@@ -292,14 +295,9 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
 
   return [
     ...intro,
-    "使用下面的明确发送模板。来源上下文只用于核对。",
+    "使用[回传参数]中的请求；来源上下文只用于核对。",
     "仅当当前 Route 在 Codex 的 Hook 管理中开启“仅允许主人格发送消息”时，Codex 主人格发送必须填 sender.agentType=primary_persona，sender.sessionId 必须是绑定的主人格任务 ID；其它场景按模板中的实际发送方填写。",
     "NapCat 图片引用按原图填写 params.replyImageDescriptions。",
-    `POST ${sendApiUrl}`,
-    "示例：",
-    "```json",
-    sendRequestJson,
-    "```",
     ...processingOutcomeLines,
     isPlanFeedback
       ? "成功后简短说明计划已更新、回复已回写。"
@@ -313,12 +311,9 @@ function directMessageModeLines(values: ForwardTemplateValues): string[] {
   return [
     "当前路由没有绑定任何人格，这是无人格直通模式。",
     "不要扮演角色，不读取或更新角色计划、记忆、技能，也不要提示需要配置人格。",
-    optionalLine("消息来源", values.messageTarget),
-    optionalLine("发送者", values.sender),
-    optionalLine("输入适配器", values.inputAdapter),
     optionalLine("输出适配器", values.outputAdapter),
     "只根据本次消息、日志路径和路由变量处理任务。",
-    "需要对消息来源说出的每一句话，都通过“发送”里的明确发送 API 投递到 RabiRoute；必须使用给出的 channel 与 params，不能让系统根据来源上下文猜测目标。"
+    "需要对消息来源说出的每一句话，都通过“回传参数”里的发送 API 投递到 RabiRoute；必须使用给出的 channel 与 params，不能让系统根据来源上下文猜测目标。"
   ];
 }
 
@@ -327,17 +322,13 @@ function section(title: string, lines: string[]): string {
   return content ? `[${title}]\n${content}` : "";
 }
 
-function personaWorkContractLines(routeKind: string): string[] {
-  return [
-    "先把本轮材料分成已证实事实、合理推断、未知和待秋雨完成的最小一步；旧日志、工具成功、文件生成、退出码或 delivered 都不是现实完成。",
-    "只推进一个当前价值最高、权限内且可逆的动作；动作后用实际产物、真实回执或用户可见结果核验，失败就留下准确原因和恢复点。",
-    "没有新增事实、风险、承诺变化或足以覆盖打扰成本的陪伴价值时保持安静；计划/记忆只写稳定、未来有用且已证实的变化。",
-    "外部发送、设备控制、删除、支付、账号与第三方影响继续遵守 Action Gate；本地取证也只在当前入口明确允许的范围内短时读取、查看后清理原始材料。",
-    routeKind === "heartbeat"
-      ? "心跳不是考勤或项目巡检：先判断秋雨与夜雨当前场景，再决定是否取证、陪伴、推进或安静结束。"
-      : "模板只补充当前入口的判断重点，不重复这套收口契约。"
-  ];
+function formatSendRequest(value: unknown): string {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  try { return JSON.stringify(JSON.parse(text), null, 2); }
+  catch { return `请求参数解析失败，请核对来源：${text}`; }
 }
+
 
 function parseJsonlFile<T>(filePath: string): T[] {
   if (!fs.existsSync(filePath)) {
@@ -614,7 +605,8 @@ function compactConversationText(value: unknown): string {
 function focusedConversationContextLines(
   decision: RouteDecision,
   roleContext: AgentRoleContext,
-  historyLimit: number
+  historyLimit: number,
+  renderedRecentMessages: string
 ): string[] {
   const boundedHistoryLimit = Math.max(0, Math.min(12, Math.floor(historyLimit)));
   if (boundedHistoryLimit === 0) return [];
@@ -644,13 +636,16 @@ function focusedConversationContextLines(
       const sender = item.sender || "未知发送者";
       const messageId = String(item.messageId || item.id || "").trim();
       const replyTo = String(item.replyToMessageId || "").trim();
+      if (item.messageId != null && renderedRecentMessages.includes(formatMessageContextItem(item))) {
+        return `- ${direction}｜${sender}｜messageId=${messageId}：见[最近消息]同 ID 内容。`;
+      }
       return `- ${direction}｜${sender}${messageId ? `｜messageId=${messageId}` : ""}${replyTo ? `｜replyTo=${replyTo}` : ""}：${compactConversationText(item.text) || "[无文字内容]"}`;
     }),
     "如果当前短句是在纠正上一条理解，例如“动态显示的”“不是这个”“具体内容是啥”，必须修正上一条讨论对象，不得另起一个假设问题。"
   ];
 }
 
-function immediateAddressedContextLines(decision: RouteDecision, roleContext: AgentRoleContext): string[] {
+function immediateAddressedContextLines(decision: RouteDecision, roleContext: AgentRoleContext, renderedRecentMessages: string): string[] {
   if (!("userId" in decision.record)) return [];
   const currentUserId = String(decision.record.userId ?? "").trim();
   if (!currentUserId) return [];
@@ -686,6 +681,9 @@ function immediateAddressedContextLines(decision: RouteDecision, roleContext: Ag
   const lines = selected.map(item => {
     const age = Number.isFinite(currentTime) ? Math.max(0, Math.round(currentTime - item.time)) : 0;
     const sender = item.sender || "未知发送者";
+    if (item.messageId != null && renderedRecentMessages.includes(formatMessageContextItem(item))) {
+      return `- ${age} 秒前｜${sender}｜messageId=${item.messageId}：见[最近消息]同 ID 内容。`;
+    }
     return `- ${age} 秒前｜${sender}：${compactConversationText(item.text) || "[无文字内容]"}`;
   });
   return [
@@ -1140,7 +1138,7 @@ function buildAgentMessage(
   roleDir: string,
   dataDir: string,
   options: BuildAgentPacketOptions
-): { messageSource: RabiMessageSource; content: string; message: string; conversationSituation?: ConversationSituation } {
+): { messageSource: RabiMessageSource; delivery: RabiDeliveryEnvelope; content: string; message: string; conversationSituation?: ConversationSituation } {
   const record = decision.record;
   const routeKind = decision.routeKind;
   const shouldAttachMemoryConsolidation = routeKind === "manual_trigger" && String(values.triggerId || "") === "memory-consolidation";
@@ -1165,7 +1163,13 @@ function buildAgentMessage(
       : rabiContextManager.resolve(contextTrigger)
     : null;
   const knowledge = contextResolution?.knowledge ?? null;
-  const knowledgeView = knowledge ? buildRoleKnowledgeContextView(values.agentRoleId, knowledge) : null;
+  const knowledgeAgentInterfaceDocPath = relativeWorkspacePath(knowledge?.agentInterfaceDocPath);
+  const knowledgeView = knowledge
+    ? buildRoleKnowledgeContextView(values.agentRoleId, {
+        ...knowledge,
+        agentInterfaceDocPath: knowledgeAgentInterfaceDocPath || "docs/rabi-agent-interfaces.md"
+      })
+    : null;
   const activePlanIndex = knowledgeView?.activePlanIndex ?? "- 暂无";
   const activeSkillIndex = knowledgeView?.activeSkillIndex ?? "- 暂无";
   const recentMemoryIndex = knowledgeView?.recentMemoryIndex ?? "- 暂无";
@@ -1175,7 +1179,6 @@ function buildAgentMessage(
   const pendingConsolidation = knowledge?.pendingConsolidation;
   const knowledgePlansDir = relativeWorkspacePath(knowledge?.plansDir);
   const knowledgeMemoryDir = relativeWorkspacePath(knowledge?.memoryDir);
-  const knowledgeAgentInterfaceDocPath = relativeWorkspacePath(knowledge?.agentInterfaceDocPath);
   const recentMessageLimit = Number(values.recentMessageLimit ?? 0);
   const capabilityIntentText = [
     normalizeRabiMessageContent(String(values.message || record.rawMessage || ""), true),
@@ -1232,13 +1235,13 @@ function buildAgentMessage(
     roleDir,
     rolePath,
     dataDir
-  });
+  }, String(values.recentMessages || ""));
   const focusedConversationContext = immediateAddressedContext.length > 0 ? [] : focusedConversationContextLines(decision, {
     roleId: String(values.agentRoleId || ""),
     roleDir,
     rolePath,
     dataDir
-  }, recentMessageLimit);
+  }, recentMessageLimit, String(values.recentMessages || ""));
   const pendingConsolidationLines = pendingConsolidation
     ? [
         `runId：${pendingConsolidation.run.id}`,
@@ -1258,13 +1261,11 @@ function buildAgentMessage(
   ]);
 
   const messageSource = messageSourceForDecision(decision, values, roleDir);
-  const blocks = [
-    String(values.message || record.rawMessage || ""),
+  const contextBlocks = [
     section("事件信息", [
       `事件：${eventTitleForRoute(routeKind, record)}`,
       `路由类型：${routeKind}`,
       optionalLine("事件时间", values.time),
-      optionalLine("当前时间", values.currentTime),
       optionalLine("语音处理主机", values.voiceSourceHostName || values.voiceSourceHostId),
       optionalLine("声纹 ID", values.voiceprintId),
       optionalLine("本段声纹", values.voiceprintIds),
@@ -1291,9 +1292,10 @@ function buildAgentMessage(
     ]) : "",
     hasPersona ? section("身份定位", [
       ...identityContextSummaryLines,
-      "系统已经为第一次出现的稳定消息端账号自动建立“待认识”的候选身份。显示名变化只会作为别名线索，不能据此确认是同一个人。",
+      identityContexts.some(context => context.candidateParticipants.length > 0)
+        ? "候选身份尚未确认；显示名仅作别名线索，不授予权限。" : "",
       ...identityObservationHints,
-      "身份定位查询与计划/记忆关键词召回相互独立，不需要为它提交 knowledge-callback。人工确认、纠正或处理冲突时，使用 Agent 接口文档中的 identity-relations API。"
+      "身份关系独立于知识召回；确认、纠正或冲突处理前读取接口文档中的 identity-relations 合同。"
     ]) : "",
     hasPersona && conversationSituation ? section("情景记录", conversationSituationLines(conversationSituation)) : "",
     String(values.configurationRequested || "") === "true" ? section("移动端配置助手", [
@@ -1314,31 +1316,25 @@ function buildAgentMessage(
       optionalLine("更新记忆与计划的说明文档", knowledgeAgentInterfaceDocPath ?? values.agentInterfaceDocPath),
       ...(knowledgeView?.apiHintLines ?? []),
       "",
-      "可用技能：",
-      activeSkillIndex,
-      "",
-      "当前计划：",
-      activePlanIndex,
-      "",
-      "近期记忆：",
-      recentMemoryIndex,
-      "",
-      "命中技能：",
-      matchedSkillIndex,
-      "",
-      "命中召回：",
-      matchedIndex
+      ...(knowledgeView?.mode === "focused" ? [] : [
+        "可用技能：",
+        activeSkillIndex,
+        "",
+        "当前计划：",
+        activePlanIndex,
+        "",
+        "近期记忆：",
+        recentMemoryIndex,
+        "",
+        "命中技能：",
+        matchedSkillIndex,
+        "",
+        "命中召回：",
+        matchedIndex
+      ])
     ]) : "",
-    hasPersona && planAssistantLines.length > 0 ? section("计划协助会话", [
-      "下列任务是持久计划秘书，只管理控制面。",
-      `全部秘书统一使用 Manager 配置的模型：${config.codexPlanAssistantModel}`,
-      "secretaryBinding 记录秘书；taskBinding.sessionId + workspace 只指向独立业务任务。",
-      "秘书维护计划和记忆、查重、巡检、消费结果和续投；业务任务执行调查、实现、测试、构建、发布和外部操作。",
-      "计划引导、审批和业务结果优先送达负责秘书。委派完成以精确 threadId、workspace 和阶段回执为准。",
-      "秘书同轮更新计划与记忆并续投。仅把决定、批准、授权、缺少输入或最终复核升级给主人格。",
-      "秘书轮转或计划暂停不清空 taskBinding；业务任务失效并迁移后才改绑。",
-      "同一 planId 只有一个控制面 writer；运行中任务不重复投递。结束前确认没有无人管理或可推进但空闲的计划。",
-      "approvalRequest 完整且 responseStatus=pending 时由 Manager 派生阻塞；其他等待继续询问、重试、改道、拆分或补证据。",
+    hasPersona && planAssistantLines.length > 0 && needsPlanAssistantHint(capabilityIntentText, routeKind) ? section("计划协助会话", [
+      "秘书负责计划控制面，业务执行交 taskBinding 指定任务；职责见 skills/plan-task-orchestration/SKILL.md。",
       ...planAssistantLines
     ]) : "",
     hasPersona ? section("处理前上下文确认", requiredReadIndex) : "",
@@ -1355,35 +1351,45 @@ function buildAgentMessage(
       optionalLine("历史会话归档", values.conversationArchiveDir),
       optionalLine("会话归档索引", values.conversationArchiveIndexPath)
     ]),
-    section("发送", [
-      optionalLine("明确发送 API", values.sendApiUrl),
-      optionalLine("明确发送请求模板", values.sendRequestJson),
-      optionalLine("来源上下文（只用于核对来源，不可直接作为发送参数）", values.replyContextJson)
-    ]),
-    section("主动协作要求", proactiveCommunicationPolicyLines(communicationModeForRouteKind(routeKind))),
-    section("发送要求", replyDeliveryLines(values, !hasPersona)),
-    config.messageEndpointTypes.includes("remoteAgent")
+    config.messageEndpointTypes.includes("remoteAgent") && needsRemoteAgentHint(capabilityIntentText)
       ? section("远端 Agent 设备", remoteAgentApiHint(values))
       : "",
     pendingConsolidation ? section("待整理记忆", pendingConsolidationLines) : "",
-    referencedPlanSummaries.length > 0 ? section("指定计划内容", referencedPlanSummaries) : "",
-    routeKind === "manual_trigger" || routeKind === "heartbeat" ? section("事件执行要求", [
-      routeKind === "manual_trigger"
-        ? isManualTriggerRecord(record) && record.triggerSource === "auto"
-          ? "近期记忆到达 72 小时，执行自动沉淀。"
-          : "执行本次手动触发。"
-        : "执行本次定时心跳。",
-      "按事件和模板执行并输出结果。无新事项时写明检查范围和下一步；受限时写明限制和下一步。"
-    ]) : "",
-    hasPersona ? section("本轮工作契约", personaWorkContractLines(routeKind)) : "",
-    userTemplateText.trim() ? section("用户模板补充", [userTemplateText.trim()]) : ""
+    referencedPlanSummaries.length > 0 ? section("指定计划内容", referencedPlanSummaries) : ""
   ];
 
-  const content = appendAgentRoleReference(blocks.filter(Boolean).join("\n\n"), hasPersona ? rolePath : "");
+  const delivery: RabiDeliveryEnvelope = {
+    messageSource,
+    messageContent: [
+      String(values.message || record.rawMessage || ""),
+      routeKind === "manual_trigger" || routeKind === "heartbeat" ? section("事件执行要求", [
+        routeKind === "manual_trigger"
+          ? isManualTriggerRecord(record) && record.triggerSource === "auto"
+            ? "近期记忆到达 72 小时，执行自动沉淀。"
+            : "执行本次手动触发。"
+          : "执行本次定时心跳。",
+        "按本次事件和模板执行；无新变化时不外发，受阻时记录原因和下一步。"
+      ]) : "",
+      userTemplateText.trim() && userTemplateText.trim() !== String(values.message || record.rawMessage || "").trim()
+        ? section("用户模板补充", [userTemplateText.trim()]) : ""
+    ].filter(Boolean).join("\n\n"),
+    contextBlocks: [...contextBlocks.filter(Boolean), ...(hasPersona ? [appendAgentRoleReference("", rolePath)] : [])],
+    controlBlocks: [
+      section("回传参数", [
+        optionalLine("明确发送 API", values.sendApiUrl),
+        formatSendRequest(values.sendRequestJson),
+        optionalLine("来源上下文（只用于核对来源，不可直接作为发送参数）", values.replyContextJson)
+      ]),
+      section("发送要求", replyDeliveryLines(values, !hasPersona))
+    ],
+    escapeMessageContentHeaders: false
+  };
+  const content = renderRabiDeliveryContent(delivery);
   return {
     messageSource,
+    delivery,
     content,
-    message: renderRabiMessage(messageSource, content),
+    message: renderRabiDelivery(delivery),
     conversationSituation
   };
 }
@@ -1416,6 +1422,7 @@ export function buildAgentPacket(
     rule,
     templateValues,
     messageSource: built.messageSource,
+    delivery: built.delivery,
     content: built.content,
     message: built.message,
     conversationSituation: built.conversationSituation

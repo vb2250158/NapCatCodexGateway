@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../../userFacingError";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { XiaomiHomeRuntimeSettings, XiaomiHomeSettingsSnapshot } from "@shared/xiaomiHomeSettingsContract";
 import { registerPageSaveAction } from "../../pageSaveAction";
@@ -44,7 +45,7 @@ async function load(): Promise<void> {
     hydrate(await xiaomiHomeSettingsClient.read());
     error.value = "";
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
   } finally {
     loading.value = false;
   }
@@ -62,7 +63,7 @@ async function save(): Promise<void> {
     hydrate(await xiaomiHomeSettingsClient.update(snapshot.value, settings));
     error.value = "";
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
     throw cause;
   } finally {
     saving.value = false;

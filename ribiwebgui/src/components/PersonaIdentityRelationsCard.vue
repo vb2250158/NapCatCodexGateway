@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, ref, watch } from "vue";
 import {
   personaIdentityRelationClient,
@@ -570,7 +571,7 @@ async function refresh(): Promise<void> {
     relationCards.value = result.relationCards;
     loaded.value = true;
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : String(caught);
+    error.value = userFacingError(caught);
   } finally {
     loading.value = false;
   }
@@ -583,7 +584,7 @@ async function refreshSituations(): Promise<void> {
     situations.value = await personaIdentityRelationClient.listSituations(props.roleId);
     situationsLoaded.value = true;
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : String(caught);
+    error.value = userFacingError(caught);
   } finally {
     situationsLoading.value = false;
   }
@@ -761,7 +762,7 @@ async function persistParticipant(): Promise<boolean> {
     await refresh();
     return true;
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : String(caught);
+    error.value = userFacingError(caught);
     return false;
   } finally {
     saving.value = false;
@@ -804,7 +805,7 @@ async function persistAccount(): Promise<boolean> {
     await refresh();
     return true;
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : String(caught);
+    error.value = userFacingError(caught);
     return false;
   } finally {
     saving.value = false;
@@ -842,7 +843,7 @@ async function persistRelation(): Promise<boolean> {
     await refresh();
     return true;
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : String(caught);
+    error.value = userFacingError(caught);
     return false;
   } finally {
     saving.value = false;

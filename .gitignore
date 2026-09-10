@@ -1,5 +1,8 @@
 /node_modules/
 /dist/
+/apps/rabi-agent/runtime/
+/apps/rabi-agent/dist/
+/apps/rabi-agent/node_modules/
 /ribiwebgui/dist/
 /build/
 /.tmp/

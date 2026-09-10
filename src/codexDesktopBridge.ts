@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { deliveryIdFromPrompt, deliveryUserMessagesFromRollout } from "./shared/deliveryIdentity.js";
+import { findRolloutDeliveryReceipt } from "./agentRequests/rolloutReceipt.js";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -283,6 +285,24 @@ function readDesktopThreadRows(databasePath: string): CodexDesktopThreadRow[] {
   }
 }
 
+export function listCodexDesktopWorkspaces(databasePath = findCodexDesktopStateDatabase()): string[] {
+  if (!databasePath) return [];
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const rows = database.prepare(`
+      SELECT id, cwd, archived FROM threads
+      ORDER BY COALESCE(NULLIF(recency_at_ms, 0), NULLIF(updated_at_ms, 0), recency_at * 1000, updated_at * 1000) DESC
+      LIMIT 10000
+    `).all() as Pick<CodexDesktopThreadRow, "id" | "cwd" | "archived">[];
+    return [...new Set(rows
+      .filter(row => nonEmptyString(row.id) && Number(row.archived ?? 0) === 0)
+      .map(row => nonEmptyString(row.cwd))
+      .filter(Boolean))];
+  } finally {
+    database.close();
+  }
+}
+
 export function listCodexDesktopThreads(options: {
   query?: string;
   limit?: number;
@@ -309,17 +329,30 @@ export function readCodexDesktopThread(
   databasePath = findCodexDesktopStateDatabase(),
   sessionIndexPath = codexDesktopSessionIndexPath()
 ): CodexDesktopThread | null {
-  if (!databasePath) return null;
+  return readCodexDesktopThreadsByIds([threadId], databasePath, sessionIndexPath)[0] ?? null;
+}
+
+/** Resolve only requested history/task references, sharing one database and sidebar-index read. */
+export function readCodexDesktopThreadsByIds(
+  threadIds: string[],
+  databasePath = findCodexDesktopStateDatabase(),
+  sessionIndexPath = codexDesktopSessionIndexPath()
+): CodexDesktopThread[] {
+  if (!databasePath || !threadIds.length) return [];
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    const row = database.prepare(`
+    const query = database.prepare(`
       SELECT id, title, cwd, rollout_path, updated_at, updated_at_ms,
              recency_at, recency_at_ms, archived, first_user_message
       FROM threads WHERE id = ? LIMIT 1
-    `).get(threadId) as CodexDesktopThreadRow | undefined;
-    if (!row) return null;
-    const thread = listCodexDesktopThreadsFromRowsForTest([row], { limit: 1, includeArchived: true })[0] ?? null;
-    return thread ? applyCodexSidebarTaskNames([thread], sessionIndexPath)[0] ?? null : null;
+    `);
+    const rows = [...new Set(threadIds)].flatMap(id => {
+      const row = query.get(id) as CodexDesktopThreadRow | undefined;
+      return row ? [row] : [];
+    });
+    return applyCodexSidebarTaskNames(listCodexDesktopThreadsFromRowsForTest(rows, {
+      limit: rows.length, includeArchived: true
+    }), sessionIndexPath);
   } finally {
     database.close();
   }
@@ -383,7 +416,7 @@ function isTurnDeliveryTimeout(error: unknown, method: "thread-follower-steer-tu
 }
 
 export function agentDeliveryMarkerForTest(prompt: string): string {
-  return /\bdeliveryId[：:]\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i.exec(prompt)?.[1] ?? "";
+  return deliveryIdFromPrompt(prompt);
 }
 
 function rolloutTailContainsMarker(filePath: string, marker: string, maxBytes = 4 * 1024 * 1024): boolean {
@@ -395,7 +428,8 @@ function rolloutTailContainsMarker(filePath: string, marker: string, maxBytes = 
   try {
     const buffer = Buffer.alloc(length);
     fs.readSync(handle, buffer, 0, length, Math.max(0, stat.size - length));
-    return buffer.includes(Buffer.from(marker, "utf8"));
+    return deliveryUserMessagesFromRollout(buffer.toString("utf8"))
+      .some(prompt => deliveryIdFromPrompt(prompt) === marker);
   } finally {
     fs.closeSync(handle);
   }
@@ -404,6 +438,12 @@ function rolloutTailContainsMarker(filePath: string, marker: string, maxBytes = 
 export function codexDesktopRolloutContainsDeliveryMarker(threadId: string, marker: string): boolean {
   const thread = readCodexDesktopThread(threadId);
   return Boolean(thread?.rolloutPath && rolloutTailContainsMarker(thread.rolloutPath, marker));
+}
+
+export async function codexDesktopDeliveryReceiptConfirmed(threadId: string, deliveryId: string): Promise<boolean> {
+  const thread = readCodexDesktopThread(threadId);
+  if (!thread?.rolloutPath) return false;
+  return findRolloutDeliveryReceipt(thread.rolloutPath, deliveryId);
 }
 
 function defaultDeliveryReceiptReader(threadId: string, marker: string): boolean {

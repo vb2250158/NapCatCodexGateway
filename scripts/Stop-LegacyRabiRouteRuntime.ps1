@@ -379,7 +379,8 @@ function Remove-InstallOwnedSpeechTask {
     }
 
     $speechPredicate = { param($process) Is-InstallOwnedSpeechProcess $process }
-    Stop-MatchingProcesses $speechPredicate
+    $speechProcessNames = @([System.IO.Path]::GetFileName($speechRuntimeExecutable))
+    Stop-MatchingProcesses $speechPredicate $speechProcessNames
 
     $remaining = @(Get-SpeechTaskCandidates)
     if ($remaining.Count -eq 1) {
@@ -452,8 +453,16 @@ function Wait-ForTargetExit($Target, [scriptblock]$Predicate) {
     throw "Install-owned legacy process pid=$targetPid did not exit within 5 seconds."
 }
 
-function Stop-MatchingProcesses([scriptblock]$Predicate) {
-    $targets = @(Get-CimInstance Win32_Process | Where-Object { & $Predicate $_ })
+function Get-ProcessCandidates([string[]]$ProcessNames) {
+    $clauses = @($ProcessNames | Where-Object { $_ } | Select-Object -Unique | ForEach-Object {
+        "Name = '$($_.Replace("'", "''"))'"
+    })
+    if ($clauses.Count -eq 0) { return @() }
+    return @(Get-CimInstance Win32_Process -Filter ($clauses -join " OR "))
+}
+
+function Stop-MatchingProcesses([scriptblock]$Predicate, [string[]]$ProcessNames) {
+    $targets = @(Get-ProcessCandidates $ProcessNames | Where-Object { & $Predicate $_ })
     foreach ($target in $targets) {
         $targetPid = [int]$target.ProcessId
         # Re-read and reclassify the PID immediately before stopping it. A PID
@@ -469,6 +478,13 @@ function Stop-MatchingProcesses([scriptblock]$Predicate) {
 
 $watcherPredicate = { param($process) Is-LegacyWatcherProcess $process }
 $runtimePredicate = { param($process) Is-LegacyRuntimeProcess $process }
+$watcherProcessNames = $powershellProcessNames
+$runtimeProcessNames = @(
+    $legacyExecutables + $nodeExecutables + $pythonExecutables |
+    ForEach-Object { [System.IO.Path]::GetFileName($_) } |
+    Where-Object { $_ } |
+    Select-Object -Unique
+)
 
 # This historical AtLogOn task is a second lifecycle owner outside the Host Job.
 # Remove it only after every install-owned fingerprint has been verified. A
@@ -481,20 +497,20 @@ Remove-InstallOwnedWatchdogTask
 # Quiesce the legacy lifecycle owner before stopping its children. Otherwise
 # the watcher can recreate Manager between the first enumeration and installer
 # file replacement.
-Stop-MatchingProcesses $watcherPredicate
+Stop-MatchingProcesses $watcherPredicate $watcherProcessNames
 Start-Sleep -Milliseconds 250
 
 # Re-enumerate after the watcher exits so a Manager created during the final
 # watcher iteration is still included. The second pass closes the small window
 # between process creation and its visibility through CIM.
-Stop-MatchingProcesses $runtimePredicate
+Stop-MatchingProcesses $runtimePredicate $runtimeProcessNames
 Start-Sleep -Milliseconds 250
-Stop-MatchingProcesses $runtimePredicate
+Stop-MatchingProcesses $runtimePredicate $runtimeProcessNames
 
 # A process can disappear between CIM enumeration and verification. Only fail
 # when an exact install-owned legacy process is still present after migration.
 for ($verification = 0; $verification -lt 2; $verification++) {
-    $remaining = @(Get-CimInstance Win32_Process | Where-Object {
+    $remaining = @(Get-ProcessCandidates ($watcherProcessNames + $runtimeProcessNames) | Where-Object {
         (Is-LegacyWatcherProcess $_) -or (Is-LegacyRuntimeProcess $_)
     })
     if ($remaining) {

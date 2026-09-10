@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { DesktopPetBinding } from "@shared/desktopSettingsContract";
 import { desktopPetClient, type DesktopPetPackSummary } from "../desktopPetClient";
 import { registerPageSaveAction } from "../pageSaveAction";
 import { useGatewayStore } from "../stores/gatewayStore";
+import { desktopPetActions } from "../desktopPetActions";
+import DesktopPetAnimationPreview from "./DesktopPetAnimationPreview.vue";
 
 const props = defineProps<{ personaId: string }>();
 const store = useGatewayStore();
@@ -21,6 +24,12 @@ const importing = ref(false);
 const dirty = computed(() => store.dirty || petDirty.value);
 const ready = computed(() => !petDirty.value || loaded.value);
 const selectedPack = computed(() => packs.value.find(pack => pack.id === binding.value?.packId));
+const actions = computed(() => selectedPack.value ? desktopPetActions(selectedPack.value) : []);
+const actionGroups = computed(() => [...new Set(actions.value.map(action => action.group))]);
+const staticCount = computed(() => actions.value.filter(action => action.staticImage).length);
+const previewId = ref("");
+const previewAction = computed(() => actions.value.find(action => action.id === previewId.value));
+watch(selectedPack, () => { previewId.value = ""; });
 let loadRevision = 0;
 let unregisterSaveAction: (() => void) | undefined;
 
@@ -54,7 +63,7 @@ async function load(): Promise<void> {
     petDirty.value = false;
   } catch (cause) {
     if (revision === loadRevision) {
-      error.value = cause instanceof Error ? cause.message : String(cause);
+      error.value = userFacingError(cause);
     }
   } finally {
     if (revision === loadRevision) hydrating.value = false;
@@ -82,7 +91,7 @@ async function importDesktopPetPack(): Promise<void> {
     importName.value = "";
     error.value = "";
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
   } finally {
     importing.value = false;
   }
@@ -99,7 +108,7 @@ async function save(): Promise<void> {
       error.value = "";
     }
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
     throw cause;
   } finally {
     saving.value = false;
@@ -151,7 +160,7 @@ onBeforeUnmount(() => {
       <template v-if="binding">
         <v-select
           v-model="binding.packId"
-          label="动作素材"
+          label="动作包"
           :items="packs"
           item-title="name"
           item-value="id"
@@ -164,9 +173,36 @@ onBeforeUnmount(() => {
           <span>{{ selectedPack.name }}</span>
           <small data-no-i18n>{{ selectedPack.id }}</small>
         </div>
-        <v-alert v-else type="info" variant="tonal" density="compact" class="mb-4">
+        <v-alert v-if="!selectedPack" type="info" variant="tonal" density="compact" class="mb-4">
           先选择或导入动作素材，再开启桌宠。
         </v-alert>
+        <section v-else class="pet-action-catalog mb-4">
+          <div class="section-title small-title">动作列表</div>
+          <div class="section-note mb-3">
+            <span>动作总数</span>：{{ actions.length }} · <span>动画条目</span>：{{ actions.length - staticCount }} · <span>静态图片</span>：{{ staticCount }}
+          </div>
+          <div v-for="group in actionGroups" :key="group" class="pet-action-group">
+            <div class="virtual-avatar-field-label">{{ group }} · {{ actions.filter(action => action.group === group).length }}</div>
+            <div v-for="action in actions.filter(item => item.group === group)" :key="action.id" class="pet-action-row">
+              <div>
+                <strong>{{ action.name }}</strong> <small data-no-i18n>{{ action.id }}</small>
+                <div class="section-note"><span v-for="use in action.uses" :key="use" class="mr-2">{{ use }}</span></div>
+                <div class="section-note">
+                  <span>{{ action.staticImage ? "静态 PNG" : action.animation.type === "gif" ? "GIF 动画" : "PNG 序列动画" }}</span>
+                  · <span>{{ action.animation.loop ? "循环播放" : "单次播放" }}</span>
+                  <span v-if="action.animation.type === 'png-sequence'"> · {{ action.animation.assets.length }} <span>帧</span> · {{ action.animation.fps }} FPS</span>
+                  <span v-if="!action.animation.loop"> · <span>结束后</span>：<span data-no-i18n>{{ action.animation.next || 'idle' }}</span></span>
+                </div>
+              </div>
+              <v-btn size="small" variant="text" :aria-label="`${action.name} · 预览`" @click="previewId = action.id">预览</v-btn>
+            </div>
+          </div>
+          <div v-if="previewAction" class="mt-3">
+            <div class="virtual-avatar-field-label">{{ previewAction.name }}</div>
+            <DesktopPetAnimationPreview :key="`${selectedPack.id}:${previewAction.id}`" :animation="previewAction.animation" :name="previewAction.name" />
+            <div class="section-note mt-2">预览只在本页播放，不会触发桌宠动作或修改绑定。</div>
+          </div>
+        </section>
 
         <div class="section-title small-title mb-2">导入动作素材</div>
         <div class="section-note mb-3">单个 GIF 或 PNG 会作为待机动作；ZIP 需要包含 pet-pack.json。</div>
@@ -236,6 +272,10 @@ onBeforeUnmount(() => {
   gap: 18px;
   align-items: start;
 }
+
+.pet-action-group { margin-top: 14px; }
+.pet-action-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--rr-border-soft); }
+.pet-action-row small { color: var(--rr-muted); overflow-wrap: anywhere; }
 
 .virtual-avatar-heading {
   align-items: flex-start;

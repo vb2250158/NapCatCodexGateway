@@ -94,7 +94,7 @@ test("persona-sync discovery and proxy stay isolated by application token", asyn
     });
     assert.equal(appResponseB.status, 200);
     const tokenB = (await appResponseB.json()).app.token;
-    const register = async (token, deviceId, deviceGuid, peerUrls) => {
+    const register = async (token, deviceId, deviceGuid, peerUrls, deviceKind) => {
       const params = new URLSearchParams({
         deviceId,
         deviceGuid,
@@ -103,6 +103,7 @@ test("persona-sync discovery and proxy stay isolated by application token", asyn
         capabilities: "webgui,persona-sync",
         peerUrls: JSON.stringify(peerUrls)
       });
+      if (deviceKind !== undefined) params.set("deviceKind", deviceKind);
       const response = await fetch(`${baseUrl}/worker/webgui-requests?${params}`, {
         headers: { "x-rabilink-token": token }
       });
@@ -252,6 +253,48 @@ test("persona-sync discovery and proxy stay isolated by application token", asyn
     const proxied = await proxiedPromise;
     assert.equal(proxied.status, 200);
     assert.deepEqual((await proxied.json()).data.roles[0], { roleId: "Rabi", files: [] });
+
+    // Unified RPC reuses this real queue but cannot choose a Manager path.
+    const registerRpc = await fetch(`${baseUrl}/worker/webgui-requests?deviceId=pc-b&deviceGuid=guid-b&deviceName=pc-b&waitMs=0&capabilities=webgui,persona-sync,peer-rpc-v1`, {
+      headers: { "x-rabilink-token": tokenA }
+    });
+    assert.equal(registerRpc.status, 200);
+    const rpc = (token, body) => fetch(`${baseUrl}/api/rabilink/peer/proxy`, {
+      method: "POST", headers: { "content-type": "application/json", "x-rabilink-token": token }, body: JSON.stringify(body)
+    });
+    const packet = { version: 1, iv: "opaque", data: "encrypted", tag: "opaque" };
+    assert.equal((await rpc(tokenB, { targetDeviceId: "pc-b", packet })).status, 404);
+    assert.equal((await rpc(tokenA, { targetDeviceId: "pc-b", packet, path: "/api/agent/send" })).status, 400);
+    const rpcPending = rpc(tokenA, { targetDeviceId: "pc-b", packet });
+    let rpcClaim;
+    for (let attempt = 0; attempt < 30 && !rpcClaim; attempt++) {
+      const claim = await fetch(`${baseUrl}/worker/webgui-requests?deviceId=pc-b&deviceGuid=guid-b&deviceName=pc-b&waitMs=100&capabilities=webgui,persona-sync,peer-rpc-v1`, {
+        headers: { "x-rabilink-token": tokenA }
+      });
+      rpcClaim = (await claim.json()).requests?.[0];
+    }
+    assert.equal(rpcClaim.path, "/api/rabilink/peer/receive");
+    assert.deepEqual(JSON.parse(Buffer.from(rpcClaim.bodyBase64, "base64").toString()), packet);
+    const rpcFinish = await fetch(`${baseUrl}/worker/webgui-requests/${encodeURIComponent(rpcClaim.id)}/response`, {
+      method: "POST", headers: { "content-type": "application/json", "x-rabilink-token": tokenA },
+      body: JSON.stringify({ deviceId: "pc-b", deviceGuid: "guid-b", ok: true, statusCode: 200,
+        headers: { "content-type": "application/json" }, bodyBase64: Buffer.from(JSON.stringify(packet)).toString("base64") })
+    });
+    assert.equal(rpcFinish.status, 200);
+    assert.deepEqual(await (await rpcPending).json(), packet);
+
+    await register(tokenA, "pc-b", "guid-b", [], "pc");
+    await register(tokenA, "pc-b", "guid-b", []); // An old request cannot clear the type.
+    await register(tokenA, "terminal-a", "", [], "phone");
+    await register(tokenA, "terminal-b", "", [], "glasses");
+    const typedResponse = await fetch(`${baseUrl}/api/rabilink/peers?deviceId=pc-a&deviceGuid=guid-a`, {
+      headers: { "x-rabilink-token": tokenA }
+    });
+    const typedPeers = (await typedResponse.json()).peers;
+    assert.equal(typedPeers.find(peer => peer.id === "pc-b").deviceKind, "pc");
+    assert.equal(typedPeers.find(peer => peer.id === "terminal-a").deviceKind, "phone");
+    assert.equal(typedPeers.find(peer => peer.id === "terminal-b").deviceKind, "glasses");
+    assert.equal(typedPeers.find(peer => peer.id === "pc-live").deviceKind, "unknown");
   } finally {
     child.kill();
     await new Promise(resolve => {

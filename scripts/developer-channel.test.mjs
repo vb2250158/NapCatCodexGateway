@@ -26,12 +26,26 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(base, "desktop-runtime/rabiroute_tray/tray_app.py", "old tray module\n");
     write(base, "RabiRouteHost.Core.dll", "old core\n");
     write(base, "assets/default-persona-plan-workflow.json", "old workflow\n");
+    write(base, "docs/rabi-agent-interfaces.md", "old contract\n");
+    write(base, "plugins/builtin/test/manager.mjs", "old plugin\n");
+    write(base, "plugins/builtin/retired/manager.mjs", "retired plugin\n");
+    write(base, "skills/retired/SKILL.md", "retired skill\n");
+    write(base, "source-patches/retired.json", "retired catalog\n");
     write(base, "node.exe", "node\n");
     write(base, "node_modules/dep/index.js", "dependency\n");
     write(base, "release-manifest.json", "old manifest\n");
     write(build, "dist/manager.js", "new manager\n");
     write(build, "ribiwebgui/dist/index.html", "new web\n");
     write(build, "assets/default-persona-plan-workflow.json", "new workflow\n");
+    write(build, "docs/rabi-agent-interfaces.md", "new contract\n");
+    write(build, "plugins/builtin/test/manager.mjs", "new plugin\n");
+    write(build, "skills/rabi-knowledge-search/SKILL.md", "new knowledge search contract\n");
+    write(build, "skills/source-hot-patch-development/SKILL.md", "new source patch contract\n");
+    write(build, "source-patches/modules.json", '{"modules":[]}\n');
+    for (const name of ["README.md", "README_zh.md", "版本更新日志.md", "版本更新日志_en.md"]) {
+      write(base, name, "old release guide\n");
+      write(build, name, "current release guide\n");
+    }
     write(tray, "main.py", "new tray\n");
     write(tray, "rabiroute_tray/tray_app.py", "new tray module\n");
     write(host, "RabiRouteHost.Core.dll", "new core\n");
@@ -49,6 +63,19 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "dist", "manager.js"), "utf8"), "new manager\n");
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "ribiwebgui", "dist", "index.html"), "utf8"), "new web\n");
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "assets", "default-persona-plan-workflow.json"), "utf8"), "new workflow\n");
+    assert.equal(fs.readFileSync(path.join(result.packageRoot, "docs", "rabi-agent-interfaces.md"), "utf8"), "new contract\n");
+    assert.equal(fs.readFileSync(path.join(result.packageRoot, "plugins", "builtin", "test", "manager.mjs"), "utf8"), "new plugin\n");
+    assert.equal(fs.existsSync(path.join(result.packageRoot, "plugins", "builtin", "retired")), false);
+    assert.equal(fs.existsSync(path.join(result.packageRoot, "skills/retired")), false);
+    assert.equal(fs.existsSync(path.join(result.packageRoot, "source-patches/retired.json")), false);
+    assert.equal(fs.readFileSync(path.join(result.packageRoot, "skills/source-hot-patch-development/SKILL.md"), "utf8"), "new source patch contract\n");
+    assert.equal(fs.readFileSync(path.join(result.packageRoot, "source-patches/modules.json"), "utf8"), '{"modules":[]}\n');
+    for (const name of ["README.md", "README_zh.md", "版本更新日志.md", "版本更新日志_en.md"]) {
+      assert.equal(fs.readFileSync(path.join(result.packageRoot, name), "utf8"), "current release guide\n");
+      assert.equal(fs.readFileSync(path.join(base, name), "utf8"), "old release guide\n");
+    }
+    assert.equal(fs.readFileSync(path.join(result.packageRoot, "skills/rabi-knowledge-search/SKILL.md"), "utf8"), "new knowledge search contract\n");
+    assert.equal(fs.readFileSync(path.join(base, "docs", "rabi-agent-interfaces.md"), "utf8"), "old contract\n");
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "desktop-runtime", "main.py"), "utf8"), "new tray\n");
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "RabiRouteHost.Core.dll"), "utf8"), "new core\n");
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "node_modules", "dep", "index.js"), "utf8"), "dependency\n");

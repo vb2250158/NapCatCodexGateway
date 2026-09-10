@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "modules": [
+    {
+      "id": "manager.plugin-catalog",
+      "source": "src/manager/pluginCatalogPresentation.ts",
+      "resources": [],
+      "contract": {
+        "schemaVersion": 1,
+        "routes": [{ "method": "GET", "path": "/api/plugins/catalog", "responseSchemaVersion": 2 }],
+        "summary": { "en": "Read plugin capabilities and host-filtered contributions.", "zh": "读取插件能力及按宿主筛选的界面贡献。" }
+      }
+    }
+  ]
+}

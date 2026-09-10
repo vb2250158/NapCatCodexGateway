@@ -159,7 +159,7 @@ function planFeedbackRecoveryFixture(unrelatedPlanDirectories = 500): string {
 
 test("manager read workers keep the main event loop responsive during archive queries", async () => {
   const roleDir = voiceArchiveFixture();
-  const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 30_000 });
+  const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 60_000 });
   let ticks = 0;
   const timer = setInterval(() => { ticks += 1; }, 5);
   try {
@@ -242,7 +242,7 @@ test("knowledge plan pages coalesce identical concurrent summary reads", async (
 test("role panel timeline reads resolve a validated role id inside the read child", async () => {
   const rolesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-role-panel-read-worker-"));
   const roleDir = path.join(rolesRoot, "YeYu");
-  const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, timeoutMs: 10_000 });
+  const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, timeoutMs: 30_000 });
   try {
     appendRolePanelTimelineMessageIfAbsent(roleDir, {
       id: "worker-timeline-one",

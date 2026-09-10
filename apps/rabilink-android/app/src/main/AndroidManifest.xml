@@ -47,6 +47,7 @@
     <uses-permission android:name="com.mi.health.provider.device.read" />
 
     <queries>
+        <package android:name="com.rokid.sprite.aiapp" />
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
@@ -56,6 +57,7 @@
     </queries>
 
     <application
+        android:extractNativeLibs="true"
         android:allowBackup="false"
         android:icon="@drawable/rabiroute_icon"
         android:roundIcon="@drawable/rabiroute_icon"
@@ -63,6 +65,10 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         tools:replace="android:allowBackup">
+        <activity android:name=".recording.RabiRecordingHubActivity" android:exported="false" android:launchMode="singleTop" />
+        <service android:name=".modules.rokid.RabiLocalAudioService" android:exported="false" android:foregroundServiceType="microphone|connectedDevice" />
+        <activity android:name=".modules.rokid.RabiLiveRecordingActivity" android:exported="false" />
+        <service android:name=".modules.rokid.RabiLiveRecordingService" android:exported="false" android:foregroundServiceType="connectedDevice" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

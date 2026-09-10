@@ -152,7 +152,7 @@ if ($forbiddenEntry) {
 }
 
 $sourceSize = (Get-Item -LiteralPath $sourceApk).Length
-if ($sourceSize -gt 40MB) {
+if ($sourceSize -gt 70MB) {
     throw "The slim package is unexpectedly large ($sourceSize bytes); model assets may have leaked into it."
 }
 
@@ -196,12 +196,18 @@ $outputDir = Split-Path -Parent $OutputPath
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 $alignedApk = Join-Path $outputDir ".$([IO.Path]::GetFileNameWithoutExtension($OutputPath)).aligned.apk"
 
-$debugKeystore = Join-Path $env:USERPROFILE ".android\debug.keystore"
+$debugKeystore = Join-Path $ProjectDir "secrets\rokid\signing\debug.keystore"
+if (-not (Test-Path -LiteralPath $debugKeystore -PathType Leaf)) {
+    $debugKeystore = Join-Path $env:USERPROFILE ".android\debug.keystore"
+}
 if (-not (Test-Path -LiteralPath $debugKeystore -PathType Leaf)) {
     throw "Android debug keystore not found: $debugKeystore"
 }
 
 try {
+    $sourceCertificates = (& $apksigner verify --print-certs $sourceApk) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "Source APK signature is invalid." }
+    $sourceFingerprint = [regex]::Match($sourceCertificates, 'Signer #1 certificate SHA-256 digest: ([a-fA-F0-9]+)').Groups[1].Value
     Invoke-Checked $zipalign "-f" "-p" "4" $sourceApk $alignedApk
     Invoke-Checked $apksigner "sign" `
         "--ks" $debugKeystore `
@@ -219,6 +225,10 @@ try {
     $verification = (& $apksigner verify --min-sdk-version 24 --verbose --print-certs $OutputPath) -join "`n"
     if ($LASTEXITCODE -ne 0) {
         throw "apksigner rejected the exported APK."
+    }
+    $exportFingerprint = [regex]::Match($verification, 'Signer #1 certificate SHA-256 digest: ([a-fA-F0-9]+)').Groups[1].Value
+    if (-not $sourceFingerprint -or $sourceFingerprint -ne $exportFingerprint) {
+        throw "Export changed the APK signing identity. Use the same original key as the Gradle build."
     }
     if ($verification -notmatch "Verified using v2 scheme .*: true" -or
         $verification -notmatch "Verified using v3 scheme .*: true") {

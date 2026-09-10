@@ -13,7 +13,8 @@ const idCaches = new Map<string, { size: number; mtimeMs: number; ids: Set<strin
 
 function parseReply(line: string): PersonaChatReply {
   const value = JSON.parse(line) as PersonaChatReply;
-  if (!value || ![value.id, value.receivedAt, value.sessionId, value.turnId, value.text].every(item => typeof item === "string" && item.length > 0)) {
+  const identity = value?.kind === "agent_delivery" ? [value.deliveryId, value.targetSessionId] : [value?.turnId];
+  if (!value || ![value.id, value.receivedAt, value.sessionId, value.text, ...identity].every(item => typeof item === "string" && item.length > 0)) {
     throw new Error("Invalid persona chat history record.");
   }
   return value;
@@ -42,13 +43,16 @@ async function historyIds(file: string): Promise<Set<string>> {
 
 export async function appendPersonaChatReply(
   roleDir: string,
-  input: Pick<PersonaChatReply, "sessionId" | "turnId" | "text">
+  input: Pick<PersonaChatReply, "sessionId" | "turnId" | "text" | "kind" | "deliveryId" | "deliveryStatus" | "targetSessionId" | "sessionTitle" | "targetSessionTitle">
 ): Promise<PersonaChatReply | null> {
-  if (!input.sessionId.trim() || !input.turnId.trim() || !input.text.trim()) return null;
+  if (!input.sessionId.trim() || !input.text.trim()) return null;
+  if (input.kind === "agent_delivery" ? !input.deliveryId?.trim() || !input.targetSessionId?.trim() : !input.turnId?.trim()) return null;
   const file = path.resolve(roleDir, HISTORY_PATH);
   const record: PersonaChatReply = {
     ...input,
-    id: createHash("sha256").update(JSON.stringify([input.sessionId, input.turnId, input.text])).digest("hex"),
+    id: createHash("sha256").update(JSON.stringify(input.kind === "agent_delivery"
+      ? ["agent_delivery", input.deliveryId]
+      : [input.sessionId, input.turnId, input.text])).digest("hex"),
     receivedAt: new Date().toISOString()
   };
   // One append transaction per persona. Replayed hooks do not create a second row.

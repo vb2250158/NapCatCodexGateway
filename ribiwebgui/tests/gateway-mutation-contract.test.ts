@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   boundedRouteCatalogMutationFetch,
+  canonicalRouteCatalogMutationSignature,
   committedRouteCatalogRevision,
   GATEWAY_MUTATION_TIMEOUT_MS,
   RouteCatalogMutationLedger,
@@ -15,10 +16,14 @@ import {
 const root = fileURLToPath(new URL("..", import.meta.url));
 const store = fs.readFileSync(path.join(root, "src", "stores", "gatewayStore.ts"), "utf8");
 const types = fs.readFileSync(path.join(root, "src", "types.ts"), "utf8");
+const saveFunction = store.slice(
+  store.indexOf("  function save("),
+  store.indexOf("  async function actionGateway")
+);
 
 test("Gateway mutations retain a stable operation id and fence with the loaded route catalog hash", () => {
   assert.match(types, /routeCatalog\?: RouteCatalogVersion/);
-  assert.match(store, /routeCatalogMutationLedger\.retain\([\s\S]*?"save"/);
+  assert.match(store, /routeCatalogMutationLedger\.retain\("save"/);
   assert.match(store, /routeCatalogMutationLedger\.retain\([\s\S]*?"delete"/);
   assert.match(store, /"idempotency-key": pendingMutation\.operationId/);
   assert.match(store, /"if-match": `"\$\{pendingMutation\.expectedContentHash\}"`/);
@@ -26,7 +31,21 @@ test("Gateway mutations retain a stable operation id and fence with the loaded r
   assert.match(store, /applyRouteCatalogVersion\(body\.routeCatalog\)/);
   assert.match(store, /committedRouteCatalogRevision\(body, pendingMutation\)/);
   assert.equal(GATEWAY_MUTATION_TIMEOUT_MS, 35_000);
-  assert.match(store, /boundedRouteCatalogMutationFetch\(`\$\{apiBase\}\/gateways`/);
+  assert.match(store, /boundedRouteCatalogMutationFetch\(`\$\{apiBase\}\/gateways\/\$\{encodeURIComponent\(id\)\}\/config`/);
+});
+
+test("Route settings save without resolving or creating an Agent task", () => {
+  assert.equal(saveFunction.includes("bindAgentSessionsForSave"), false);
+  assert.match(saveFunction, /method: "PUT"/);
+});
+
+test("Route settings save retains its retry fence when Web Crypto is unavailable", async () => {
+  const signature = await canonicalRouteCatalogMutationSignature({ gateways: [{ id: "route-1" }] }, {} as Crypto);
+  assert.match(signature, /^[a-f0-9]{64}$/);
+  const ledger = new RouteCatalogMutationLedger(null, {} as Crypto);
+  const first = await ledger.retain("save", { gateways: [{ id: "route-1" }] }, "a".repeat(64));
+  const retry = await ledger.retain("save", { gateways: [{ id: "route-1" }] }, "a".repeat(64));
+  assert.equal(retry.operationId, first.operationId);
 });
 
 test("Gateway accepts only a matching committed Route receipt", async () => {

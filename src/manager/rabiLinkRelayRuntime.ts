@@ -149,7 +149,7 @@ async function consumeRelayEvents(
     deviceName: config.deviceName,
     capabilities: workerCapabilities(config)
   });
-  appendPeerUrls(params, config);
+  appendWorkerDiscovery(params, config);
   const response = await fetch(`${config.url}/api/rabilink/events?${params}`, {
     method: "GET",
     headers: { ...relayHeaders(config), accept: "text/event-stream" },
@@ -360,12 +360,13 @@ function workerIdentity(config: RabiLinkRelayRuntimeConfig): Record<string, stri
   };
 }
 
-function appendPeerUrls(params: URLSearchParams, config: RabiLinkRelayRuntimeConfig): void {
+function appendWorkerDiscovery(params: URLSearchParams, config: RabiLinkRelayRuntimeConfig): void {
+  params.set("deviceKind", "pc");
   if (config.peerUrls?.length) params.set("peerUrls", JSON.stringify(config.peerUrls));
 }
 
 function workerCapabilities(config: RabiLinkRelayRuntimeConfig): string {
-  return ["webgui", "video-direct", "persona-sync", PERSONA_SYNC_PLAN_PACKAGE_CAPABILITY, config.speechProxyEnabled ? "speech" : ""]
+  return ["webgui", "video-direct", "peer-rpc-v1", "persona-sync", PERSONA_SYNC_PLAN_PACKAGE_CAPABILITY, config.speechProxyEnabled ? "speech" : ""]
     .filter(Boolean)
     .join(",");
 }
@@ -539,7 +540,7 @@ async function claimWebguiRequests(
     waitMs: String(waitMs),
     capabilities: workerCapabilities(config)
   });
-  appendPeerUrls(params, config);
+  appendWorkerDiscovery(params, config);
   const body = await relayJson(config, `/worker/webgui-requests?${params}`, {
     method: "GET",
     headers: relayHeaders(config),
@@ -626,7 +627,7 @@ async function claimSpeechRequests(
     waitMs: String(waitMs),
     capabilities: workerCapabilities(config)
   });
-  appendPeerUrls(params, config);
+  appendWorkerDiscovery(params, config);
   const body = await relayJson(config, `/worker/speech-requests?${params}`, {
     method: "GET",
     headers: relayHeaders(config),

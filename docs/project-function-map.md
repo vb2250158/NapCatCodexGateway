@@ -6,6 +6,10 @@
 
 # RabiRoute 项目功能手册
 
+移动端日常入口、三档采集、离线 WAV、录像会话与回看见[移动端记录界面](rabilink-mobile-recording-ui.md)；本地记录不依赖 Relay，既有会话语音处理保留高级兼容入口。
+
+跨电脑只读接口见[调用与目标授权](rabilink-peer-rpc.md)：支持设备发现、计划摘要、人格文件清单；LAN 优先、P2P 尝试及 Relay 回退共用加密合同。公网和双 PC 长期运行待验收。
+
 手机与电脑的实验视频直连见 [接入与验收状态](rabilink-direct-video.md)：Android 负责 SDK 取流和发送，RabiLink 插件负责电脑接收，Relay 只交换 SDP。当前已验证数据通道，眼镜画面和公网打洞尚未验收。
 
 > 状态：当前事实地图。Manager 已有 29 个独立内置插件包；外部系统验收仍以 [当前能力与成熟度](current-capabilities.md) 为准。
@@ -86,6 +90,8 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 可信内置插件在 Manager 主进程运行。未知、不可信或高风险扩展使用独立进程和最小能力协议，这是 RabiRoute 的额外安全策略；DSH 普通插件默认也在主进程运行，Cordis scope/isolate 不是进程沙箱。
 
 ## 功能索引
+
+源码热补丁支持清单中新模块的自动发现与注册，以及后续代码、资源更新；接入插件使用通用宿主服务，不修改热补丁核心。入口、状态迁移边界和验收范围见[源码热补丁](source-hot-patches.md)。
 
 | 功能 | 当前状态 | 真源 / 数据 | 消费点 | 生效时机 | 副作用 | 入口 | 关键代码 | 文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -173,7 +179,7 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 - 持久计划秘书控制面按 `planId` 保持单 writer，不同计划可并行推进；共享账本在短锁内合并并原子替换。锁元数据完整写入后原子发布，stale/损坏锁失败关闭并只允许 quiescent 维护修复；同 key 的认领/澄清先记 reservation，结果不明确时不自动重发。audit 使用前后快照区分稳定 invalid 与并发 incomplete，一个 active cycle 不会成为 audit 或 reconcile 的全局屏障。
 - 腾讯表、direct/generic 用户请求和已有效引用认领的工作群问题，都通过受管 `register-external` 登记后进入秘书 `begin → finish`。工作群来源固定为配置的工作群 `<WORK_GROUP_ID>`，要求真实 `sourceMessageId` 以及同一问题键下 `status=sent` 且含 `sentMessageId` 的认领回执；登记同时校验计划/任务唯一性、至少两轮查重，以及输入 workspace、计划 workspace 与任务本轮执行 workspace 一致，生成 `governanceVersion=3` 映射。Codex 任务保存的默认 cwd 不参与这项判断。腾讯表稳定行键和用户请求规范签名语义保持不变；不允许手改 `issue-threads.json`。
 - 旧版统一 Outbox 认领没有写入专用回执账本时，登记器只在本地会话出站记录与 NapCat 实时消息回读同时证明同群、同发送消息和同引用目标后恢复回执；单凭登记输入或单侧日志不能补账，恢复过程不重发群消息。
-- 工作群 `begin` 使用登记映射、计划绑定和 Desktop 回读的完整任务 ID 作为业务任务身份，并使用计划 workspace 作为本轮执行目录；PangHu 接受 `[PangHu][明确任务类型] ...`，RabiRoute 治理任务当前只接受 `[RabiRoute][Bug] ...`。新登记拒绝非法 live 标题；既有映射的非法旧标题只在同一任务和本轮工作目录的 live 标题合法时，通过问题账本锁原子迁移。标题和任务保存的默认 cwd 都不能替代稳定身份、来源、认领回执、查重和唯一性校验。
+- 工作群 `begin` 使用登记映射、计划绑定和 Desktop 回读的完整任务 ID 作为业务任务身份，并使用计划 workspace 作为本轮执行目录；任务标题约定由项目工作流决定，不作为路由身份。新登记拒绝非法 live 标题；既有映射的非法旧标题只在同一任务和本轮工作目录的 live 标题合法时，通过问题账本锁原子迁移。标题和任务保存的默认 cwd 都不能替代稳定身份、来源、认领回执、查重和唯一性校验。
 - Codex adapter id 保持 `codex`；Codex/ChatGPT Desktop 是实际任务 owner，Desktop IPC 是唯一真实消息 transport。
 - 不为真实消息增加共享 4510、独立 stdio app-server 或 fallback。项目锁定的 app-server 只做空任务元数据 bootstrap。
 - 模型、工具、沙箱和 runtime approval 由目标 Desktop 任务拥有；它与业务 Action Gate 仍是两道独立边界。
@@ -248,3 +254,9 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 - 回复 / 外发 / draft / approval：看 Outbox / Reply、Pipeline presets。
 - 记忆 / 计划 / 技能 / viewedAt / consolidation：看 Role Knowledge。
 - replay / logs / delivery：看日志、回放、Runtime log。
+
+消息投递场景与入口清单见[消息模板](message-delivery-templates.md)。
+
+### 本机与远端实例
+
+入口 `#/lan-agents`：复制接入提示词、实例 → Agent 两层管理、任务与模型、Hook 安装。路由使用 `instanceId + agentId`。共享契约：`src/shared/agentInstance.ts`；管理操作：`src/agentAdapters/instanceManagement.ts`；边界见[接入说明](lan-rabi-agent-bootstrap.md)。

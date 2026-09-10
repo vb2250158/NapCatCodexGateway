@@ -214,7 +214,7 @@ test("an idle Codex thread periodically reflects on user intent even without a n
   assert.equal(first.pendingUserCount, 0);
   assert.match(prompts[0], /^\[消息源\]\n消息源类型：系统\n事件类型：rabilink_reflection\n事件名称：RabiLink 定期复盘\n事件 ID：[^\n]+\n消息路线 ID：RabiLink\n消息包发送时间：[^\n]+\n\n\[消息内容\]\n/);
   assert.match(prompts[0], /连续反思/);
-  assert.match(prompts[0], /当前活动、真正目标、阻碍、下一步/);
+  assert.match(prompts[0], /当前意图、阻碍和下一步/);
   assert.match(prompts[0], /计划、任务、记忆或最近工具结果/);
   assert.match(prompts[0], /先完整读取并遵循主动审阅策略/);
   assert.match(prompts[0], /\[本机现场取证\]/);

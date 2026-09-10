@@ -62,6 +62,8 @@ function createFixture() {
       record("writeConfig", config, expectedContentHash, operationId);
       return config;
     },
+    async writeGatewayConfig(id, definition, hash, operationId) { record("writeGatewayConfig", id, definition, hash, operationId); },
+    async resolveRouteMutation(operationId) { record("resolveRouteMutation", operationId); return { state: "committed" }; },
     async loadRuntimes() {
       record("loadRuntimes");
     },
@@ -171,6 +173,27 @@ async function startServer(context: GatewayControlRoutesContext) {
 async function json(response: Response): Promise<Record<string, any>> {
   return await response.json() as Record<string, any>;
 }
+
+test("scoped save reports persistence separately from activation and supports recovery lookup", async () => {
+  const fixture = createFixture();
+  const server = await startServer(fixture.context);
+  try {
+    fixture.failures.set("syncRunningGateways", new Error("activation unavailable"));
+    const response = await fetch(`${server.baseUrl}/gateways/route-a/config`, {
+      method: "PUT", headers: { "content-type": "application/json", "idempotency-key": "test:scoped", "if-match": `"${"a".repeat(64)}"` },
+      body: JSON.stringify({ id: "route-a", configName: "route-a", enabled: false })
+    });
+    const body = await json(response);
+    assert.equal(response.status, 200);
+    assert.equal(body.receipt.state, "committed");
+    assert.equal(body.activation.state, "failed");
+    assert.equal(fixture.calls.filter(call => call.name === "writeConfig").length, 0);
+    assert.equal(fixture.calls.filter(call => call.name === "writeGatewayConfig").length, 1);
+    const recovered = await json(await fetch(`${server.baseUrl}/gateways/mutations/test%3Ascoped`));
+    assert.equal(recovered.receipt.state, "committed");
+    assert.equal(recovered.receipt.operationId, "test:scoped");
+  } finally { await server.close(); }
+});
 
 async function post(
   baseUrl: string,

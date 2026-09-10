@@ -877,7 +877,7 @@ function publicWorker(worker, app) {
     appId: worker.appId || "",
     appName: app?.name || "",
     appTokenPreview,
-    deviceKind: normalizeWorkerDeviceKind(worker.deviceKind),
+    deviceKind: normalizeWorkerDeviceKind(worker.deviceKind) || "unknown",
     capabilities: normalizeWorkerCapabilities(worker.capabilities),
     peerUrls: normalizeWorkerPeerUrls(worker.peerUrls),
     firstSeenAt: worker.firstSeenAt || "",
@@ -956,7 +956,9 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabili
     worker.id = worker.id || id;
     worker.guid = guid || worker.guid || "";
     worker.name = name;
-    if (deviceKind !== null) worker.deviceKind = normalizeWorkerDeviceKind(deviceKind);
+    // Older clients omit this field; reconnecting must not erase a declared kind.
+    const reportedKind = normalizeWorkerDeviceKind(deviceKind);
+    if (reportedKind) worker.deviceKind = reportedKind;
     if (capabilities !== null) worker.capabilities = normalizeWorkerCapabilities(capabilities);
     if (peerUrls !== null) worker.peerUrls = normalizeWorkerPeerUrls(peerUrls);
     worker.lastSeenAt = time;
@@ -3421,7 +3423,7 @@ async function handleWorkerTasks(req, url, res, body) {
       ? normalizeWorkerCapabilities(url.searchParams.get("capabilities"))
       : null;
     const peerUrls = url.searchParams.has("peerUrls") ? normalizeWorkerPeerUrls(url.searchParams.get("peerUrls")) : null;
-    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, declaredCapabilities, peerUrls);
+    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, declaredCapabilities, peerUrls, url.searchParams.get("deviceKind"));
   }
   const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
   const claimed = await claimAfterRelayEvent(
@@ -3454,7 +3456,7 @@ async function handleWorkerWebguiRequests(req, url, res, body) {
       ? normalizeWorkerCapabilities(url.searchParams.get("capabilities"))
       : null;
     const peerUrls = url.searchParams.has("peerUrls") ? normalizeWorkerPeerUrls(url.searchParams.get("peerUrls")) : null;
-    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, capabilities, peerUrls);
+    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, capabilities, peerUrls, url.searchParams.get("deviceKind"));
   }
   const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
   const claimed = await claimAfterRelayEvent(
@@ -3486,7 +3488,7 @@ async function handleWorkerSpeechRequests(req, url, res, body) {
     const capabilities = normalizeWorkerCapabilities(url.searchParams.get("capabilities") || "speech");
     if (!capabilities.includes("speech") && !capabilities.includes("video-direct")) capabilities.push("speech");
     const peerUrls = url.searchParams.has("peerUrls") ? normalizeWorkerPeerUrls(url.searchParams.get("peerUrls")) : null;
-    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, capabilities, peerUrls);
+    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, capabilities, peerUrls, url.searchParams.get("deviceKind"));
   }
   const predicate = (request) => canWorkerClaimSpeechRequest(request, appId, deviceId, deviceGuid);
   const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
@@ -4953,6 +4955,12 @@ function handlePeerDiscovery(req, url, res, body) {
 }
 
 async function handlePersonaSyncProxy(req, url, res, body) {
+  return handleBoundedPcProxy(req, url, res, body, false);
+}
+
+// Both contracts share the existing worker queue and application isolation.
+// Peer RPC carries an opaque encrypted packet and never accepts a caller URL.
+async function handleBoundedPcProxy(req, url, res, body, peerRpc) {
   const auth = authorizeRabiLinkRequest(req, url, body);
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const targetDeviceId = stringValue(body?.targetDeviceId);
@@ -4960,22 +4968,25 @@ async function handlePersonaSyncProxy(req, url, res, body) {
     && (item.id === targetDeviceId || item.guid === targetDeviceId));
   if (!worker) return sendJson(res, 404, { code: -1, ok: false, message: `Persona sync peer not found: ${targetDeviceId}` });
   if (!workerOnline(worker)) return sendJson(res, 503, { code: -1, ok: false, message: `Persona sync peer is offline: ${worker.name || worker.id}` });
-  if (!normalizeWorkerCapabilities(worker.capabilities).includes("persona-sync")) {
+  if (!normalizeWorkerCapabilities(worker.capabilities).includes(peerRpc ? "peer-rpc-v1" : "persona-sync")) {
     return sendJson(res, 409, { code: -1, ok: false, message: `Peer ${worker.name || worker.id} does not advertise persona-sync.` });
   }
-  const method = stringValue(body?.method || "GET").toUpperCase();
+  const method = peerRpc ? "POST" : stringValue(body?.method || "GET").toUpperCase();
   if (!new Set(["GET", "POST"]).has(method)) return sendJson(res, 405, { code: -1, ok: false, message: "Persona sync proxy only supports GET and POST." });
-  const localPath = stringValue(body?.path);
-  if (!/^\/api\/persona-sync\/(?:manifest(?:\?|$)|files\/|merge$)/.test(localPath)) {
+  const localPath = peerRpc ? "/api/rabilink/peer/receive" : stringValue(body?.path);
+  if (!peerRpc && !/^\/api\/persona-sync\/(?:manifest(?:\?|$)|files\/|merge$)/.test(localPath)) {
     return sendJson(res, 400, { code: -1, ok: false, message: "Persona sync proxy path is not allowed." });
   }
-  const bodyBase64 = stringValue(body?.bodyBase64);
-  if (bodyBase64 && Buffer.byteLength(bodyBase64, "base64") > 24 * 1024 * 1024) {
+  if (peerRpc && (!body?.packet || body.packet.version !== 1 || Object.keys(body).some(key => !["targetDeviceId", "packet"].includes(key)))) {
+    return sendJson(res, 400, { ok: false, message: "Peer proxy accepts only targetDeviceId and an encrypted packet." });
+  }
+  const bodyBase64 = peerRpc ? Buffer.from(JSON.stringify(body.packet)).toString("base64") : stringValue(body?.bodyBase64);
+  if (bodyBase64 && Buffer.byteLength(bodyBase64, "base64") > (peerRpc ? 1_500_000 : 24 * 1024 * 1024)) {
     return sendJson(res, 413, { code: -1, ok: false, message: "Persona sync proxy body is too large." });
   }
   const now = Date.now();
   const request = {
-    id: `rabilink-persona-sync-${now}-${randomUUID().slice(0, 8)}`,
+    id: `rabilink-${peerRpc ? "peer-rpc" : "persona-sync"}-${now}-${randomUUID().slice(0, 8)}`,
     status: "queued",
     createdAt: now,
     updatedAt: now,
@@ -4995,7 +5006,8 @@ async function handlePersonaSyncProxy(req, url, res, body) {
     response: null
   };
   webguiRequests.set(request.id, request);
-  writeEvent("persona_sync_proxy_created", webguiRequestForResponse(request));
+  if (peerRpc) writeEvent("peer_rpc_proxy_created", { requestId: request.id, targetDeviceId: worker.id });
+  else writeEvent("persona_sync_proxy_created", webguiRequestForResponse(request));
   relayEventHub.publish("webgui_available", {
     appId: request.appId,
     targetDeviceId: request.targetDeviceId,
@@ -5675,6 +5687,7 @@ const server = http.createServer(async (req, res) => {
     const webguiWorkerEvent = url.pathname === "/worker/webgui-events";
     const speechWorkerResponse = /^\/worker\/speech-requests\/[^/]+\/response$/.test(url.pathname);
     const personaSyncProxy = url.pathname === "/api/rabilink/persona-sync/proxy";
+    const peerRpcProxy = url.pathname === "/api/rabilink/peer/proxy";
     const body = req.method === "GET"
       ? {}
       : await readBody(req, webguiWorkerResponse
@@ -5683,6 +5696,8 @@ const server = http.createServer(async (req, res) => {
           ? { maxBytes: webguiWorkerEventMaxBytes, label: "WebGUI worker event" }
           : speechWorkerResponse
             ? { maxBytes: speechWorkerResponseMaxBytes, label: "Speech worker response" }
+            : peerRpcProxy
+              ? { maxBytes: 1_500_000, label: "Peer RPC proxy" }
             : personaSyncProxy
               ? { maxBytes: 32 * 1024 * 1024, label: "Persona sync proxy" }
               : {});
@@ -5726,6 +5741,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && url.pathname === "/api/rabilink/persona-sync/proxy") {
       return await handlePersonaSyncProxy(req, url, res, body);
+    }
+    if (req.method === "POST" && peerRpcProxy) {
+      return await handleBoundedPcProxy(req, url, res, body, true);
     }
     if (req.method === "POST" && url.pathname === "/api/rabilink/devices/logs") {
       return handleDeviceLogs(req, url, res, body);

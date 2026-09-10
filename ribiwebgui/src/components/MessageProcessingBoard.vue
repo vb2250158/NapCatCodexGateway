@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { userFacingError } from "../userFacingError";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { managerEventSource } from "../managerApi";
 
@@ -184,7 +185,7 @@ async function refresh(): Promise<void> {
     if (!response.ok || body.code === -1) throw new Error(body.message || `HTTP ${response.status}`);
     board.value = body.data || { counts: emptyCounts(), items: [] };
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = userFacingError(cause);
   } finally {
     loading.value = false;
   }

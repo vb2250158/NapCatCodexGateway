@@ -13,6 +13,22 @@ export const AGENT_HOOK_DESTINATIONS = [
 export type AgentHookSession = { id: string; name: string };
 export type AgentHookCondition = { type: string; path?: string; sessions?: AgentHookSession[] };
 export type AgentHookDestination = { channel: string; gatewayId: string; params: Record<string, string> };
+
+export function normalizePlanMessageChannels(value: unknown): AgentHookDestination[] {
+  if (!Array.isArray(value)) return [];
+  return normalizeAgentCompletionDeliveries(value.map((destination, index) => ({
+    id: `plan-channel-${index}`, enabled: true, event: "task_completed", conditions: [], destination
+  }))).map(rule => rule.destination);
+}
+
+export function validatePlanMessageChannels(value: unknown): void {
+  if (value === undefined || value === null) return;
+  if (!Array.isArray(value)) throw new Error("Plan messageChannels must be a list.");
+  for (const destination of normalizePlanMessageChannels(value)) {
+    const errors = agentHookRuleErrors({ id: "plan-channel", enabled: true, event: "task_completed", conditions: [], destination });
+    if (errors.length) throw new Error(`Plan messageChannels: ${errors.join(" ")}`);
+  }
+}
 export type AgentCompletionDeliveryRule = {
   id: string;
   enabled: boolean;

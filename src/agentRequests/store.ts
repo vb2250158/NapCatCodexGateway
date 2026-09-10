@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { AgentReplyStateError } from "./replyError.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
 import { normalizeRabiMessageContent } from "../shared/rabiMessage.js";
@@ -11,6 +12,10 @@ export type { AgentRequestPersistence } from "./persistence.js";
 
 export const AGENT_REQUEST_SCHEMA_VERSION = 1;
 export const AGENT_REQUEST_REMINDER_MS = 5 * 60 * 1_000;
+
+export function agentDeliveryPromptHash(prompt: string): string {
+  return createHash("sha256").update(prompt.replace(/\r\n/g, "\n")).digest("hex");
+}
 
 export type AgentResponsePolicy = "required" | "none";
 export type AgentRequestStatus = "pending_delivery" | "awaiting_response" | "responded" | "cancelled";
@@ -47,6 +52,7 @@ export type AgentRequestRecord = {
   deliveryAction?: string;
   deliveryTransport?: string;
   pendingResponseDeliveryId?: string;
+  pendingResponseEvidence?: { promptHash: string; preparation: AgentCommunicationPreparation };
   response?: AgentRequestResponse;
   lastTargetTurnId?: string;
   lastTargetTurnEndedAt?: string;
@@ -266,6 +272,7 @@ export class AgentRequestStore {
         record.cancelReason = "Message Agent pool changed before this tracked delivery completed; the stale task binding was cancelled.";
         record.nextReminderAt = undefined;
         record.pendingResponseDeliveryId = undefined;
+        record.pendingResponseEvidence = undefined;
         record.updatedAt = timestamp;
         cancelled.push(structuredClone(record));
         continue;
@@ -285,6 +292,7 @@ export class AgentRequestStore {
       }
       if (!changed) continue;
       record.pendingResponseDeliveryId = undefined;
+      record.pendingResponseEvidence = undefined;
       record.updatedAt = timestamp;
       reassigned.push(structuredClone(record));
     }
@@ -350,7 +358,7 @@ export class AgentRequestStore {
       repliedRequest = this.requests.get(inReplyToRequestId);
       if (!repliedRequest) throw new Error(`Agent request not found: ${inReplyToRequestId}`);
       if (repliedRequest.status !== "awaiting_response") {
-        throw new Error(`Agent request is not awaiting a response: ${inReplyToRequestId}`);
+        throw new AgentReplyStateError(repliedRequest, "request_state_does_not_accept_reply");
       }
       if (repliedRequest.pendingResponseDeliveryId) {
         throw new Error(`Agent request already has a response delivery in progress: ${inReplyToRequestId}`);
@@ -420,19 +428,51 @@ export class AgentRequestStore {
     };
   }
 
+  bindResponseEvidence(preparation: AgentCommunicationPreparation, prompt: string): void {
+    if (!preparation.inReplyToRequestId) return;
+    const record = this.requests.get(preparation.inReplyToRequestId);
+    if (!record || record.pendingResponseDeliveryId !== preparation.deliveryId) {
+      throw new Error("Response evidence requires the current delivery reservation.");
+    }
+    const previous = record.pendingResponseEvidence;
+    record.pendingResponseEvidence = { promptHash: agentDeliveryPromptHash(prompt), preparation: structuredClone(preparation) };
+    try {
+      this.persistMutations([{ action: "response_evidence_bound", requestId: record.id,
+        changes: [{ field: "pendingResponseEvidence" }] }]);
+    } catch (error) {
+      record.pendingResponseEvidence = previous;
+      throw error;
+    }
+  }
+
   commit(
     preparation: AgentCommunicationPreparation,
     receipt: { action?: string; transport?: string } = {}
   ): { request?: AgentRequestRecord; repliedRequest?: AgentRequestRecord } {
     const timestamp = nowIso(this.now);
+    const before = [preparation.requestId, preparation.inReplyToRequestId]
+      .flatMap(id => id && this.requests.has(id) ? [[id, structuredClone(this.requests.get(id)!)] as const] : []);
     let request: AgentRequestRecord | undefined;
     let repliedRequest: AgentRequestRecord | undefined;
+    if (preparation.requestId) {
+      const reserved = this.requests.get(preparation.requestId);
+      if (!reserved || reserved.deliveryId !== preparation.deliveryId || reserved.status === "cancelled") {
+        throw new Error(`Agent request delivery reservation is missing or cancelled: ${preparation.requestId}`);
+      }
+    }
     if (preparation.inReplyToRequestId) {
       const current = this.requests.get(preparation.inReplyToRequestId);
+      if (current?.status === "responded" && current.response?.deliveryId === preparation.deliveryId) {
+        return {
+          repliedRequest: structuredClone(current),
+          request: preparation.requestId ? this.get(preparation.requestId) : undefined
+        };
+      }
       if (!current || current.pendingResponseDeliveryId !== preparation.deliveryId) {
         throw new Error(`Agent response delivery reservation is missing: ${preparation.inReplyToRequestId}`);
       }
       current.pendingResponseDeliveryId = undefined;
+      current.pendingResponseEvidence = undefined;
       current.status = "responded";
       current.response = {
         deliveryId: preparation.deliveryId,
@@ -451,15 +491,21 @@ export class AgentRequestStore {
       if (!current || current.deliveryId !== preparation.deliveryId) {
         throw new Error(`Agent request delivery reservation is missing: ${preparation.requestId}`);
       }
-      current.status = "awaiting_response";
-      current.deliveredAt = timestamp;
-      current.deliveryAction = cleanText(receipt.action, 80) || undefined;
-      current.deliveryTransport = cleanText(receipt.transport, 80) || undefined;
-      current.updatedAt = timestamp;
+      if (current.status === "cancelled") {
+        throw new Error(`Agent request delivery was cancelled: ${preparation.requestId}`);
+      }
+      if (current.status === "pending_delivery") {
+        current.status = "awaiting_response";
+        current.deliveredAt = timestamp;
+        current.deliveryAction = cleanText(receipt.action, 80) || undefined;
+        current.deliveryTransport = cleanText(receipt.transport, 80) || undefined;
+        current.updatedAt = timestamp;
+      }
       request = current;
     }
     if (repliedRequest || request) {
-      this.persistMutations([
+      try {
+        this.persistMutations([
         ...(repliedRequest ? [{
           action: "responded",
           requestId: repliedRequest.id,
@@ -472,7 +518,11 @@ export class AgentRequestStore {
           beforeStatus: "pending_delivery" as AgentRequestStatus,
           afterStatus: request.status
         }] : [])
-      ]);
+        ]);
+      } catch (error) {
+        for (const [id, record] of before) this.requests.set(id, record);
+        throw error;
+      }
     }
     return {
       request: request ? structuredClone(request) : undefined,
@@ -486,6 +536,7 @@ export class AgentRequestStore {
       const current = this.requests.get(preparation.inReplyToRequestId);
       if (current?.pendingResponseDeliveryId === preparation.deliveryId) {
         current.pendingResponseDeliveryId = undefined;
+        current.pendingResponseEvidence = undefined;
         current.updatedAt = nowIso(this.now);
         changed = true;
       }
@@ -547,6 +598,18 @@ export class AgentRequestStore {
       .map((record) => structuredClone(record));
   }
 
+  recordPendingResponseCheck(requestId: string, deliveryId: string, status: string): void {
+    const record = this.requests.get(requestId);
+    if (record?.status !== "awaiting_response" || record.pendingResponseDeliveryId !== deliveryId) return;
+    record.nextReminderAt = undefined;
+    record.lastReminderError = `Response receipt needs reconciliation: ${cleanText(status, 100)}`;
+    record.updatedAt = nowIso(this.now);
+    this.persistMutations([{
+      action: "response_receipt_pending", requestId, afterStatus: record.status,
+      changes: [{ field: "nextReminderAt" }, { field: "lastReminderError" }]
+    }]);
+  }
+
   recordReminderResult(requestId: string, delivered: boolean, error?: unknown): AgentRequestRecord {
     const record = this.requests.get(cleanText(requestId, 100));
     if (!record) throw new Error(`Agent request not found: ${requestId}`);
@@ -584,6 +647,7 @@ export class AgentRequestStore {
     record.cancelReason = cleanText(reason, 2_000) || undefined;
     record.nextReminderAt = undefined;
     record.pendingResponseDeliveryId = undefined;
+    record.pendingResponseEvidence = undefined;
     record.updatedAt = timestamp;
     this.persistMutations([{
       action: "cancelled",
