@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.2.6" src="https://img.shields.io/badge/version-0.2.6-3178c6">
+  <img alt="当前版本：0.3.1" src="https://img.shields.io/badge/version-0.3.1-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -72,7 +72,7 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 
 ## 当前能力
 
-仓库当前版本为 `0.2.6`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.3.1`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
@@ -92,7 +92,7 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 
 ## 近期变化
 
-### 0.2.6：媒体项目、H3 工作流与桌面截图
+### 0.3.1：媒体项目、H3 工作流与桌面截图
 
 - 媒体画布项目自动保存到服务端，组合图片、视频、音频和文本卡片，并接入图片与语音生成。
 - 按输入与依赖选择 H3 标准或快速路线及可选声音，修正混合 DPI 截图坐标，支持固定 TTS 音色选择。

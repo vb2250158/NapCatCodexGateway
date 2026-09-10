@@ -25,6 +25,7 @@ export function buildManagerHealthSnapshot(input: Readonly<{
   blockedRouteIds: readonly string[];
   failedRouteIds: readonly string[];
   backgroundIncidentCount: number;
+  sourcePatchesReady?: boolean;
   pid?: number;
   checkedAt?: string;
 }>): ManagerHealthSnapshot {
@@ -32,11 +33,14 @@ export function buildManagerHealthSnapshot(input: Readonly<{
   const businessReady = input.routesReady && input.planStorageReady;
   const healthy = input.pluginReadiness.state === "ready"
     && requiredReady
-    && businessReady;
+    && businessReady
+    && input.sourcePatchesReady !== false;
   const message = !requiredReady
     ? `Manager event loop is live, but required plugin capabilities are unavailable: ${input.pluginReadiness.missingCapabilities.join(", ")}`
     : input.pluginReadiness.state !== "ready"
       ? "Manager event loop and required capabilities are ready, but optional plugins are degraded."
+      : input.sourcePatchesReady === false
+        ? "Manager event loop and required capabilities are ready, but source-patched APIs are unavailable; inspect /api/source-patches."
       : !input.planStorageReady
         ? "Manager event loop and required capabilities are ready, but plan storage startup recovery is not ready."
       : input.routesReady

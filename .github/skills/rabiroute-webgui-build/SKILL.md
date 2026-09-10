@@ -5,6 +5,8 @@ description: RabiRoute WebGUI 构建、打包和开发注意事项，包括常�
 
 # RabiRoute WebGUI 构建注意事项
 
+安装版提供 `/api/web-patches` 且后端兼容时，按[Web 热补丁](../../../docs/web-hot-patches.md)执行 `webgui:build` 或 `webgui:watch`，核对活动 hash 和回执，不走下方 Host 重启流程。首次安装或后端变化才协调完整发布；热更新前后 Manager 身份保持不变。
+
 ## 构建命令
 
 **始终用 cmd /c 包裹，不要直接在 PowerShell 里用 &&：**

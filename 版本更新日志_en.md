@@ -6,6 +6,16 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.1 - 2026-09-10
+
+- Validation: the frozen source passed the full `npm run build`; WebGUI 297/297, source hot patches 87/87, Web patches 11/11, Host contracts, and isolated Manager update/rollback tests passed. The initial backend suite reported 2020 passed, 2 failed, and 3 skipped; the Agent case passed after its build prerequisite was generated, and the Relay case passed in an isolated rerun. Real installation and device acceptance remain separate.
+
+- Web hot patches add immutable production candidates, serialized watch builds, Host publication and rollback, runtime identity checks, and durable receipts. Missing modules or changed build inputs reject publication. This remains experimental; installed continuous-update and rollback acceptance is recorded separately.
+- Source-patch readiness now contributes to Manager health. Full upgrades preflight the previous baseline: clean baselines with unchanged contracts may advance; active overrides or unresolved receipts block the upgrade.
+- Plan approvals support multiple selection, exclusive choices, and collapsible implementation details per question or option. Additional information returns the task to analysis; only explicitly approved scope may run, and changed questions or implementation details require reconfirmation. The plan directory supports pointer and keyboard resizing.
+- Formal replies may omit a duplicate prompt and supply result and nextAction alone. New replies omit the legacy terminator while historical records remain readable.
+- Migration: new Host commands, backend changes, and dependency changes require a full build and Host-controlled upgrade. Preserve local personas, plans, credentials, and patch receipts; do not overwrite runtime data with examples. See [Web hot patches](docs/web-hot-patches_en.md) and [source hot patches](docs/source-hot-patches_en.md).
+
 ## 0.3.0 - 2026-09-10
 
 - Submission validation: the exported staged source builds successfully. WebGUI (291/291), hot patches (80/80), screenshots (60 tests), video (25/25), Windows Host contracts, and isolated built-Manager hot-patch integration pass. Full backend test and retry outcomes are retained in the commit record.

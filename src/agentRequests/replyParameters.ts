@@ -8,7 +8,6 @@ export function agentReplyRequest({ source, target, requestId }: Pick<AgentCommu
       sessionId: target.threadId, sessionName: target.threadName || target.threadId, workspace: target.workspace },
     sourceThreadId: target.threadId, sourceAgentType: target.agentType || "agent",
     inReplyToRequestId: requestId,
-    prompt: "<回复正文；与 result、nextAction 相同的内容无需重复>",
     result: "<结果>", nextAction: "<下一步>", responsePolicy: "none"
   };
 }

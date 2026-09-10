@@ -15,6 +15,15 @@ const base = {
   checkedAt: "2026-08-30T00:00:00.000Z"
 };
 
+test("failed source-patched APIs degrade health without restarting unrelated capabilities", () => {
+  const health = buildManagerHealthSnapshot({ ...base, sourcePatchesReady: false });
+  assert.equal(health.state, "degraded");
+  assert.equal(health.live, true);
+  assert.equal(health.requiredReady, true);
+  assert.match(health.message, /source-patched APIs are unavailable/);
+  assert.equal(buildManagerHealthSnapshot({ ...base, sourcePatchesReady: true }).state, "healthy");
+});
+
 test("Manager health separates event-loop liveness from required and business readiness", () => {
   assert.deepEqual(buildManagerHealthSnapshot(base), {
     state: "healthy",

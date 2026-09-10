@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { usePlanDirectoryResize } from "../planDirectoryResize";
 import { userFacingError } from "../userFacingError";
 import { computed, markRaw, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
@@ -304,6 +305,21 @@ const hasMoreRenderedPlansBefore = computed(() => hasMoreKnowledgeBeforeWindow(p
 const hasMoreMemory = computed(() => Boolean(memoryNextCursor.value));
 const hasMoreRenderedMemory = computed(() => renderedMemoryForView.value.length < visibleMemoryForView.value.length);
 const showsPlanList = computed(() => ["plans", "archived"].includes(activeView.value));
+const hasPlanDirectory = computed(() => Boolean(roleId.value && showsPlanList.value && (visiblePlansForView.value.length || planListStatusOptions.value.length)));
+const {
+  layout: directoryLayout,
+  width: directoryWidth,
+  maximum: directoryMaximumWidth,
+  compact: directoryCompact,
+  collapsed: directoryCollapsed,
+  resizing: directoryResizing,
+  start: startDirectoryResize,
+  move: moveDirectoryResize,
+  end: endDirectoryResize,
+  cancel: cancelDirectoryResize,
+  finish: finishDirectoryResize,
+  keydown: directoryResizeKeydown
+} = usePlanDirectoryResize(hasPlanDirectory);
 const showsMemoryList = computed(() => ["recent_memory", "consolidated_memory", "archived"].includes(activeView.value));
 const totalMemoryForView = computed(() => activeView.value === "consolidated_memory"
   ? memoryPageCounts.value.consolidated
@@ -2441,11 +2457,15 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
     </div>
 
     <div
+      ref="directoryLayout"
       class="knowledge-browser-layout"
-      :class="{ 'has-plan-directory': roleId && showsPlanList && (visiblePlansForView.length || planListStatusOptions.length) }"
+      :class="{ 'has-plan-directory': hasPlanDirectory, 'directory-collapsed': directoryCollapsed, 'directory-resizing': directoryResizing }"
+      :style="{ '--plan-directory-width': directoryWidth + 'px' }"
     >
       <nav
-        v-if="roleId && showsPlanList && (visiblePlansForView.length || planListStatusOptions.length)"
+        v-if="hasPlanDirectory"
+        v-show="!directoryCollapsed"
+        id="knowledge-plan-directory"
         class="knowledge-plan-directory"
         :aria-label="t('计划目录')"
       >
@@ -2668,7 +2688,6 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
             </v-card>
           </v-dialog>
         </div>
-        <p>点击计划快速跳转</p>
         <div ref="planDirectoryList" class="knowledge-plan-directory-list">
           <a
             v-for="plan in visiblePlansForView"
@@ -2705,6 +2724,27 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           </div>
         </div>
       </nav>
+      <div
+        v-if="hasPlanDirectory"
+        v-show="!directoryCompact"
+        class="knowledge-directory-resizer"
+        role="separator"
+        tabindex="0"
+        aria-orientation="vertical"
+        aria-controls="knowledge-plan-directory"
+        :aria-label="isEnglish ? 'Resize plan directory' : '调整计划目录宽度'"
+        :aria-valuemin="0"
+        :aria-valuemax="directoryMaximumWidth"
+        :aria-valuenow="directoryWidth"
+        :aria-valuetext="directoryCollapsed ? (isEnglish ? 'Collapsed' : '已折叠') : directoryWidth + 'px'"
+        :title="isEnglish ? 'Drag to resize; drag left to collapse, right to restore. Arrow keys resize; Enter toggles.' : '拖动调整宽度；向左缩窄折叠，向右拖出。方向键调整，Enter 折叠或展开。'"
+        @pointerdown="startDirectoryResize"
+        @pointermove="moveDirectoryResize"
+        @pointerup="endDirectoryResize"
+        @pointercancel="cancelDirectoryResize"
+        @lostpointercapture="finishDirectoryResize"
+        @keydown="directoryResizeKeydown"
+      />
 
       <v-card class="app-card knowledge-browser" variant="flat">
       <div ref="knowledgeToolbar" class="knowledge-toolbar">
@@ -3142,10 +3182,10 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   <div class="knowledge-approval-head">
                     <div>
                       <span>{{ plan.presentation.approval.label }}</span>
-                      <b>{{ t("审批确认") }}</b>
+                      <b>{{ t("确认是否执行") }}</b>
                     </div>
                     <v-chip :color="plan.presentation.approval.state === 'ready' ? 'primary' : 'warning'" size="x-small" variant="tonal">
-                      {{ plan.presentation.approval.state === "ready" ? "可审批" : "审批资料不完整 · 禁止审批" }}
+                      {{ plan.presentation.approval.state === "ready" ? "可审批" : "方案尚未写完整" }}
                     </v-chip>
                   </div>
                   <v-alert
@@ -3155,16 +3195,18 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                     density="compact"
                     class="knowledge-approval-missing"
                   >
-                    <b>审批资料不完整，禁止审批。缺少：</b>
+                    <b>方案还缺少以下内容：</b>
                     <span>{{ plan.presentation.approval.missing.map(approvalMissingLabel).join("、") }}</span>
-                    <small>请先由 Agent 在同一计划补齐审批合同；补齐前输入、附件和提交均不可用。</small>
+                    <small>Agent 需要先补全方案，再请你审批。</small>
                   </v-alert>
                   <div v-if="plan.presentation.approval.contract" class="knowledge-approval-contract">
                     <div class="knowledge-approval-contract-lead">
-                      <span>{{ t("待决定事项") }}</span>
+                      <span>{{ t("准备修改什么") }}</span>
                       <b data-no-i18n>{{ plan.presentation.approval.contract.request || "未填写" }}</b>
-                      <span>推荐方案</span>
-                      <b data-no-i18n>{{ plan.presentation.approval.contract.recommendation || "未填写" }}</b>
+                      <template v-if="plan.presentation.approval.contract.recommendation && plan.presentation.approval.contract.recommendation !== plan.presentation.approval.contract.request">
+                        <span>{{ t("修改方案") }}</span>
+                        <b data-no-i18n>{{ plan.presentation.approval.contract.recommendation }}</b>
+                      </template>
 
                     </div>
 
@@ -3185,12 +3227,13 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               />
                     </section>
                     <details class="knowledge-approval-disclosure">
-                      <summary>{{ t('方案依据与备选') }}</summary>
+                      <summary>{{ t("完整方案与审批记录") }}</summary>
+                    <details class="knowledge-approval-disclosure">
+                      <summary>{{ t("方案依据") }}</summary>
                       <div class="knowledge-approval-disclosure-body">
-                      <h4>必要备选</h4>
+                      <h4 v-if="plan.presentation.approval.contract.alternatives?.length">{{ t("其它考虑") }}</h4>
                       <ul class="knowledge-approval-alternatives">
                         <li v-for="(item, index) in (plan.presentation.approval.contract.alternatives || [])" :key="`alternative-${index}`" data-no-i18n>{{ item }}</li>
-                        <li v-if="!(plan.presentation.approval.contract.alternatives || []).length">未填写</li>
                       </ul>
                       <h4>{{ t("方案依据") }}</h4>
                       <small data-no-i18n>{{ plan.presentation.approval.contract.reason || "未填写审批原因" }}</small>
@@ -3257,6 +3300,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                         <small v-if="plan.approval.latest" data-no-i18n>最近记录：{{ plan.approval.latest.id }} · {{ plan.approval.latest.deliveryStatus }} · {{ formatDate(plan.approval.latest.updatedAt) }}</small>
                       </div>
                     </div>
+                    </details>
                     </details>
                   </div>
                   <details v-if="approvalRecordsForDisplay(plan).length" class="knowledge-approval-disclosure">

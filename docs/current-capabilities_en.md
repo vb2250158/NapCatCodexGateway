@@ -6,6 +6,8 @@ English | <a href="./current-capabilities.md">简体中文</a>
 
 # Current Capabilities and Maturity
 
+Installed Web hot patches are experimental. See [Web hot patches](web-hot-patches_en.md) for production builds, rollback, version pinning and installed acceptance.
+
 This document describes capabilities that actually exist in the current RabiRoute `0.2.x` working tree. Requirements, design proposals, and external-device ideas are not presented as completed features. The conclusions come from the configuration schema, runtime entry points, Manager APIs, WebGUI, adapter implementations, and current automated tests.
 
 The Message Agent list, task limit, and actual delivery share one weighted order: quoted Agent sends, the original message group, endpoint, conversation, sender, and recent use take priority, with the stable index used only as a tie-breaker. After a limit reduction, unfinished plan-progress notifications, plan/memory callbacks, Agent-to-Agent reply requests, and reminders move to a current task inside the ranked range. After Message Agent mode is disabled, those follow-ups and new chat messages go to the current Route's Primary Persona instead of reopening an old Message Agent task. Completed records retain their original worker for audit.

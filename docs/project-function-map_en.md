@@ -6,6 +6,8 @@ English | <a href="./project-function-map.md">简体中文</a>
 
 # RabiRoute Project Function Map
 
+See [Web hot patches](web-hot-patches_en.md) for installed WebGUI, resource and module publication. Backend changes still require a full release.
+
 See [mobile recording UI](rabilink-mobile-recording-ui_en.md) for daily navigation, capture modes, offline WAV, video sessions and replay. Local recording does not require Relay; existing conversation speech processing remains advanced compatibility.
 
 See [Cross-PC calls and target grants](rabilink-peer-rpc_en.md) for discovery, plan summaries and persona file manifests. LAN preference, P2P attempts and Relay fallback share an encrypted contract. Public-network and sustained dual-PC acceptance remain pending.

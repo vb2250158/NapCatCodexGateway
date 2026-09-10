@@ -214,8 +214,8 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /submit-record-only-label/);
   assert.match(page, /localizedPlanError\(submitError, isEnglish\.value\)/);
   assert.match(page, /const feedbackId = feedbackRequestId\(plan\.id, signature\)/);
-  assert.match(page, /审批资料不完整 · 禁止审批/);
-  assert.match(page, /审批资料不完整，禁止审批。缺少/);
+  assert.match(page, /方案尚未写完整/);
+  assert.match(page, /方案还缺少以下内容/);
   assert.match(page, /审批人 \/ 责任人/);
   assert.match(page, /推荐方案/);
   assert.match(page, /必要备选/);
@@ -294,7 +294,7 @@ test("plan views expose a floating directory outside the plan browser", () => {
 
   assert.match(page, /class="knowledge-browser-layout"/);
   assert.match(page, /class="knowledge-plan-directory"/);
-  assert.match(page, /class="knowledge-plan-directory"[\s\S]*?<\/nav>\s*<v-card class="app-card knowledge-browser"/);
+  assert.match(page, /class="knowledge-plan-directory"[\s\S]*?<\/nav>\s*<div[\s\S]*?role="separator"[\s\S]*?<v-card class="app-card knowledge-browser"/);
   assert.match(page, /v-for="plan in visiblePlansForView"/);
   assert.match(page, /const renderedPlansForView = computed\(\(\) => knowledgeRenderWindow\(\s*visiblePlansForView\.value/);
   assert.match(page, /function currentPlanPageFilter[\s\S]*?sort:\s*planListSortMode\.value[\s\S]*?statuses[\s\S]*?tags/);
@@ -342,7 +342,7 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(page, /<v-chip[^>]*>\{\{ planStatusLabel\(plan\) \}\}<\/v-chip>/);
   assert.match(page, /planTitleForDirectory\(plan\.title\)/);
   assert.doesNotMatch(page, /knowledge-plan-toc|jumpToPlanStep|planStepDomId|activePlanSteps/);
-  assert.match(styles, /\.knowledge-browser-layout\.has-plan-directory\s*\{[\s\S]*?grid-template-columns:\s*minmax\(324px, 360px\) minmax\(0, 1fr\)/);
+  assert.match(styles, /\.knowledge-browser-layout\.has-plan-directory\s*\{[\s\S]*?grid-template-columns:\s*var\(--plan-directory-width, 360px\) 1px minmax\(0, 1fr\)/);
   assert.match(styles, /\.knowledge-plan-directory\s*\{[\s\S]*?position:\s*sticky[\s\S]*?max-height:\s*calc\(100dvh - 104px\)/);
   assert.match(styles, /\.knowledge-plan-directory-list\s*\{[\s\S]*?overflow-y:\s*auto/);
   assert.match(styles, /\.knowledge-plan-directory-list\s*\{[\s\S]*?overflow-x:\s*hidden[\s\S]*?overflow-y:\s*auto/);
@@ -496,7 +496,7 @@ test("approval review prioritizes decisions and shared previews without hiding v
   const app = fs.readFileSync(path.join(root, "src/App.vue"), "utf8");
   assert.equal((page.match(/<PlanAttachmentGallery/g) ?? []).length, 2);
   assert.match(page, /class="knowledge-approval-evidence">[\s\S]*?<PlanAttachmentGallery/);
-  assert.ok(page.indexOf('class="knowledge-approval-evidence"') < page.indexOf("方案依据与备选"));
+  assert.ok(page.indexOf('class="knowledge-approval-evidence"') < page.indexOf("完整方案与审批记录"));
   assert.match(page, /<details v-if="plan.presentation.approval.contract.files.length"/);
   assert.match(page, /<details v-if="plan.presentation.approval.contract.commands.length"/);
   assert.match(page, /<section v-if="plan.presentation.approval.contract.changes.length"/);

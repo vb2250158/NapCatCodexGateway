@@ -80,6 +80,7 @@ export class ManagerSourcePatchService {
   private readonly modules = new Map<string, ModuleState>();
   private readonly moduleReady = new Map<string, Promise<ModuleState>>();
   private readonly moduleErrors = new Set<string>();
+  private readonly moduleErrorMessages = new Map<string, string>();
   private readonly dynamicBaselines = new Set<string>();
   private readonly bundleFences = new Map<string, string>();
   private readonly candidates: HotPatchCandidateStore;
@@ -113,8 +114,8 @@ export class ManagerSourcePatchService {
     const modules = [...this.moduleReady.keys()].map(id => {
       const state = this.modules.get(id);
       const worker = state?.worker.status();
-      return state && worker ? { id, dependencyHash: state.dependencyHash, uncertainOperation: state.uncertainOperation, activeCandidateSha256: state.pointer.active.sha256, ...worker, state: this.moduleErrors.has(id) ? "failed" : worker.state }
-        : { id, moduleId: id, state: this.moduleErrors.has(id) ? "failed" : "starting", uncertainOperation: undefined };
+      return state && worker ? { id, dependencyHash: state.dependencyHash, uncertainOperation: state.uncertainOperation, activeCandidateSha256: state.pointer.active.sha256, ...worker, state: this.moduleErrors.has(id) ? "failed" : worker.state, error: this.moduleErrorMessages.get(id) }
+        : { id, moduleId: id, state: this.moduleErrors.has(id) ? "failed" : "starting", uncertainOperation: undefined, error: this.moduleErrorMessages.get(id) };
     });
     const degraded = modules.some(module => module.uncertainOperation || module.state === "failed");
     const starting = !this.loaded || modules.some(module => module.state === "starting");
@@ -404,6 +405,7 @@ export class ManagerSourcePatchService {
     for (const entry of catalog.modules) {
       const ready = this.loadModule(entry).catch(async error => {
         this.moduleErrors.add(entry.id);
+        this.moduleErrorMessages.set(entry.id, error instanceof Error ? error.message : String(error));
         await this.modules.get(entry.id)?.worker.stop({ force: true });
         throw error;
       });
@@ -462,10 +464,19 @@ export class ManagerSourcePatchService {
 
   private async loadModule(entry: { id: string; sha256: string; contract: Readonly<Record<string, unknown>>; dependencies?: Readonly<Record<string, unknown>> }): Promise<ModuleState> {
       let pointer: Pointer = { baselineSha256: entry.sha256, active: { sha256: entry.sha256, contract: entry.contract } };
-      try {
-        pointer = JSON.parse(await fs.readFile(this.pointerPath(entry.id), "utf8")) as Pointer;
-        if (pointer.baselineSha256 !== entry.sha256) throw new Error("Source patch baseline changed; explicit rebase is required.");
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      let retiredPointer: Pointer | undefined;
+      const saved = await fs.readFile(this.pointerPath(entry.id), "utf8").catch(error => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (saved !== undefined) {
+        pointer = JSON.parse(saved) as Pointer;
+        if (pointer.baselineSha256 !== entry.sha256) {
+          await ManagerSourcePatchService.validateBaselineUpgrade(this.options.stateRoot, entry.id, pointer, entry.contract, this.bundleFences.has(entry.id));
+          retiredPointer = pointer;
+          pointer = { baselineSha256: entry.sha256, active: { sha256: entry.sha256, contract: entry.contract } };
+        }
+      }
       const compiled = await this.readCandidate(pointer.active.sha256, entry.sha256);
       const dependencyHash = sourcePatchDependencyHash(entry.dependencies);
       const worker = new HotPatchProcess(entry.id, compiled, { contract: pointer.active.contract, dependencies: entry.dependencies, timeoutMs: this.options.workerTimeoutMs });
@@ -479,7 +490,40 @@ export class ManagerSourcePatchService {
         else state.uncertainOperation = pending.operationId;
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       await worker.snapshot();
+      if (retiredPointer) {
+        const digest = createHash("sha256").update(JSON.stringify(retiredPointer)).digest("hex");
+        const archive = path.join(this.options.stateRoot, "baseline-history", entry.id, `${digest}.json`);
+        await this.writeJson(archive, retiredPointer);
+        await this.writeJson(this.pointerPath(entry.id), pointer);
+      }
       return state;
+  }
+
+  static async validateBaselineUpgrade(stateRoot: string, moduleId: string, pointer: Pointer, contract: Readonly<Record<string, unknown>>, unresolvedBundle = false): Promise<void> {
+    if (!pointer || !/^[a-f0-9]{64}$/.test(pointer.baselineSha256)
+      || pointer.active?.sha256 !== pointer.baselineSha256
+      || JSON.stringify(pointer.active.contract) !== JSON.stringify(contract)
+      || unresolvedBundle
+      || (pointer.operation && (pointer.operation.state !== "committed" || pointer.operation.commitState !== "committed"))) {
+      throw new Error("Source patch baseline changed with an active override or unresolved state; explicit rebase is required.");
+    }
+    const pending = await fs.readFile(path.join(stateRoot, "pending", `${moduleId}.json`), "utf8").catch(error => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (pending !== undefined) throw new Error("Source patch baseline changed with a pending operation; reconcile it before upgrading.");
+    const directory = path.join(stateRoot, "operations");
+    const files = await fs.readdir(directory).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    });
+    for (const filename of files.filter(name => name.endsWith(".json"))) {
+      const operation = JSON.parse(await fs.readFile(path.join(directory, filename), "utf8")) as SourcePatchOperation;
+      if ((operation.moduleId === moduleId || operation.proof?.bundleModuleIds?.includes(moduleId)) && !((operation.state === "committed" && operation.commitState === "committed")
+        || (operation.state === "failed" && operation.commitState === "not_started"))) {
+        throw new Error("Source patch baseline changed with an unresolved receipt; reconcile it before upgrading.");
+      }
+    }
   }
 
   private async registerDynamicModule(moduleId: string, candidateSha256: string, contract: Readonly<Record<string, unknown>>, dependencies: Readonly<Record<string, unknown>>): Promise<ModuleState> {

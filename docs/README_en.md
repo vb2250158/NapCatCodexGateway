@@ -6,6 +6,8 @@ English | <a href="./README.md">简体中文</a>
 
 # RabiRoute Documentation
 
+Development and maintenance: [installed Web hot patches](web-hot-patches_en.md) covers automatic production builds, version pinning and managed rollback.
+
 - [Offline glasses recording and live preview](rabilink-offline-recording_en.md): record glasses streams on the phone and watch locally; device acceptance is in progress.
 
 This directory contains current guides, experimental integrations, designs, research, and historical handoffs. The existence of a file does not mean its feature is complete; check its status before relying on it.

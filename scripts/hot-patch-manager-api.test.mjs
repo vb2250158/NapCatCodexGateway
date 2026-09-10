@@ -31,6 +31,7 @@ async function fixture(options = {}) {
   const sourcePath = fileURLToPath(new URL("../src/manager/pluginCatalogPresentation.ts", import.meta.url));
   const baseline = compileHotPatchModule(source, sourcePath);
   const baselineHash = await store(baselineRoot, baseline);
+  await store(path.join(stateRoot, "candidates"), baseline);
   const candidateHash = await store(path.join(stateRoot, "candidates"), compileHotPatchModule(source.replace('host || "all"', 'host || "patched"'), sourcePath));
   const broken = options.brokenModule === "initialization" ? { ...baseline, initializationSource: "for (;;) {}" }
     : { ...baseline, schemaVersion: 99 };
@@ -79,6 +80,74 @@ async function fixture(options = {}) {
       await fs.rm(root, { recursive: true, force: true });
     }
   };
+}
+
+test("clean baseline upgrade archives history and survives restart and package rollback", async () => {
+  const app = await fixture();
+  try {
+    assert.equal((await fetch(`${app.baseUrl}/api/plugins/catalog`)).status, 200);
+    assert.equal((await app.publish(app.request())).status, 200);
+    const request = { ...app.request(), action: "rollback", expectedRevision: 1 };
+    assert.equal((await app.publish(request)).status, 200);
+    const pointerPath = path.join(app.stateRoot, "active/manager.plugin-catalog.json");
+    const pointer = await fs.readFile(pointerPath, "utf8");
+    const receiptPath = path.join(app.stateRoot, "operations", `${request.operationId}.json`);
+    const receipt = await fs.readFile(receiptPath, "utf8");
+    const catalogPath = path.join(app.baselineRoot, "catalog.json");
+    const originalCatalog = await fs.readFile(catalogPath, "utf8");
+    const catalog = JSON.parse(originalCatalog);
+    const next = { ...app.baseline, sourceHash: createHash("sha256").update("new package source").digest("hex") };
+    catalog.modules[0].sha256 = await app.store(app.baselineRoot, next);
+    await fs.writeFile(catalogPath, JSON.stringify(catalog));
+    await app.restart();
+    assert.equal((await fetch(`${app.baseUrl}/api/plugins/catalog`)).status, 200);
+    assert.equal(JSON.parse(await fs.readFile(pointerPath, "utf8")).baselineSha256, catalog.modules[0].sha256);
+    const archivePath = path.join(app.stateRoot, "baseline-history/manager.plugin-catalog", `${createHash("sha256").update(pointer).digest("hex")}.json`);
+    assert.equal(await fs.readFile(archivePath, "utf8"), pointer);
+    assert.equal(await fs.readFile(receiptPath, "utf8"), receipt);
+    await app.restart();
+    assert.equal((await fetch(`${app.baseUrl}/api/plugins/catalog`)).status, 200);
+    await fs.writeFile(catalogPath, originalCatalog);
+    await app.restart();
+    assert.equal((await fetch(`${app.baseUrl}/api/plugins/catalog`)).status, 200);
+    assert.equal(JSON.parse(await fs.readFile(pointerPath, "utf8")).baselineSha256, app.baselineHash);
+    assert.equal(await fs.readFile(receiptPath, "utf8"), receipt);
+  } finally { await app.close(); }
+});
+
+for (const conflict of ["override", "pending", "uncertain", "contract", "invalid-baseline", "archive-failure"]) {
+  test(`baseline upgrade preserves old state when ${conflict} blocks migration`, async () => {
+    const app = await fixture();
+    const rename = fs.rename;
+    try {
+      assert.equal((await fetch(`${app.baseUrl}/api/plugins/catalog`)).status, 200);
+      const request = app.request();
+      assert.equal((await app.publish(request)).status, 200);
+      if (conflict !== "override") assert.equal((await app.publish({ ...app.request(), action: "rollback", expectedRevision: 1 })).status, 200);
+      const pointerPath = path.join(app.stateRoot, "active/manager.plugin-catalog.json");
+      const pointer = await fs.readFile(pointerPath, "utf8");
+      if (conflict === "pending") {
+        await fs.mkdir(path.join(app.stateRoot, "pending"), { recursive: true });
+        await fs.writeFile(path.join(app.stateRoot, "pending/manager.plugin-catalog.json"), JSON.stringify({ operationId: "unknown" }));
+      }
+      if (conflict === "uncertain") await fs.writeFile(path.join(app.stateRoot, "operations/unknown.json"), JSON.stringify({ operationId: "unknown", moduleId: "manager.plugin-catalog", state: "indeterminate", commitState: "unknown" }));
+      const catalogPath = path.join(app.baselineRoot, "catalog.json");
+      const catalog = JSON.parse(await fs.readFile(catalogPath, "utf8"));
+      const compiled = { ...app.baseline, sourceHash: "a".repeat(64), ...(conflict === "invalid-baseline" ? { schemaVersion: 99 } : {}) };
+      catalog.modules[0].sha256 = await app.store(app.baselineRoot, compiled);
+      if (conflict === "contract") catalog.modules[0].contract = { changed: true };
+      await fs.writeFile(catalogPath, JSON.stringify(catalog));
+      if (conflict === "archive-failure") fs.rename = async (source, target) => {
+        if (String(target).includes("baseline-history")) throw new Error("archive unavailable");
+        return rename(source, target);
+      };
+      await app.restart();
+      assert.equal((await fetch(`${app.baseUrl}/api/plugins/catalog`)).status, 503);
+      assert.equal(await fs.readFile(pointerPath, "utf8"), pointer);
+      assert.equal(app.service().status().modules[0].state, "failed");
+      assert.ok(app.service().status().modules[0].error);
+    } finally { fs.rename = rename; await app.close(); }
+  });
 }
 
 test("formal catalog route applies a hashed source candidate through Host authority, retains receipts and rolls back", async () => {

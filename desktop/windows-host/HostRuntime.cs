@@ -280,11 +280,11 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
     internal ManagerReady Ready { get; }
     internal Task<string> Failure { get; }
     internal string HealthState => _healthState;
-    internal Task<HostResponse> ForwardSourcePatchAsync(JsonElement payload, bool reconcile, CancellationToken cancellationToken)
+    internal Task<HostResponse> ForwardSourcePatchAsync(JsonElement payload, bool reconcile, CancellationToken cancellationToken, bool webPatch = false)
     {
         if (Volatile.Read(ref _stopping) != 0)
             return Task.FromResult(new HostResponse(false, "source_patch_unconfirmed", "The source patch generation is stopping; query the original operation."));
-        return SourcePatchTransport.SendAsync(Ready, _controlToken, payload, reconcile, cancellationToken);
+        return SourcePatchTransport.SendAsync(Ready, _controlToken, payload, reconcile, cancellationToken, webPatch);
     }
     internal uint TrayPid => _tray.ProcessId;
     internal string TrayBoundManagerInstanceId => _trayReady.ManagerInstanceId;
@@ -1026,7 +1026,9 @@ internal sealed class HostRuntime
                     break;
                 case "source-patch":
                 case "source-patch-reconcile":
-                    if (!CanQuit(command) || command.SourcePatch is not { } sourcePatch || !SourcePatchTransport.Matches(generation.Ready, sourcePatch))
+                case "web-patch":
+                case "web-patch-reconcile":
+                    if (!CanQuit(command) || command.SourcePatch is not { } sourcePatch || !SourcePatchTransport.Matches(generation.Ready, sourcePatch, SourcePatchTransport.IsWebCommand(command.Command)))
                     {
                         command.Completion.TrySetResult(Response(false, "stale_generation", "The source patch request does not match the active application and Manager."));
                         break;
@@ -1093,7 +1095,7 @@ internal sealed class HostRuntime
     {
         try
         {
-            var result = await generation.ForwardSourcePatchAsync(payload, command.Command == "source-patch-reconcile", cancellationToken);
+            var result = await generation.ForwardSourcePatchAsync(payload, command.Command is "source-patch-reconcile" or "web-patch-reconcile", cancellationToken, SourcePatchTransport.IsWebCommand(command.Command));
             command.Completion.TrySetResult(result);
         }
         catch
@@ -1461,7 +1463,7 @@ internal sealed class HostRuntime
                         operation,
                         completion,
                         responseSent,
-                        request.SourcePatch);
+                        SourcePatchTransport.IsWebCommand(normalizedCommand) ? request.WebPatch : request.SourcePatch);
                 var mutationAccepted = false;
                 lock (_mutationAcceptanceGate)
                 {
@@ -1656,6 +1658,8 @@ internal sealed class HostRuntime
             "restart" => "restart_request",
             "source-patch" => "source_patch_request",
             "source-patch-reconcile" => "source_patch_reconcile",
+            "web-patch" => "web_patch_request",
+            "web-patch-reconcile" => "web_patch_reconcile",
             "quit" when !string.IsNullOrWhiteSpace(requestedGenerationId) => "fenced_cli_exit",
             "quit" => "generation_mismatch",
             _ => "invalid_operation"

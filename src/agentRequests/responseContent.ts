@@ -2,7 +2,7 @@ import { normalizeRabiMessageContent } from "../shared/rabiMessage.js";
 
 const resultHeader = "[回复结果]\n";
 const nextHeader = "\n\n[下一步]\n";
-const extraHeader = "\n\n[补充说明]\n";
+const extraHeader = "\n\n[相关上下文]\n";
 const responseEnd = "\n\n[/回复]";
 
 /** Keep response fields once, while retaining any distinct handoff instructions. */
@@ -19,7 +19,7 @@ export function renderAgentResponseContent(prompt: string, result: string, nextA
     extra = extra.replace(repeatedField, "$1");
   }
   extra = extra.replace(/^\s*(?:回复结果|结果|下一步)[：:]\s*$/gm, "").trim();
-  return `${resultHeader}${resultText}${nextHeader}${nextText}${responseEnd}${extra ? extraHeader + extra : ""}`;
+  return `${resultHeader}${resultText}${nextHeader}${nextText}${extra ? extraHeader + extra : ""}`;
 }
 
 export function readAgentResponseContent(content: string): { result: string; nextAction: string } | undefined {

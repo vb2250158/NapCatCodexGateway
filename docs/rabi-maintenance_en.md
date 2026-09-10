@@ -18,7 +18,7 @@ This is the highest long-term maintenance priority, ahead of new business featur
 - **Keep the old service on failure**: candidate preparation, documentation checks, or startup failure must not withdraw the working version. Activation failures must support rollback. Reject hot patches that require incompatible storage changes, cannot drain safely, or change core lifecycle; use a coordinated controlled transition instead of calling a forced restart a hot update.
 - **Verify under continuous requests**: exercise independent reads and controlled fixture writes before, during, and after updates, checking disconnects, timeouts, lost requests, duplicate commits, documentation/code versions, and old-resource disposal. A build, one health check, or a page refresh alone does not establish hot-patch readiness.
 
-Current limits: `npm run dev:hot` defaults to WebGUI development reload and explicitly does not restart Manager. Developer Channel still replaces the whole Host application generation. Background health isolation is implemented; general backend-module hot patches, runtime documentation/version binding, and continuous availability during updates each still require implementation and acceptance. This workflow document does not mark those capabilities complete.
+Current limits: backend source follows the [source hot-patch matrix](source-hot-patches_en.md); installed pages use [Web hot patches](web-hot-patches_en.md) with production builds, automatic markers and managed rollback. Compatible updates do not restart Manager; initial installation, backend or dependency changes require a full release.
 
 ## Stable entry point
 

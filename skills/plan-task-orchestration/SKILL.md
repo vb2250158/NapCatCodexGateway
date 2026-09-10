@@ -1,6 +1,6 @@
 ---
 name: plan-task-orchestration
-description: Use before any PangHu project change or any repository task governed by RabiRoute plan admission, including bug fixes, features, UI, assets, config, data, docs, prompts, skills, builds, deployments, and external writes; also use to create, deduplicate, bind, resume, audit, migrate, or complete a formal plan. Drive the unique bound task through 分析中 → 待补充信息/待审批 → 执行中 → 等待打包/等待 QA → 完成 with evidence, owner-feedback rollback, parallel work, and no duplicate dispatches. Do not use for strictly read-only investigation that will not produce or execute a change.
+description: Use before any repository task governed by RabiRoute plan admission, including bug fixes, features, UI, assets, config, data, docs, prompts, skills, builds, deployments, and external writes; also use to create, deduplicate, bind, resume, audit, migrate, or complete a formal plan. Drive the unique bound task through 分析中 → 待补充信息/待审批 → 执行中 → 等待打包/等待 QA → 完成 with evidence, owner-feedback rollback, parallel work, and no duplicate dispatches. Do not use for strictly read-only investigation that will not produce or execute a change.
 ---
 
 # Plan Task Orchestration
@@ -24,7 +24,7 @@ Resolve the current Manager generation before every plan read or write. Installe
 3. The installed application's sole lifecycle owner is `RabiRouteHost.exe`. Do not scan ports, read retired endpoint lock files, launch Manager directly, terminate Host/Manager/tray processes, or start a second Runtime. Host owns same-generation recovery. Source mode without an injected or freshly printed READY URL also fails closed instead of guessing an endpoint.
 4. Search only bounded source candidates for read-only recovery evidence: an injected or configured RabiRoute root, the documented sibling project path, and an explicit project path. Never scan arbitrary drives for a checkout.
 5. If Manager remains unavailable, use direct role files only for read-only semantic deduplication and recovery. Do not write role files, create placeholder plans, or dispatch tasks through files.
-6. When discovery or recovery evidence remains insufficient, use the governing project's versioned offline plan-adjustment queue before continuing authorized project work. For PangHu, create or update one validated JSON record under `RabiPlanCache/pending/`; record the full task session, intended plan change, acceptance criteria, changed SVN-relative files, validations, revisions, and remaining work. Commit the cache with the related project change. Never store credentials, player privacy, private messages, or full logs.
+6. When discovery or recovery evidence remains insufficient, use the governing project's versioned offline plan-adjustment queue before continuing authorized project work. When the project defines `RabiPlanCache` as its offline queue, create or update one validated JSON record under `RabiPlanCache/pending/`; record the full task session, intended plan change, acceptance criteria, changed SVN-relative files, validations, revisions, and remaining work. Commit the cache with the related project change. Never store credentials, player privacy, private messages, or full logs.
 7. Treat the offline cache as a synchronization queue, not plan truth. Manager plan writes and task delivery remain unavailable evidence, not a business-work blocker. If the cache tool itself cannot be repaired, record that failure once and continue the authorized work.
 8. When Manager returns, rediscover and validate its current generation before processing pending records oldest first. Semantically deduplicate by outcome, scope, and acceptance criteria, create or update the real plan through Manager, reread it, then mark the cache `synced` only with the real `planId` and sync session. Commit that receipt. If Manager does not return, leave the record pending and report only the actual Rabi state.
 
@@ -87,6 +87,8 @@ Borrow execution mechanics from specialized workflows without copying their exte
 
 Use this state machine for a bug, requested modification, document change, UI change, configuration change, or other single item that needs investigation, owner approval, implementation, and acceptance:
 
+分析完成后的两个正常出口是 `roles.analysis → roles.informationNeeded` 和 `roles.analysis → roles.approval`：关键事实不足、不能确定是否需要改或怎么改，就进入待补充信息；证据充分、具体方案成立且需要负责人决定，才进入待审批。仍有可自主完成的相关调查时继续分析；已修复或无效事项按证据走原有验收或关闭流程。派发不得把“全部推进至待审批”当作固定终点，也不强制每项给两个方案。
+
 `roles.analysis → roles.informationNeeded → roles.analysis`
 
 `roles.analysis → roles.approval → roles.execution → roles.waitingPackage → roles.waitingQa → roles.completed`
@@ -107,19 +109,42 @@ Reserve `qa-*` and `verify-*` step IDs for actual target-package QA or acceptanc
 
 - Set `plan.status` to the key referenced by `roles.analysis`.
 - Collect the relevant source, code, configuration, Prefab, runtime, screenshot, log, history, and owner evidence in the largest safe batch.
-- Before leaving investigation, write a reviewable conclusion containing: the observed problem and scope, evidence, root cause or decision reason, exact files/components/configuration to change, concrete changes, impact and out-of-scope items, and validation method.
+- 离开调查前先给有依据的结论。方案成立时写现象、原因或决定依据、精确改动和验证；信息不足时写已确认事实、关键缺口及补证动作，不强行填写根因和修改清单。
 - Do not enter approval merely because investigation started, an Agent has a guess, or someone must answer a question. Approval is only for a complete proposed change.
+
+审批使用 Agent 在当前步骤 `questions` 中提供的业务问题和选项；没有任何自定义选项时，界面才补“按此方案执行／提出审批建议”默认操作。默认操作不是两套业务方案。所有选项均不预选；`requiresText=true` 要求附加文字，`requireOption=true` 要求明确选择；资料或问题变化后重新确认。
 
 #### 待补充信息
 
+- 根据问题先查现有代码、配置、设计、文档和附件。计划必须列出现有资料、已查结果、分析到哪一步卡住，以及为何仍不能确定问题；尚有可自主开展的相关调查时保持分析中。不得因缺日志或复现步骤直接退回，能静态确定的缺陷应形成具体方案。
+- 待补充信息和待审批都要实际提出用户可回答的问题。在当前步骤的 `questions` 中保存 `id`、`prompt`、可选的 `context`、`selectionMode`、`implementation`、`options`、`placeholder`、`required` 和 `requireOption`；选项包含稳定 `id`、`label`、可选说明 `description`、`recommended`、`requiresText`、`exclusive` 与 `implementation`。无选项时展示输入框，有选项时仍保留自由输入；推荐不代表已选择或批准。
+- 问题应说明最少缺什么、为什么影响判断、向谁或哪个来源询问、收到后做什么。缺资料记录不能代替询问。用户回答通过既有计划引导/审批反馈保存并投递原绑定任务；先消费答案再推进，不能把提交答案直接视为批准实施。问题或步骤改变后必须重新确认答案。
+- 字段限制及公开 API 示例见 [计划问题与回答](../../docs/plan-and-memory-model.md#计划问题与回答)。旧计划没有 `questions` 时继续使用自由文字反馈；复核时由 Agent 补实际问题，不从标题自动生成答案或审批结论。
+
 - Set `plan.status` to the key referenced by `roles.informationNeeded`.
 - Enter `待补充信息` only after analysis has finished and the available information cannot support a concrete proposal that is ready for approval. The missing fact must affect the cause, proposed fix, implementation scope, or acceptance contract.
-- Do not use it merely because the current package cannot reproduce the issue, the issue may already be fixed, a target package is missing, QA has not responded, or someone must decide whether to close the plan. Continue analysis, use `roles.waitingPackage` / `roles.waitingQa`, or close with evidence as applicable.
+- 当前包无法复现或可能已有相关修复时，先核对修复覆盖和现有证据；查证后仍缺影响问题是否存在或改法的关键事实，就进入 `roles.informationNeeded`，不能用候选原因和将来验证冒充完整方案。已明确完成开发、仅缺包或 QA 时走 `roles.waitingPackage`／`roles.waitingQa`；确认无需修改且无需验收时按证据关闭。
 - Set the current step ID to `information-needed-*`. In `detail`, list what is already known, why it is insufficient, and which conclusion cannot yet be made. In `waitingFor`, name the responsible person or source and the exact questions, screenshots, reproduction steps, configuration IDs, logs, decisions, or other evidence required.
 - Clear any stale `approvalRequest`. Information collection is not approval.
-- Continue every authorized independent investigation while waiting. When the requested information arrives, complete the information step and create or reopen an `investigate-*` step before drafting approval.
+- Continue every authorized independent investigation while waiting. 收到补充后完成信息步骤，先把状态回写为 `roles.analysis`，新建或重开 `investigate-*` 并重新分析；仍缺关键事实则再次进入 `roles.informationNeeded`，形成明确方案才进入 `roles.approval`。
+
+#### 方案与问题的写法
+
+- 提出审批前先核对本轮需求、当前实现、已有修复与负责人最新结论，说明现状为何仍需修改。已修复、无需修改或用户明确保留现状时，记录证据和决定，按现有验收或关闭流程处理；不要为旧问题增加新的体验需求或防御性重构。用户用业务案例讨论工作流时，只优化规则，不顺手处理案例计划。
+- 面向审批人的正文先说清“现在怎样、准备怎样改、改哪里”。先解释逻辑从什么行为改成什么行为，再列代码文件／类或方法、预制体路径／对象／组件／绑定、配置表／行或 ID／字段各改什么；只列实际涉及项，不只堆文件名。
+- 保留完整主谓宾：哪个玩家、系统或模块，在什么条件下，对哪个具体对象，做什么。可以删修饰词，不能删业务执行者、对象所属功能和必要条件。奖励写所属玩法和具体档位，按钮写页面和名称，不能缩成“首档自动领取、恢复界面”。代码、预制体和配置的具体标识放在改动清单，不把任务编号和条件缩写挤进一句话。
+- 只有需要负责人取舍时才列不同方案，并分别写清差别；审批界面的“执行／提出建议”不等于必须设计 A／B 两套业务方案。混合问题分开写，未确认的修改不能放进所有方案的共同范围。
+- 验证、风险、回退和排除项保留在技术详情或完整审批合同中；仅影响本次选择的内容放进正文。字段完整与文件存在不证明方案成立，协调者还须核对依据和读者能否看懂每项改动。
+- 待补充信息直接写“已确认什么、还不知道什么、因此不能决定什么、下一步向谁或哪里核实”。不要求用户理解“补充复现合同、完成边界收口”等内部用语。
 
 #### 待审批
+
+- 实施明细使用 `questions[].implementation`：一题对应一个明确方案时放在题目上；确有多个候选或独立可选改动时，各自放在 `options[].implementation`，不把所有文件混成一份公共明细。明细包含 `changes[]`，每项写 `kind`（`code/prefab/art/configuration/other`）、`path`、可选 `target`（方法／对象／字段）和 `change`（具体怎么改），另可写 `validation`、`rollback`。正文只留结论和短摘要，明细默认折叠。`approvalRequest` 保留授权范围与来源，不能把所有候选的改动当作已获批范围；`alternatives` 可省略，不再强制备选。
+
+- 待审批表示方案已形成、准备实施但尚未实施，通常审批一个明确方案是否执行；待补充信息表示暂时无法形成方案，需要用户补充影响判断的事实或决定。收到补充后先回到分析中，重新核对，再判断继续补充信息还是形成方案待审批，不能直接跳到审批或执行。普通修复不默认生成 A／B；玩法设计、美术候选等任务本身需要比较设计时，才按实际需要提供成熟候选，不用候选掩盖调查不足。信息充分且定位准确的小 Bug 直接形成方案，不为走流程要求用户补资料。Agent 判断下一步需要改动项目代码、预制体、美术资源或配置时，先进入待审批，不能以“小改动”或“验证猜测”为由先改项目。用户已明确批准同一具体修改时按授权范围执行，不重复审批；隔离草稿或设计候选不算已经修改项目。
+
+- 审批通常询问明确方案是否执行；一个计划有多个独立决定时按需分题。确实存在设计候选时，分别写入 `questions[].options`，不要只把 A／B 塞进 `approvalRequest.request`、`alternatives` 或长段正文。`label` 写清动作和对象，`description` 说明改变的逻辑及影响，具体文件／组件／字段放在对应方案详情。每步最多 5 道题、每题最多 6 个选项。Agent 按决策关系设置 `selectionMode`：互斥方案用 `single`，可同时实施的选项用 `multiple`；省略时兼容为单选。同一计划包含不同事项或模块时，按需拆成多道题，可以混用单选、多选和文字题，不为凑数量拆题。同一项修改必须联动的模块放在一题里，写清依赖和涉及文件；不能把不可独立实施的改动伪装成可任意多选。各题独立决定，批准一题不表示批准其它题；一题待补证不能迫使其它题默认获批。多选中的“都不做，保持现状”设置 `exclusive: true`，不得与实施项同选。
+- 可选变更提供“都不做，保持现状”和提出修改建议的入口；明确拒绝不是未答题，也不是批准其它选项。反馈必须对应原问题及所选选项，只有明确获批的范围才可实施，拒绝项和未决定项不得随其它修改执行。用户明确取消需求时记录决定并关闭相应需求；混合计划保留其它独立事项，不自动重提被否决方案。
 
 - Set `plan.status` to `roles.approval` only when the current approval contract is complete and `responseStatus=pending`.
 - Enter `待审批` only after investigation produced a complete review package. The current `approve-*` step must carry a complete `approvalRequest`, and the plan must already state the cause, exact changes, affected files/components/configuration, impact, validation, rollback, and exclusions.
@@ -174,7 +199,7 @@ Before every dispatch:
 
 Do not send a generic "continue". Include only the delta the task needs: the verified checkpoint, remaining package, acceptance check, and changed authority or stop boundary.
 
-For PangHu work in the formal Main checkout, an open or busy Unity Editor, another task's Unity test, an import, or a shared test queue is not a reason to stop the business task or defer all work. Keep the existing Editor running and do not cancel or replace another task's run. Continue implementation, narrow SVN updates and merges, static asset/Prefab/config checks, non-Unity runners, CLI checks, and other independent work in parallel. If the remaining Unity interaction cannot be run without disturbing the current Editor, record it as an explicit human/runtime acceptance item and continue the rest of the plan. Test availability must not become a global development lock.
+For projects with a user-owned Unity Editor and a designated upstream checkout, an open or busy Unity Editor, another task's Unity test, an import, or a shared test queue is not a reason to stop the business task or defer all work. Keep the existing Editor running and do not cancel or replace another task's run. Continue implementation, narrow SVN updates and merges, static asset/Prefab/config checks, non-Unity runners, CLI checks, and other independent work in parallel. If the remaining Unity interaction cannot be run without disturbing the current Editor, record it as an explicit human/runtime acceptance item and continue the rest of the plan. Test availability must not become a global development lock.
 
 ### 7. Consume results and prove status
 
@@ -195,15 +220,15 @@ Completion reminders are deduplicated by `sessionId + turnId`, but they do not u
 ### 8. Handle waiting, feedback, and approval
 
 - Keep `plan.status` equal to the enabled key for the actual configured phase. Missing load-bearing data after analysis uses `roles.informationNeeded` with `information-needed-*`; ongoing investigation uses `roles.analysis`; a submitted complete proposal uses `roles.approval`; implementation uses `roles.execution`; package and QA waits use their configured role keys.
-- Do not put a PangHu plan into a wait-only state merely because Main Unity is open, importing, running another test, unavailable through MCP, or shared by another task. Remove that condition from `waitingFor` when independent implementation or verification remains. Dispatch the original bound task to continue in formal Main without stopping the Editor; prefer static resource contracts, direct serialization checks, non-Unity runners, and CLI validation. Leave only the specific runtime interaction for human or later Unity acceptance when it cannot run concurrently.
-- For PangHu plans whose business implementation is already authorized, treat routine Main/Release/Art synchronization and SVN submission inside the verified plan scope as an actionable delivery step, not a new approval gate. When source, direction, files, dependency closure, ownership, and conflict-free status are verified, remove stale sync-only `approvalRequest` / `waitingFor` text and dispatch the original bound task to update, merge, synchronize, submit, and read back. Stop only for an explicit read-only or no-submit instruction, unresolved ownership, semantic conflict, extra files, scope expansion, frozen-build changes, production, upload, publish, or external delivery.
+- Do not put a project plan into a wait-only state merely because Main Unity is open, importing, running another test, unavailable through MCP, or shared by another task. Remove that condition from `waitingFor` when independent implementation or verification remains. Dispatch the original bound task to continue in formal Main without stopping the Editor; prefer static resource contracts, direct serialization checks, non-Unity runners, and CLI validation. Leave only the specific runtime interaction for human or later Unity acceptance when it cannot run concurrently.
+- For SVN projects whose business implementation and working-copy direction are already authorized, treat routine synchronization and SVN submission inside the verified plan scope as an actionable delivery step, not a new approval gate. When source, direction, files, dependency closure, ownership, and conflict-free status are verified, remove stale sync-only `approvalRequest` / `waitingFor` text and dispatch the original bound task to update, merge, synchronize, submit, and read back. Stop only for an explicit read-only or no-submit instruction, unresolved ownership, semantic conflict, extra files, scope expansion, frozen-build changes, production, upload, publish, or external delivery.
 - A lifecycle audit correction is incomplete if it only rewrites `steps`, `currentStep`, or `nextAction`. When synchronization, submission, or conflict-free readback is still missing and the bound task is idle, write an executable delivery-closure step, clear evidence-request wording from `waitingFor`, and dispatch that original task in the same orchestration turn. Do not stop after correcting structured fields or ask the task to merely report what another actor should execute. “Do not expand business scope” excludes extra files and new semantics; it does not exclude synchronization, SVN submission, or readback already required by the approved plan.
 - Store only enabled keys returned by the persona's plan-status catalog. Store archival separately as `archiveStatus=未归档 | 已归档`; never infer it from a status label or key.
 - A delivery-closure dispatch must require the bound task to write revision, exact changed paths, and the machine-readable sentence `无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *`. Generic text such as “已回读”, “无目标 diff”, or “无远端更新” is not enough.
-- PangHu Main Unity Editor is continuously user-owned. Every renamed wait for a test environment, Unity, Editor, MCP, runner, import, compilation, PlayMode, GameView, shared tests, or a test slot is actionable rather than a valid waiting stage. Keep the existing Editor running and dispatch all independent implementation, static/CLI/non-Unity tests, synchronization, submission, and readback; after that delivery closure, enter package waiting. Put UI, Prefab, Scene, serialized-reference, Unity-lifecycle, and real-interaction checks in target-package QA: immediately visible checks go to the user, ordinary repeatable checks go to QA, and difficult checks go to QA first and reach the user only if QA explicitly cannot cover them. Compilation or `matched=0` is never acceptance evidence.
+- The designated project Unity Editor remains user-owned. Every renamed wait for a test environment, Unity, Editor, MCP, runner, import, compilation, PlayMode, GameView, shared tests, or a test slot is actionable rather than a valid waiting stage. Keep the existing Editor running and dispatch all independent implementation, static/CLI/non-Unity tests, synchronization, submission, and readback; after that delivery closure, enter package waiting. Put UI, Prefab, Scene, serialized-reference, Unity-lifecycle, and real-interaction checks in target-package QA: immediately visible checks go to the user, ordinary repeatable checks go to QA, and difficult checks go to QA first and reach the user only if QA explicitly cannot cover them. Compilation or `matched=0` is never acceptance evidence.
 - QA tests only the already-built target package. Write human-executable instructions that identify the page, button, and visible visual or numeric result. Never ask QA to inspect logs, SVN revisions, hashes, fields, static contracts, or to run callback/validation tools; keep those as development-side package-entry evidence.
 - Do not write `isBlocked`. It is a Manager-derived compatibility projection, not an Agent input or state truth. `blockedBy` is explanatory text only.
-- For an approval, authorization, or decision gate, PATCH a complete current-step `approvalRequest` with the approver, concrete request, recommendation, alternatives, reason, affected files/commands/changes, validation, rollback, out-of-scope items, request source, and `responseStatus=pending`. At least one of files, commands, or changes must be concrete.
+- For an approval, authorization, or decision gate, PATCH a complete current-step `approvalRequest` with the approver, concrete request, recommendation, optional design alternatives, reason, affected files/commands/changes, validation, rollback, out-of-scope items, request source, and `responseStatus=pending`. At least one of files, commands, or changes must be concrete.
 - Treat `presentation.approval.state=ready` and `enabled=true` as proof that the approval contract is submit-ready. While it is pending, do not dispatch implementation beyond the approved contract; continue only authorized clarification and evidence work.
 - Treat guidance and approval feedback as evidence that requires an Agent decision and explicit PATCH, not a Manager-side automatic transition. A correction, objection, or rejected proposal returns the same item to `investigate-revision-*`; an approval advances it to `implement-*` in the same orchestration turn. Then write the matching Agent response record once.
 - If no authorized outbound channel exists, prepare the exact question or draft and request authority instead of claiming that a person was contacted.
@@ -254,3 +279,7 @@ Before reporting completion, verify:
 - useful source, design, implementation, test, and acceptance files are attached or have a recorded omission reason;
 - Manager writes were reread successfully when Manager was available; otherwise the availability failure and any read-only local recovery were recorded without blocking project completion;
 - no private role data, runtime logs, tokens, or relationship/persona content entered this project-level skill or public examples.
+
+## Optional notification channels
+
+When the intended destination is known, prefer adding `messageChannels` during plan creation or PATCH. Use the current Manager Route and endpoint catalog; entries are `{channel, gatewayId, params}`. NapCat params are `target` (`group` or `private`), `targetId`, and `instanceId`; speech uses the selected Route. This is a preference, never a required admission field. If unknown, omit it and continue: existing persona event rules still deliver. Do not invent a destination or an original QQ message ID. Hook notifications may be standalone; direct Agent replies should quote the source when available.

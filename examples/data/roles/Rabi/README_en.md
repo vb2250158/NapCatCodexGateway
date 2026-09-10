@@ -14,6 +14,8 @@ Webhook and voice-transcript input are optional extensions. They require a match
 
 Rabi's recent route also keeps live local speech capability separate from a static target-machine report. RabiSpeech is TTS/ASR infrastructure that does not enter an Agent, RabiLink is the system transport, and glasses, phones, or other clients remain the actual callers.
 
+In version 0.3.1, plan approvals can select independent changes per question and show implementation details. Additional information returns the task to analysis; only explicitly approved scope may run. Web hot patches remain experimental: initial installation or backend changes require a full upgrade, and a successful build does not establish installed rollback acceptance.
+
 ## Directory contents
 
 - `persona.md` defines identity, voice, boundaries, and routing behavior.

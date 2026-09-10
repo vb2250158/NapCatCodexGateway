@@ -2,6 +2,8 @@
 
 # 源码热补丁
 
+安装版界面与独立 Web Bundle 使用[Web 热补丁](web-hot-patches.md)，与后台源码补丁分别校验和发布。
+
 状态：部分运行验收通过，完整覆盖仍在开发。2026-09-10 已在安装版验证插件目录模块自动修改与恢复（revision 0→1→2），期间 Manager 身份和模块 Worker 不变。该验收仅覆盖已接入的插件目录模块，不代表全部源码、资源或复杂闭包均可热更新。现有插件重新协调接口与本页的源码补丁接口分别维护。
 
 Agent 开发与验收流程见 [源码热补丁开发 Skill](../skills/source-hot-patch-development/SKILL.md)。该文件在仓库内按需读取，不代表已安装到每个 Agent。
@@ -9,6 +11,10 @@ Agent 开发与验收流程见 [源码热补丁开发 Skill](../skills/source-ho
 ## 当前实现
 
 ### 升级与遗留项检查
+
+- 完整发布前运行候选中的 `scripts/check-source-patch-upgrade.mjs <候选绝对路径> <源码补丁状态绝对路径>`；Developer 激活在停止当前 Host 前执行该只读检查。存在活动补丁、契约覆盖或未确认操作时拒绝升级，保留旧服务；先在原版本通过正式回滚/回执核对恢复到已确认基线，再重新发布。
+- 旧活动代码已经回到旧包基线、契约一致且没有未确认操作时，启动器先验证新模块可启动，再把完整旧指针按内容 hash 保存到 `baseline-history/<moduleId>/`，最后原子更新活动基线。原操作回执和历史候选不删除。迁移或归档失败保留旧指针，不清空状态。
+- `/api/source-patches` 返回模块加载错误；模块失败使 `/meta` 与 `/health` 显示 degraded，但不关闭无关接口。升级验收必须带旧状态，覆盖再次启动、包基线回退、归档失败及未确认回执，不能只测空数据目录。
 
 - 首次取得本能力或修改热补丁运行时本身，仍需通过 Host 安装新版本；之后清单内兼容源码与资源修改由监听器自动发布，不要求每次重启。
 - Developer Channel 完整替换发行包的文档、插件、Skill 和源码补丁清单；已删除文件不能从旧包重新混入。构建与验收必须来自同一冻结源码，不能复用另一任务正在清理的 `dist/`。
@@ -73,7 +79,7 @@ Agent 开发与验收流程见 [源码热补丁开发 Skill](../skills/source-ho
 - `POST /_rabiroute/host/source-patches` 要求 loopback、当前 Host token，以及 `operationId`、`action=apply|rollback`、`moduleId`、`expectedRevision`、`applicationGenerationId`、`managerInstanceId`、`pluginGenerationId`。应用还需 `candidateSha256` 和配套 `contract`。发布队列与插件重新协调共用 generation 变更边界；旧身份拒绝。
 - `GET /api/source-patches/operations/{operationId}` 查询原操作。原 ID 与相同载荷返回已保存结果，不再次执行；换载荷拒绝。`pending` / `indeterminate` 不代表成功；有不确定结果的模块禁止继续发布。公开回执不包含内部恢复证明或载荷摘要。
 - `POST /_rabiroute/host/source-patches/reconcile` 使用原 `operationId`、`moduleId` 和新鲜的三项运行身份核对，不重新执行补丁。匹配的持久活动指针可证明提交；否则仅同一应用、Manager、PID 和随机执行身份下的精确版本、源码 hash、契约可证明提交或未开始。进程重建且没有持久提交证明时继续保持未知，不凭新进程的初始版本推断旧操作未执行。
-- 候选目录为运行状态根下的 `data/.runtime/source-patches/candidates`。操作记录与活动源码指针保存于相邻目录。冷启动可恢复已确认源码；包基线改变时要求显式 rebase，不悄悄应用旧候选。这里恢复的是代码，不是任意堆对象或业务数据。
+- 候选目录为运行状态根下的 `data/.runtime/source-patches/candidates`。操作记录与活动源码指针保存于相邻目录。冷启动可恢复已确认源码；包基线改变时，仅无活动覆盖且通过上述升级检查的旧基线自动归档迁移，其余情况要求显式 rebase，不悄悄应用旧候选。这里恢复的是代码，不是任意堆对象或业务数据。
 
 发布前先持久化模块准入锁，再写操作日志，二者完成后才执行补丁。准备失败且失败回执可保存时返回 `not_started`；若锁已落盘但日志及失败回执均无法保存，重启后仍禁止该模块继续发布，原日志缺失返回 404，不自动删除锁或制造成功回执。核对与同模块的启动恢复读取串行，健康和其他模块入口不等待这段核对。
 

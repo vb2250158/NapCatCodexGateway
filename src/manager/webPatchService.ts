@@ -161,7 +161,8 @@ export class WebPatchService {
           }
           this.state = next;
           this.pending = undefined;
-          this.options.audit?.("web_patch_committed", { operationId: receipt.operationId, revision: receipt.revision, active: receipt.active, previous: receipt.previous });
+          try { this.options.audit?.("web_patch_committed", { operationId: receipt.operationId, revision: receipt.revision, active: receipt.active, previous: receipt.previous }); }
+          catch (error) { process.emitWarning(`Web publication committed but diagnostic logging failed: ${String(error)}`); }
           return structuredClone(receipt);
         });
       });
@@ -171,6 +172,7 @@ export class WebPatchService {
   }
 
   async reconcile(operationId: string): Promise<{ state: "committed" | "not_started" | "unknown"; receipt?: Receipt }> {
+    if (typeof operationId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(operationId)) throw new Error("Invalid Web patch operation identity.");
     await this.tail;
     const existing = this.operation(operationId);
     if (existing) return { state: "committed", receipt: existing };
@@ -232,8 +234,10 @@ export class WebPatchService {
   async modules(modules: readonly WebPluginModule[], revision?: string | null): Promise<readonly WebPluginModule[]> {
     if (!revision) return modules;
     const manifest = await this.compatible(revision);
-    return modules.map(module => manifest.modules.some(entry => entry.pluginId === module.pluginId && entry.version === module.version)
-      ? { ...module, rev: revision, entryPath: "web/client.mjs" } : module);
+    return modules.map(module => {
+      if (!manifest.modules.some(entry => entry.pluginId === module.pluginId && entry.version === module.version)) throw new Error("Web release has no compatible module entry.");
+      return { ...module, rev: revision, entryPath: "web/client.mjs" };
+    });
   }
 
   async module(modules: readonly WebPluginModule[], id: string, revision: string, filename: string) {

@@ -970,7 +970,7 @@ test("compact reply delivers evidence once and remains recoverable after an unce
     const response = await handleAgentThreadRequest({ action: "send", threadId: source.threadId,
       cwd: process.cwd(), messageSource: messageSourceFor(target.threadId, target.threadName),
       sourceThreadId: target.threadId, sourceAgentType: "agent", inReplyToRequestId: initial.requestId,
-      prompt: `${evidence}\n\n${next}`, result: evidence, nextAction: next,
+      prompt: required ? undefined : `${evidence}\n\n${next}`, result: evidence, nextAction: next,
       responsePolicy: required ? "required" : "none", responseInstruction: required ? "回传验收结果" : undefined
     }, { allowedWorkspaces: [process.cwd()], agentRequests }, driver);
     const deliveryId = (response.data.communication as { deliveryId: string }).deliveryId;
@@ -979,7 +979,7 @@ test("compact reply delivers evidence once and remains recoverable after an unce
     assert.doesNotMatch(prompt, /当前接收会话|本次投递不要求回复|\[补充说明\]/);
     if (required) {
       const parameters = JSON.parse(prompt.split("[回传参数]\n")[1]);
-      for (const field of ["action", "threadId", "cwd", "messageSource", "sourceThreadId", "sourceAgentType", "inReplyToRequestId", "prompt", "result", "nextAction", "responsePolicy"]) {
+      for (const field of ["action", "threadId", "cwd", "messageSource", "sourceThreadId", "sourceAgentType", "inReplyToRequestId", "result", "nextAction", "responsePolicy"]) {
         assert.ok(Object.hasOwn(parameters.request, field), field);
       }
       const altered = prompt.replace(evidence, "altered evidence");

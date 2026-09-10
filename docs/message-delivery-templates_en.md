@@ -52,3 +52,5 @@ Older transport code failed to recognize JSON and appended a second `[投递编�
 Verification covers direct/mediated rendering, provenance, complete parameters, old receipts, recovery across restart, tampering, persistence retry, chat/plan/voice scenarios and user notifications. Source tests and builds do not prove Host deployment; runtime generation and artifacts must be checked separately.
 
 Agent source headers combine type and adapter on one line (`类型：Agent｜处理端：codex`) and use shorter session and delivery-time labels. The default Agent role is omitted; specific roles remain separate. Full session IDs, workspace paths and timestamps are retained. Replay reads both timestamp labels without rewriting historical receipt evidence.
+
+Formal replies use result and nextAction without a redundant prompt. New messages emit neither `[/回复]` nor `[补充说明]`. Distinct legacy prompt content is preserved under `[相关上下文]`; only exact duplicates are removed. The end marker is read only for historical receipts; new recovery uses full-message evidence.

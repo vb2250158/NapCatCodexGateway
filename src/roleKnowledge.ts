@@ -1010,7 +1010,6 @@ export function approvalRequestMissingFields(contract: PlanApprovalRequest | und
     "approver",
     "request",
     "recommendation",
-    "alternatives",
     "reason",
     "affectedActions",
     "validation",
@@ -1024,7 +1023,6 @@ export function approvalRequestMissingFields(contract: PlanApprovalRequest | und
   if (!contract.approver?.trim()) missing.push("approver");
   if (!contract.request.trim()) missing.push("request");
   if (!contract.recommendation?.trim()) missing.push("recommendation");
-  if (!contract.alternatives?.some((item) => item.trim())) missing.push("alternatives");
   if (!contract.reason.trim()) missing.push("reason");
   const hasFile = contract.files.some((item) => item.path.trim() && item.change.trim() && (item.action !== "move" || item.destination?.trim()));
   const hasCommand = contract.commands.some((item) => item.command.trim() && item.purpose.trim());

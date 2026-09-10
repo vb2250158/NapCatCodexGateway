@@ -165,6 +165,57 @@ test("built Manager keeps its identity while discovering modules and updating so
     assert.equal(resourceUpdated.active.pid, registered.active.pid);
     assert.equal(resourceUpdated.active.snapshot.contract.resources["source-patches/value.txt"], createHash("sha256").update("second").digest("hex"));
     assert.equal((await request("/api/plugins/catalog")).value.data.host, "patched");
+    const webDeadline = Date.now() + 30000;
+    let webBefore;
+    do {
+      webBefore = (await request("/api/web-patches")).value.data;
+      if (webBefore.state === "ready") break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } while (Date.now() < webDeadline);
+    assert.equal(webBefore.state, "ready", JSON.stringify(webBefore));
+    const webOutput = path.join(sourceRoot, "dist/web-patches");
+    const staging = path.join(webOutput, ".test-candidate");
+    await fs.cp(path.join(stateRoot, "data/.runtime/web-patches/candidates", webBefore.active), staging, { recursive: true });
+    const manifest = JSON.parse(await fs.readFile(path.join(staging, "manifest.json"), "utf8"));
+    const htmlPath = path.join(staging, "web/index.html");
+    const html = (await fs.readFile(htmlPath, "utf8")).replace("<head>", '<head><meta name="web-patch-test" content="updated">');
+    await fs.writeFile(htmlPath, html);
+    const htmlRecord = manifest.files.find(file => file.path === "web/index.html");
+    htmlRecord.size = Buffer.byteLength(html);
+    htmlRecord.sha256 = createHash("sha256").update(html).digest("hex");
+    const rawManifest = JSON.stringify(manifest);
+    const webRevision = createHash("sha256").update(rawManifest).digest("hex");
+    await fs.writeFile(path.join(staging, "manifest.json"), rawManifest);
+    await fs.rename(staging, path.join(webOutput, webRevision));
+    const webOperation = randomUUID();
+    const marker = path.join(webOutput, "latest.json");
+    await fs.writeFile(marker + ".tmp", JSON.stringify({ revision: webRevision, operationId: webOperation }));
+    await fs.rename(marker + ".tmp", marker);
+    const activationDeadline = Date.now() + 30000;
+    let webAfter;
+    do {
+      webAfter = (await request("/api/web-patches")).value.data;
+      if (webAfter.active === webRevision) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } while (Date.now() < activationDeadline);
+    assert.equal(webAfter.active, webRevision, JSON.stringify(webAfter));
+    assert.match(await (await fetch(`${ready.baseUrl}/`)).text(), /name="web-patch-test" content="updated"/);
+    const oldAsset = await fetch(`${ready.baseUrl}/_rabiroute/web/${webBefore.active}/web/${scriptSource.replace(/^\.\//, "")}`);
+    assert.equal(oldAsset.status, 200);
+    assert.equal(createHash("sha256").update(Buffer.from(await oldAsset.arrayBuffer())).digest("hex"), createHash("sha256").update(bundleBytes).digest("hex"));
+    const modules = (await request(`/api/plugins/modules?webRelease=${webBefore.active}`)).value.data.modules;
+    for (const module of modules) {
+      assert.equal(module.rev, webBefore.active);
+      const wrapper = await fetch(`${ready.baseUrl}/api/plugins/modules/${module.id}/${module.rev}/${module.entryPath}`);
+      assert.equal(wrapper.status, 200);
+      assert.match(await wrapper.text(), new RegExp(webBefore.active));
+    }
+    const rollback = (await request("/_rabiroute/host/web-patches", {
+      ...webAfter.identity, operationId: randomUUID(), candidate: webBefore.active, expectedRevision: webAfter.revision
+    })).value.data;
+    assert.equal(rollback.state, "committed");
+    assert.equal(rollback.active, webBefore.active);
+    assert.equal((await request(`/api/web-patches/operations/${webOperation}`)).value.data.active, webRevision);
     const current = (await request("/meta")).value;
     assert.equal(current.applicationGenerationId, initial.applicationGenerationId);
     assert.equal(current.managerInstanceId, initial.managerInstanceId);
@@ -186,6 +237,6 @@ test("built Manager keeps its identity while discovering modules and updating so
     await exited;
     assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
     assert.ok(path.basename(root).startsWith("rabi-built-source-patch-"));
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 });

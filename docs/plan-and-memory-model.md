@@ -10,9 +10,11 @@
 
 ## 计划问题与回答
 
+分析中可以转入待补充信息或待审批。待补充信息表示现有事实不足以形成方案，需要用户补充；原任务收到反馈后先把计划回写到分析中，再判断还需补充还是已能提出方案。待审批表示明确方案已经形成、尚未实施，通常确认是否执行；玩法设计、美术候选等需要比较方案的任务可提供真实候选，不能用 A／B 代替尚未完成的调查。
+
 “待补充信息”要求 Agent 先查阅与问题相关的现有代码、配置、设计、文档和附件，在计划中写明资料清单、确认结果、分析卡点和仍无法确定的问题，再提出最少必要的具体询问。缺日志或复现步骤本身不构成等待理由。
 
-待审批和待补充信息的当前步骤均可通过既有计划 POST/PATCH 保存 `questions`。WebGUI 在原有审批/引导提交区显示问题：有 `options` 时显示单选选项，无选项时显示文字输入框；两种模式都允许自由文字回答。推荐项不自动选择，必填题允许选择或输入其他答案。选项不会自动批准方案或改变计划状态，答案通过既有反馈记录保存并通知原绑定任务，由 Agent 消费后推进。
+待审批和待补充信息的当前步骤均可通过既有计划 POST/PATCH 保存 `questions`。WebGUI 在原有审批/引导提交区显示问题：有 `options` 时按 `selectionMode` 显示单选（`single`）或多选（`multiple`），省略时兼容为单选；无选项时显示文字输入框。各题均可补充文字。推荐项不自动选择，必填题允许选择或输入其他答案。选项不会自动批准方案或改变计划状态，答案通过既有反馈记录保存并通知原绑定任务，由 Agent 消费后推进。
 
 ```json
 {
@@ -31,6 +33,14 @@
   }]
 }
 ```
+
+Agent 按需要设置题数和题型：互斥方案用单选，可组合的选项用多选；同一计划涉及不同事项或模块、且需要分别决定时，拆成多道题，可以混用题型。同一项修改必须联动的模块放在一题说明，不强制拆题。每题写清谁对哪个对象做什么、准备修改的逻辑，以及实际涉及的代码文件／方法、预制体对象／组件或配置表／ID／字段。各题独立审批，未选项与其它题不获得隐含授权。
+
+多选答案在界面草稿中使用 `optionIds`，单选沿用 `optionId`；反馈保存每题题目、全部所选标签和补充文字。多选的“都不做，保持现状”可设置 `exclusive: true`：选择它会清除同题其它选项，选择普通选项会清除它，校验也拒绝矛盾组合。`requireOption: true` 要求选择；任一已选选项的 `requiresText: true` 要求补充说明。空白必答、重复或未知选项、混用答案字段都不能通过校验。
+
+实施明细保存在题目或选项的 `implementation`，各方案各自维护，默认折叠。`changes` 必须有 1–30 项，每项包含 `kind`（`code/prefab/art/configuration/other`）、`path`（最多 1000 字符）、可选 `target`（方法、组件或字段，最多 500 字符）和 `change`（具体修改，最多 3000 字符）；可选 `validation`、`rollback` 各最多 3000 字符。一个明确方案放在题目上，设计候选或独立可选改动放在各选项上。展开明细不改变选择。
+
+兼容仅保留既有持久化数据：未指定题型按单选读取，缺少结构化明细的旧计划仍可展开原审批记录。新计划使用上述统一题目组件；不从旧正文猜测文件归属或补造候选。原记录只作授权来源和历史依据，新题目明细变化会使草稿失效并要求重新确认。旧记录在原任务下一次修订方案时按新字段写入，不批量改写业务计划。
 
 每步最多 5 题、每题最多 6 个选项；问题与选项 ID 必须在各自范围内唯一。`prompt` 最多 500 字符，`context` 1000，选项 `label` 200、`description` 500，`placeholder` 300；`required` 默认 true，选项可标 `recommended: true`。问题和所选标签随答案保存为反馈文字，合计沿用 2000 字符限制。提交前核对最新步骤和问题；问题已变化时要求刷新并重新确认，原有 ETag/幂等反馈链路继续生效。待补充信息的旧计划未提供此字段时保留自由文字反馈，不自动推断问题或补造调查结果。
 
@@ -253,7 +263,7 @@ WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles
 
 分析完成后，如果现有信息仍无法形成可审批的具体方案，且缺失信息会影响原因、改法、范围或验收合同，写入 `planWorkflow.roles.informationNeeded` 指向的 key，并在 `waitingFor` 中列出缺少的具体信息和提供者。信息补齐后恢复为 `roles.analysis`。不能因为暂未复现、疑似历史已修复、缺目标包、等待 QA 验收或等待是否关闭而使用该状态。明确等待讨论时写入 `roles.discussion` 指向的 key；普通暂停使用 `roles.paused`。恢复时按实际阶段选择 analysis 或 execution role 指向的 key。
 
-需要审批的当前步骤应带完整 `approvalRequest`。`approver`、`request`、`recommendation`、`alternatives` 和 `reason` 说明审批人、决定、推荐、备选与原因；`files` 逐项写路径、`create/modify/delete/move` 和具体改动；`commands` 写完整命令、用途和预期影响；`changes` 写配置、数据库、云环境或外部系统目标；`validation`、`rollback`、`outOfScope` 分别声明验收、回退和明确排除范围；`requestedAt`、`sourceMessageId / feedbackId`、`responseStatus` 记录请求来源与回执。`files / commands / changes` 至少一类非空。缺必要栏目的审批步骤由 Manager 标为 `presentation.approval.state=incomplete`、`enabled=false`。仍可继续独立分析时使用 analysis role；只有分析已结束但无法形成可审批具体方案时使用 informationNeeded role。合同完整且 `responseStatus=pending` 后，Agent 把 `plan.status` 写为 approval role 指向的 key；Manager 同时返回 `presentation.approval.state=ready` 和 `enabled=true`，但不会替 Agent 改写状态。
+需要审批的当前步骤应带完整 `approvalRequest`。`approver`、`request`、`recommendation` 和 `reason` 说明审批人、决定、实施方案与原因；`alternatives` 为可选的设计候选，不提供也能通过完整性校验；`files` 逐项写路径、`create/modify/delete/move` 和具体改动；`commands` 写完整命令、用途和预期影响；`changes` 写配置、数据库、云环境或外部系统目标；`validation`、`rollback`、`outOfScope` 分别声明验收、回退和明确排除范围；`requestedAt`、`sourceMessageId / feedbackId`、`responseStatus` 记录请求来源与回执。`files / commands / changes` 至少一类非空。缺必要栏目的审批步骤由 Manager 标为 `presentation.approval.state=incomplete`、`enabled=false`。仍可继续独立分析时使用 analysis role；只有分析已结束但无法形成可审批具体方案时使用 informationNeeded role。合同完整且 `responseStatus=pending` 后，Agent 把 `plan.status` 写为 approval role 指向的 key；Manager 同时返回 `presentation.approval.state=ready` 和 `enabled=true`，但不会替 Agent 改写状态。
 
 Manager 在读取边界兼容旧计划：旧 `未开始` 读为 `暂停`；旧 `进行中` 按完整待审批合同、旧步骤执行标记依次映射为 `待审批 / 执行中 / 分析中`；旧 `已完成` 读为 `完成`；旧 `已归档` 读为 `status=关闭, archiveStatus=已归档`。旧 `workPhase`、`discussionState` 和手写 `isBlocked` 只参与一次兼容读取，并在下一次规范 POST/PATCH 时清理。系统不会猜测审批人、来源、推荐方案、备选或请求时间。
 

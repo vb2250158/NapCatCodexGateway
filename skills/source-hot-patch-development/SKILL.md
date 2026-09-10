@@ -5,6 +5,8 @@ description: 开发、验证和排障 RabiRoute 源码热补丁。用于修改�
 
 # 源码热补丁开发
 
+安装版 WebGUI 与独立 Web Bundle 另按[Web 热补丁](../../docs/web-hot-patches.md)处理。`webgui:watch` 使用生产构建，不把开发服务器作为安装版验收；后端变化仍需受控完整发布。
+
 ## 先读与边界
 
 - 先读 [源码热补丁](../../docs/source-hot-patches.md)、[代码架构](../../docs/code-architecture.md) 和目标功能文档，再检查工作区差异与原 owner。

@@ -17,7 +17,7 @@ English | <a href="./README_zh.md">简体中文</a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="Current version: 0.2.6" src="https://img.shields.io/badge/version-0.2.6-3178c6">
+  <img alt="Current version: 0.3.1" src="https://img.shields.io/badge/version-0.3.1-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -72,7 +72,7 @@ The manual trigger performs a real delivery. See [Complete the first Route](docs
 
 ## Current capabilities
 
-The repository version is `0.2.6`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+The repository version is `0.3.1`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
 
 | Area | Status | What it provides |
 | --- | --- | --- |
@@ -92,7 +92,7 @@ See [Current capabilities and maturity](docs/current-capabilities_en.md) for com
 
 ## Recent changes
 
-### 0.2.6: media projects, H3 workflow profiles and desktop capture
+### 0.3.1: media projects, H3 workflow profiles and desktop capture
 
 - Save media canvas projects on the server, combine image/video/audio/text cards, and generate images or speech alongside H3 video.
 - Select compatible standard or fast H3 workflows and optional audio; improve mixed-DPI screenshot coordinates and fixed TTS voice selection.

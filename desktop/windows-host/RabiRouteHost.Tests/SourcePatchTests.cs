@@ -10,6 +10,8 @@ internal static class SourcePatchTests
     {
         check(HostEntry.ParseCommand(["--command", "source-patch"]) == "source-patch", "source patch CLI uses the formal command parser");
         check(HostEntry.ParseCommand(["--command", "source-patch-reconcile"]) == "source-patch-reconcile", "source patch reconciliation has a separate command");
+        check(HostEntry.ParseCommand(["--command", "web-patch"]) == "web-patch", "web publication uses the formal Host command parser");
+        check(HostEntry.ParseCommand(["--command", "web-patch-reconcile"]) == "web-patch-reconcile", "web reconciliation has a separate command");
         check(HostRuntime.RequiresDurableAudit("source-patch") && !HostRuntime.AuditAllowsDispatch("source-patch", false), "source patch forwarding requires durable Host audit");
         var payload = JsonSerializer.SerializeToElement(new
         {
@@ -52,7 +54,7 @@ internal static class SourcePatchTests
             check(decoded.SourcePatch?.GetProperty("operationId").GetString() == "source-operation-test", "Host pipe preserves source operation identity");
         }
 
-        foreach (var mode in new[] { "apply", "reconcile", "pending", "missing", "wrong", "oversize" })
+        foreach (var mode in new[] { "apply", "reconcile", "pending", "missing", "wrong", "oversize", "web", "web-reconcile", "web-wrong" })
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
@@ -63,12 +65,13 @@ internal static class SourcePatchTests
                 var endpoint = (IPEndPoint)listener.LocalEndpoint;
                 var active = ready with { BaseUrl = $"http://127.0.0.1:{endpoint.Port}" };
                 var server = RespondAsync(listener, payload, token, mode, check, timeout.Token);
-                var result = await SourcePatchTransport.SendAsync(active, token, payload, mode == "reconcile", timeout.Token);
+                var isWeb = mode.StartsWith("web", StringComparison.Ordinal);
+                var result = await SourcePatchTransport.SendAsync(active, token, payload, mode.EndsWith("reconcile", StringComparison.Ordinal), timeout.Token, isWeb);
                 await server;
-                var confirmedEnvelope = mode is "apply" or "reconcile" or "pending";
+                var confirmedEnvelope = mode is "apply" or "reconcile" or "pending" or "web" or "web-reconcile";
                 check(result.Ok == confirmedEnvelope, $"source patch transport validates {mode} response");
-                check(result.SourcePatchOperationId == "source-operation-test", $"source patch transport keeps original identity for {mode}");
-                if (!confirmedEnvelope) check(result.State == "source_patch_unconfirmed", $"source patch {mode} result remains unconfirmed");
+                check((isWeb ? result.WebPatchOperationId : result.SourcePatchOperationId) == "source-operation-test", $"patch transport keeps original identity for {mode}");
+                if (!confirmedEnvelope) check(result.State == (isWeb ? "web_patch_unconfirmed" : "source_patch_unconfirmed"), $"patch {mode} result remains unconfirmed");
                 check(!JsonSerializer.Serialize(result).Contains(token, StringComparison.Ordinal), "Host control token never appears in source patch responses");
             }
             finally { listener.Stop(); }
@@ -90,7 +93,9 @@ internal static class SourcePatchTests
             if (length >= 4 && bytes[length - 4] == 13 && bytes[length - 3] == 10 && bytes[length - 2] == 13 && bytes[length - 1] == 10) break;
         }
         var text = Encoding.ASCII.GetString(headers.ToArray());
-        check(text.StartsWith(mode == "reconcile" ? "POST /_rabiroute/host/source-patches/reconcile " : "POST /_rabiroute/host/source-patches ", StringComparison.Ordinal), "source patch forwards only to its fixed Manager route");
+        var route = mode.StartsWith("web", StringComparison.Ordinal) ? "/_rabiroute/host/web-patches" : "/_rabiroute/host/source-patches";
+        if (mode.EndsWith("reconcile", StringComparison.Ordinal)) route += "/reconcile";
+        check(text.StartsWith($"POST {route} ", StringComparison.Ordinal), "patch forwards only to its fixed Manager route");
         check(text.Contains($"x-rabiroute-host-token: {token}", StringComparison.OrdinalIgnoreCase), "source patch forwarding carries private Host authority");
         var contentLength = text.Split("\r\n").First(line => line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase));
         var body = new byte[int.Parse(contentLength.Split(':', 2)[1].Trim())];
@@ -98,7 +103,7 @@ internal static class SourcePatchTests
         check(Encoding.UTF8.GetString(body) == expected.GetRawText(), "source patch HTTP forwarding does not rewrite the request payload");
         var response = mode == "missing" ? "{\"code\":0}" : JsonSerializer.Serialize(new
         {
-            code = 0, data = new { operationId = mode == "wrong" ? "another-operation" : "source-operation-test", moduleId = "module.test",
+            code = 0, data = new { operationId = mode is "wrong" or "web-wrong" ? "another-operation" : "source-operation-test", moduleId = "module.test",
                 state = mode == "pending" ? "pending" : "committed", commitState = mode == "pending" ? "unknown" : "committed" }
         });
         if (mode == "oversize") response = new string(' ', 65536) + response;

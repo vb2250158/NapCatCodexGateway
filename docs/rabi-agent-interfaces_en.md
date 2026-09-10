@@ -748,7 +748,7 @@ Every rendered RabiRoute delivery starts with these two wire sections. Collabora
 <prompt>
 ```
 
-Formal replies use a compact template: `[消息内容]` contains one `[回复结果]` (result) and one `[下一步]` (next action). Exact copies of those fields in `prompt` are omitted; other text remains under `[补充说明]` (additional instructions). Evidence is neither summarized nor truncated. The response contract retains delivery and request IDs, response instructions, and complete POST parameters, without repeating the receiving task identity or the no-reply explanation. Workspace restrictions come from the target `AGENTS.md`; the template adds neither generic collaboration reminders nor project-name branches.
+Formal replies use a compact template: `[消息内容]` contains one `[回复结果]` (result) and one `[下一步]` (next action). Exact copies of those fields in `prompt` are omitted; other text remains under `[相关上下文]` (additional instructions). Evidence is neither summarized nor truncated. The response contract retains delivery and request IDs, response instructions, and complete POST parameters, without repeating the receiving task identity or the no-reply explanation. Workspace restrictions come from the target `AGENTS.md`; the template adds neither generic collaboration reminders nor project-name branches.
 
 New deliveries use `[回传参数]` with a complete JSON request. The request store persists structured results and the actual prompt digest before delivery; `reconcile_delivery` matches accepted text and restores results from the record rather than parsing headings. Old formats serve outstanding historical reservations only; see [ownership and retirement](message-delivery-templates_en.md).
 
@@ -1100,3 +1100,5 @@ See [knowledge search](knowledge-search_en.md) for summary search and automatic 
 ### Error causes and language
 
 Manager failure responses include `errorMessages` in zh-CN and `en` while preserving the original message, machine code, commit state, and request ID. WebGUI displays the current language. Registered parameter, attachment, revision, and storage errors have localized causes; unregistered third-party failures retain their diagnostic text without inventing a cause.
+
+Formal replies may omit prompt when inReplyToRequestId identifies a managed request; result and nextAction remain required. Ordinary sends still require prompt. New replies omit the historical end delimiter.

@@ -1265,7 +1265,9 @@ async function executeAgentThreadRequest(
   if (action === "send") {
     let targetAgentAdapter = threadAgentAdapter(request);
     let threadId = normalizeThreadId(request.threadId);
-    const rawPrompt = requiredText(request.prompt, "prompt", maxPromptLength);
+    const rawPrompt = request.inReplyToRequestId && options.agentRequests
+      ? optionalText(request.prompt, "prompt", maxPromptLength) || ""
+      : requiredText(request.prompt, "prompt", maxPromptLength);
     const messageSource = normalizeRabiMessageSource(request.messageSource);
     const sendSource = await resolveAgentThreadSendSource(request, options, driver, messageSource);
     let cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);

@@ -45,6 +45,11 @@ RabiRoute 是一个开源的消息网关 / Policy Router 项目。协作时先�
 
 ## Manager 动态地址合同
 
+- 查找资料、历史决定、预定安排或任务线索时，先读 `skills/rabi-knowledge-search/SKILL.md`；Rabi 在线时先查记忆和计划，再按需搜索文件，离线直接普通搜索。
+
+- Rabi 故障、自修复或定期代码质量维护按 `docs/rabi-maintenance.md` 执行：查询长期维护计划的唯一 taskBinding，投递证据并跟进；已有 Bug 保留原计划任务，不重复建任务或并行抢改。
+- 消息外发、跨人格、持久 Agent 正文投递及正式回传，先读 `docs/rabi-agent-interfaces.md` 的“消息投递”章节。Rabi 可用时统一走受管接口；只有当前动态发现与有界重试确认 Rabi 不可用，且排除原投递已生效后，才允许原授权内的旁路。只读任务核对不受此限制。
+
 - 所有新增或修改的 Skill、工作流和脚本，只要访问 RabiRoute Manager，都必须使用当前 application generation 发布的完整地址，不得写死 Manager 端口。
 - 安装版通过 `RabiRouteHost.exe --command status --json` 取得 `managerBaseUrl`、`applicationGenerationId` 和 `managerInstanceId`；源码模式只使用 Manager 输出的结构化 READY 地址；测试或外部调用可以显式注入完整 URL。
 - 取得地址后必须读取 `<managerBaseUrl>/meta`，确认 `health.state=healthy`、`requiredReady=true`，并核对 generation 与 Manager 实例身份。generation 变化后重新发现地址，不缓存旧 URL。
@@ -52,6 +57,12 @@ RabiRoute 是一个开源的消息网关 / Policy Router 项目。协作时先�
 - 修改 Skill、工作流或脚本后运行 `node --test scripts/dynamic-manager-active-truth.test.mjs`；该测试递归检查现有和新增入口。
 
 ## 修改代码
+
+- 所有进入公开仓库的代码都必须采用通用设计；业务差异通过配置、稳定契约或插件表达，不按特定公司、客户或项目硬编码分支。
+- 公开代码的文件名、标识符、常量、路径、默认值、注释、日志、测试和示例中，不得出现真实公司、客户、项目名称或同类私有业务标识。公司／项目专属数据只能存放在经 `git check-ignore` 确认忽略、且未被 Git 跟踪的本地文件中；不得打入公开构建产物或提交。`.gitignore` 不会自动取消已跟踪文件，不能靠新增忽略规则掩盖泄漏。
+- 修改现有功能时，同步清理该调用链上的专属逻辑，迁移到通用配置入口；保留用户本地数据，核对源码、测试、文档示例与构建产物，不以改名代替通用化。不扩大为未经授权的全仓历史清理。
+
+- 修改或排查乐奇 / Rokid / CXR、眼镜应用、推流录像与签名时，先读 `skills/rokid-development/SKILL.md`；当前项目不采用 CXR-M。
 
 - 新平台入口优先新增 `src/adapters/` 模块，不要把所有逻辑塞进 NapCat adapter。
 - 路由规则、模板渲染和处理端投递的核心在 `src/forwarding.ts`。

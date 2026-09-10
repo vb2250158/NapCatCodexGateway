@@ -215,6 +215,11 @@ try {
     if ($previousStatus.ExitCode -ne 0 -or $previousStatus.Response.ok -ne $true) {
         throw "Cannot query the current Host before Developer activation."
     }
+    $sourcePatchPreflight = Join-Path $CandidateRoot "scripts\check-source-patch-upgrade.mjs"
+    if (Test-Path -LiteralPath $sourcePatchPreflight -PathType Leaf) {
+        & (Join-Path $CandidateRoot "node.exe") $sourcePatchPreflight $CandidateRoot (Join-Path $InstallRoot "data\.runtime\source-patches")
+        if ($LASTEXITCODE -ne 0) { throw "Source patch upgrade preflight failed; the current Host has not been stopped." }
+    }
     Stop-HostGeneration $hostExe $previousStatus
     Assert-CurrentPointerToken $currentPath $previousPointerToken
 

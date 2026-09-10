@@ -201,6 +201,8 @@ test("plan guidance reaches the bound task without pretending to approve a step"
   assert.equal(taskRequests[0]?.title, "审批直达原业务任务");
   assert.equal(taskRequests[0]?.createIfMissing, true);
   assert.match(taskRequests[0]?.prompt || "", /引导影响范围、优先级或路径时/);
+  assert.match(taskRequests[0]?.prompt || "", /用户补充后先 PATCH 回 analysis，重新分析/);
+  assert.match(taskRequests[0]?.prompt || "", /不能把补充信息当成批准实施/);
   assert.match(taskRequests[0]?.prompt || "", /PATCH 计划和后续步骤/);
   assert.match(taskRequests[0]?.prompt || "", /kind=guidance_response/);
   assert.match(taskRequests[0]?.prompt || "", /feedbackId=response-feedback-plan-guidance/);

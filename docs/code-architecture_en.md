@@ -6,6 +6,8 @@ English | <a href="./code-architecture.md">简体中文</a>
 
 # RabiRoute Code Architecture
 
+`webPatchCatalog.ts` validates immutable candidates. `WebPatchService` atomically saves pointers and receipts within existing generation serialization; `WebPatchWatcher` consumes completion markers. Host commands reuse fencing and auditing; clients pin modules to document versions. See [Web hot patches](web-hot-patches_en.md) for limits and legacy retirement.
+
 Android daily navigation lives in `recording/RabiRecordingHubActivity`. `CaptureOwnership` excludes simultaneous conversation audio, local audio and video, while `RecordingStore` owns session manifests. `RabiLocalAudioService` and `RabiLiveRecordingService` own capture and media files. `RabiConversationService` initializes historical queues on a single executor and defers commands in order until ready, avoiding main-thread stalls and interrupted recording. See [mobile recording UI](rabilink-mobile-recording-ui_en.md).
 
 Cross-PC reads use `rabiPeerProtocol.ts` for encrypted contracts and target-authorized dispatch, `rabiPeerClient.ts` for LAN/P2P/Relay selection, and `rabiPeerDirect.ts` for bounded WebRTC connections. `rabiPeerDiscovery.ts` serves RPC and persona synchronization. The RabiLink plugin owns HTTP routes and disposal; the existing dedicated LAN listener additionally accepts encrypted `/api/rabilink/peer/receive`, without exposing the full Manager. See [Cross-PC API calls](rabilink-peer-rpc_en.md).

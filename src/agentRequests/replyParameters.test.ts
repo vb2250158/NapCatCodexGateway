@@ -12,6 +12,7 @@ test("reply reminders use the same complete destination and sender contract as o
   const request = agentReplyRequest(preparation);
   assert.deepEqual(parameters.request, request);
   assert.equal(request.threadId, source.threadId);
+  assert.equal(Object.hasOwn(request, "prompt"), false);
   assert.equal(request.sourceThreadId, target.threadId);
   assert.equal(request.cwd, source.workspace);
   assert.deepEqual(request.messageSource, { type: "agent", agentAdapter: "dsh", sessionId: "responder", sessionName: "Responder", workspace: "C:/responder" });

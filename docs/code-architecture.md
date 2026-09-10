@@ -6,6 +6,8 @@
 
 # RabiRoute 代码架构
 
+`webPatchCatalog.ts` 校验不可变候选；`WebPatchService` 通过既有 generation 串行边界原子保存指针和回执；`WebPatchWatcher` 消费完成标记。Host 命令复用身份校验与审计，客户端按文档版本请求模块。容量和旧入口退出条件见[Web 热补丁](web-hot-patches.md)。
+
 Android 日常入口由 `recording/RabiRecordingHubActivity` 提供四页导航；`CaptureOwnership` 协调会话录音、本地录音和录像互斥，`RecordingStore` 保存会话清单。采集与媒体文件分别由 `RabiLocalAudioService`、`RabiLiveRecordingService` 持有。`RabiConversationService` 的历史队列初始化在单线程执行器中完成，就绪前命令有序等待，避免阻塞主线程与后台录像。见[移动端记录界面](rabilink-mobile-recording-ui.md)。
 
 跨 PC 只读调用由 `rabiPeerProtocol.ts` 拥有加密合同和目标授权分派，`rabiPeerClient.ts` 编排 LAN/P2P/Relay，`rabiPeerDirect.ts` 拥有有界 WebRTC 连接。`rabiPeerDiscovery.ts` 同时服务 RPC 与人格同步；RabiLink 插件拥有 HTTP 入口及释放，现有专用 LAN listener 额外接受加密的 `/api/rabilink/peer/receive`，不开放完整 Manager。见[跨电脑接口调用](rabilink-peer-rpc.md)。

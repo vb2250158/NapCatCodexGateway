@@ -6,6 +6,8 @@
 
 # RabiRoute 项目功能手册
 
+安装版 WebGUI、资源和独立模块的在线发布见[Web 热补丁](web-hot-patches.md)；后端变化仍须完整发布。
+
 移动端日常入口、三档采集、离线 WAV、录像会话与回看见[移动端记录界面](rabilink-mobile-recording-ui.md)；本地记录不依赖 Relay，既有会话语音处理保留高级兼容入口。
 
 跨电脑只读接口见[调用与目标授权](rabilink-peer-rpc.md)：支持设备发现、计划摘要、人格文件清单；LAN 优先、P2P 尝试及 Relay 回退共用加密合同。公网和双 PC 长期运行待验收。

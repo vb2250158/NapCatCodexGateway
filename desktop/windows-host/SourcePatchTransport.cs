@@ -10,6 +10,7 @@ internal static class SourcePatchTransport
     private const int MaximumResponseBytes = 48 * 1024;
 
     internal static bool IsCommand(string? command) => command is "source-patch" or "source-patch-reconcile";
+    internal static bool IsWebCommand(string? command) => command is "web-patch" or "web-patch-reconcile";
 
     internal static JsonElement ReadRequest(string? filename)
     {
@@ -31,23 +32,24 @@ internal static class SourcePatchTransport
         return document.RootElement.Clone();
     }
 
-    internal static bool Matches(ManagerReady ready, JsonElement payload) =>
+    internal static bool Matches(ManagerReady ready, JsonElement payload, bool webPatch = false) =>
         payload.ValueKind == JsonValueKind.Object &&
         ReadString(payload, "applicationGenerationId") == ready.ApplicationGenerationId &&
         ReadString(payload, "managerInstanceId") == ready.ManagerInstanceId &&
         !string.IsNullOrWhiteSpace(ReadString(payload, "operationId")) &&
-        !string.IsNullOrWhiteSpace(ReadString(payload, "moduleId")) &&
+        (webPatch || !string.IsNullOrWhiteSpace(ReadString(payload, "moduleId"))) &&
         !string.IsNullOrWhiteSpace(ReadString(payload, "pluginGenerationId"));
 
     internal static async Task<HostResponse> SendAsync(
-        ManagerReady ready, string controlToken, JsonElement payload, bool reconcile, CancellationToken cancellationToken)
+        ManagerReady ready, string controlToken, JsonElement payload, bool reconcile, CancellationToken cancellationToken, bool webPatch = false)
     {
         var operationId = ReadString(payload, "operationId");
         HostResponse Result(bool ok, string state, string message, JsonElement? body = null) => new(
             ok, state, message, ApplicationGenerationId: ready.ApplicationGenerationId,
             ManagerInstanceId: ready.ManagerInstanceId, ManagerBaseUrl: ready.BaseUrl,
-            SourcePatchOperationId: operationId, SourcePatch: body);
-        if (!Matches(ready, payload)) return Result(false, "stale_generation", "Source patch identity does not match the active Manager.");
+            SourcePatchOperationId: webPatch ? null : operationId, SourcePatch: webPatch ? null : body,
+            WebPatchOperationId: webPatch ? operationId : null, WebPatch: webPatch ? body : null);
+        if (!Matches(ready, payload, webPatch)) return Result(false, "stale_generation", "Patch identity does not match the active Manager.");
         if (!Uri.TryCreate(ready.BaseUrl, UriKind.Absolute, out var endpoint) || endpoint.Scheme != Uri.UriSchemeHttp
             || !IPAddress.TryParse(endpoint.Host, out var address) || !IPAddress.IsLoopback(address))
             return Result(false, "invalid_endpoint", "Source patch control requires the published loopback Manager endpoint.");
@@ -57,8 +59,8 @@ internal static class SourcePatchTransport
         timeout.CancelAfter(TimeSpan.FromSeconds(20));
         using var client = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false })
         { Timeout = Timeout.InfiniteTimeSpan };
-        using var request = new HttpRequestMessage(HttpMethod.Post,
-            new Uri(endpoint, reconcile ? "/_rabiroute/host/source-patches/reconcile" : "/_rabiroute/host/source-patches"));
+        var route = webPatch ? "/_rabiroute/host/web-patches" : "/_rabiroute/host/source-patches";
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(endpoint, route + (reconcile ? "/reconcile" : "")));
         request.Headers.TryAddWithoutValidation("x-rabiroute-host-token", controlToken);
         request.Content = new ByteArrayContent(bytes);
         request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
@@ -77,6 +79,14 @@ internal static class SourcePatchTransport
             }
             using var document = JsonDocument.Parse(body.ToArray());
             var receipt = document.RootElement;
+            if (webPatch)
+            {
+                if (response.IsSuccessStatusCode && (!receipt.TryGetProperty("data", out var webReceipt)
+                    || ReadString(webReceipt, "operationId") != operationId
+                    || ReadString(webReceipt, "state") is not ("committed" or "not_started" or "unknown")))
+                    return Result(false, "web_patch_unconfirmed", "Web patch receipt did not match; query the original operation.");
+                return Result(response.IsSuccessStatusCode, "web_patch_result", $"Manager returned HTTP {(int)response.StatusCode}.", receipt.Clone());
+            }
             if (response.IsSuccessStatusCode && (!receipt.TryGetProperty("data", out var success)
                 || success.ValueKind != JsonValueKind.Object || ReadString(success, "moduleId") != ReadString(payload, "moduleId")
                 || ReadString(success, "state") is not ("pending" or "committed" or "failed" or "indeterminate")
@@ -89,7 +99,7 @@ internal static class SourcePatchTransport
         }
         catch (Exception exception) when (exception is OperationCanceledException or HttpRequestException or IOException or InvalidDataException or JsonException or InvalidOperationException)
         {
-            return Result(false, "source_patch_unconfirmed", "Source patch forwarding did not confirm an outcome; query the original operation and do not replay.");
+            return Result(false, webPatch ? "web_patch_unconfirmed" : "source_patch_unconfirmed", "Patch forwarding did not confirm an outcome; query the original operation and do not replay.");
         }
     }
 

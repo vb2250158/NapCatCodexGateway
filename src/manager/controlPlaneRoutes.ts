@@ -971,6 +971,7 @@ const managerPortPolicy = parseManagerPortPolicy(process.env.GATEWAY_MANAGER_POR
 let managerPort = managerPortPolicy.mode === "fixed" ? managerPortPolicy.port : 0;
 let managerBaseUrl = managerPort > 0 ? `http://127.0.0.1:${managerPort}` : "";
 let managerInstanceId = "";
+let managerSourcePatchStatus: (() => ReturnType<ManagerSourcePatchService["status"]>) | undefined;
 let managerPluginGenerationStatus: Readonly<{
   id: string;
   sequence: number;
@@ -8345,6 +8346,7 @@ function handleWebguiLanAccessApi(
 }
 
 function managerHealthPayload(): Record<string, unknown> {
+  const sourcePatches = managerSourcePatchStatus?.();
   const pluginGeneration = managerPluginGenerationStatus;
   const pluginReadiness = pluginGeneration?.readiness ?? {
     state: "degraded" as const,
@@ -8399,9 +8401,11 @@ function managerHealthPayload(): Record<string, unknown> {
       routeRequiredCount: routeLifecycle.required,
       blockedRouteIds: routeLifecycle.blocked,
       failedRouteIds: routeLifecycle.failed,
-      backgroundIncidentCount
+      backgroundIncidentCount,
+      sourcePatchesReady: sourcePatches?.state === "ready"
     }),
     pluginReadiness,
+    sourcePatches,
     routeLifecycle,
     backgroundLifecycle
   };
@@ -9604,6 +9608,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     runtime: managerPluginKernel!,
     audit: (event, fields) => managerOperationalLog.record("info", event, { result: JSON.stringify(fields) })
   });
+  managerSourcePatchStatus = () => managerSourcePatches.status();
   managerRuntimeOwner.register("manager_source_patches", () => managerSourcePatches.stop());
   const managerWebPatches = new WebPatchService({
     packageRoot, stateRoot: path.join(rootDir, "data/.runtime/web-patches"),

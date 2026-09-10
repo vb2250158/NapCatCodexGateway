@@ -141,7 +141,7 @@ function boundTaskPrompt(options: DeliverPlanApprovalFeedbackOptions): string {
       "[计划引导：已直接投递到绑定业务会话]",
       ...feedbackLines(options.feedback),
       "这是原业务任务。直接消费引导；秘书同步跟进控制面。",
-      "读取当前计划与反馈。引导影响范围、优先级或路径时，PATCH 计划和后续步骤；引导不等于审批。",
+      "读取当前计划与反馈。引导影响范围、优先级或路径时，PATCH 计划和后续步骤；引导不等于审批。若当前计划在配置的 informationNeeded 阶段，用户补充后先 PATCH 回 analysis，重新分析，再决定继续 informationNeeded 或形成完整方案进入 approval；不能把补充信息当成批准实施。",
       planFeedbackResponseMutationInstruction({
         endpoint: feedbackApiUrl(options),
         planId: options.plan.id,
@@ -155,7 +155,7 @@ function boundTaskPrompt(options: DeliverPlanApprovalFeedbackOptions): string {
     "[计划审批：已直接投递到绑定业务会话]",
     ...feedbackLines(options.feedback),
     "这是原业务任务。直接消费审批；秘书同步跟进控制面。",
-    "读取当前计划与审批记录，按意见更新计划或步骤。说明实际改动、命令、外部变化、验证、回退和排除范围。",
+    "读取当前计划与审批记录，按意见更新计划或步骤。说明实际改动、命令、外部变化、验证、回退和排除范围。逐题读取用户决定，只实施明确获批的方案和选项；一题获批不代表其它题获批。拒绝或要求修改时回到 analysis；仍缺决定性资料则进入 informationNeeded。方案明细变化后重新确认，不能执行旧选择或未选方案。",
     planFeedbackResponseMutationInstruction({
       endpoint: feedbackApiUrl(options),
       planId: options.plan.id,
@@ -204,8 +204,8 @@ function controlFeedbackText(
       ? `引导未直达业务任务。由${recipient}记录失败并续投原任务。`
       : `审批未直达业务任务。由${recipient}记录失败并续投原任务。`,
     guidance
-      ? "读取计划与反馈；必要时调整后续步骤。引导不等于审批。"
-      : "读取计划与审批记录，按意见更新计划或步骤。"
+      ? "读取计划与反馈；必要时调整后续步骤。引导不等于审批。若当前处于 informationNeeded，收到补充后先回到 analysis，重新判断是否仍需补充或已有方案待审批。"
+      : "读取计划与审批记录，按意见更新计划或步骤。逐题读取用户决定，只实施明确获批的方案和选项；一题获批不代表其它题获批。拒绝或要求修改时回到 analysis；仍缺决定性资料则进入 informationNeeded。方案明细变化后重新确认，不能执行旧选择或未选方案。"
   ].join("\n");
 }
 

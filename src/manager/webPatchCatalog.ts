@@ -19,8 +19,8 @@ export function webPatchHash(value: string | Buffer): string {
 }
 
 export function webPatchPath(value: string): string {
-  if (!/^(web|docs)\/[A-Za-z0-9_./\-\u0080-\uffff]+$/.test(value)
-    || value.split("/").some(part => !part || part === "." || part === "..")) throw new Error("Invalid Web patch path.");
+  if (typeof value !== "string" || !/^(web|docs)\/[A-Za-z0-9_./\-\u0080-\uffff]+$/.test(value)
+    || value.split("/").some(part => !part || part === "." || part === ".." || part.endsWith("."))) throw new Error("Invalid Web patch path.");
   return value;
 }
 
@@ -45,10 +45,17 @@ async function fileHash(filename: string): Promise<string> {
 
 export async function webPatchBackend(packageRoot: string): Promise<string> {
   const root = path.join(packageRoot, "dist");
-  const files = (await walk(root, "", ["web-patches", "agent-hooks"])).filter(file => /\.(js|mjs)$/.test(file)
+  const files = (await walk(root, "", ["web-patches", "agent-hooks"])).filter(file => /\.(js|mjs|json)$/.test(file)
     && !file.endsWith(".test.js") && !file.includes("/web/") && !file.startsWith("agent-hooks/") && !file.startsWith("web-patches/"));
   const hash = createHash("sha256");
   for (const file of files) hash.update(`${file}\0${await fileHash(path.join(root, file))}\n`);
+  for (const name of ["package.json", "package-lock.json"]) {
+    const bytes = await fs.readFile(path.join(packageRoot, name)).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    });
+    hash.update(`${name}\0${bytes ? webPatchHash(bytes) : "absent"}\n`);
+  }
   return hash.digest("hex");
 }
 
@@ -65,21 +72,29 @@ export async function writeWebPatchJson(filename: string, value: unknown): Promi
 
 export async function verifyWebPatch(root: string, expected: string): Promise<WebPatchManifest> {
   if (!WEB_PATCH_HASH.test(expected)) throw new Error("Invalid Web patch hash.");
+  if ((await fs.lstat(root)).isSymbolicLink() || (await fs.lstat(path.join(root, "manifest.json"))).isSymbolicLink()) throw new Error("Web patch inputs cannot contain symbolic links.");
   const raw = await fs.readFile(path.join(root, "manifest.json"));
   if (raw.length > 2 * 1024 * 1024 || webPatchHash(raw) !== expected) throw new Error("Web patch manifest hash mismatch.");
   const manifest = JSON.parse(raw.toString()) as WebPatchManifest;
   if (manifest.schemaVersion !== 1 || !WEB_PATCH_HASH.test(manifest.backend) || !Array.isArray(manifest.files)
     || !manifest.files.length || manifest.files.length > 8192 || !Array.isArray(manifest.modules) || manifest.modules.length > 128) throw new Error("Invalid Web patch manifest.");
   const names = new Set<string>();
+  const portableNames = new Set<string>();
   let bytes = 0;
   const realRoot = await fs.realpath(root);
   for (const file of manifest.files) {
     webPatchPath(file.path);
-    if (names.has(file.path) || !WEB_PATCH_HASH.test(file.sha256) || !Number.isSafeInteger(file.size) || file.size < 0) throw new Error("Invalid Web patch file record.");
+    if (portableNames.has(file.path.toLowerCase()) || !WEB_PATCH_HASH.test(file.sha256) || !Number.isSafeInteger(file.size) || file.size < 0) throw new Error("Invalid Web patch file record.");
     names.add(file.path);
+    portableNames.add(file.path.toLowerCase());
     bytes += file.size;
     if (bytes > maximumBytes || file.size > 16 * 1024 * 1024) throw new Error("Web patch exceeds its byte budget.");
     const filename = await fs.realpath(path.join(root, file.path));
+    let ancestor = root;
+    for (const segment of file.path.split("/")) {
+      ancestor = path.join(ancestor, segment);
+      if ((await fs.lstat(ancestor)).isSymbolicLink()) throw new Error("Web patch inputs cannot contain symbolic links.");
+    }
     if (!filename.startsWith(realRoot + path.sep) || (await fs.lstat(path.join(root, file.path))).isSymbolicLink()
       || (await fs.stat(filename)).size !== file.size || await fileHash(filename) !== file.sha256) throw new Error("Web patch file verification failed.");
   }
@@ -126,7 +141,8 @@ export async function buildWebPatch(packageRoot: string, outputRoot: string): Pr
       if (!entry) continue;
       const source = await fs.readFile(path.join(pluginRoot, entry), "utf8");
       const match = source.match(/^export \{ activate \} from "\/(assets\/[A-Za-z0-9._/-]+)";\s*$/);
-      if (match) manifest.modules.push({ pluginId: plugin.id, version: plugin.version, entry: `web/${match[1]}` });
+      if (!match) throw new Error(`Web Bundle wrapper is not supported: ${plugin.id}`);
+      manifest.modules.push({ pluginId: plugin.id, version: plugin.version, entry: `web/${match[1]}` });
     }
     manifest.files.sort((left, right) => left.path.localeCompare(right.path));
     manifest.modules.sort((left, right) => left.pluginId.localeCompare(right.pluginId));

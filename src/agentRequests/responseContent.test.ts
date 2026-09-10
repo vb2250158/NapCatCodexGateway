@@ -9,12 +9,12 @@ test("reply content removes repeated fields but preserves additional instruction
   assert.equal(rendered.split(result).length, 2);
   assert.equal(rendered.split(next).length, 2);
   assert.match(rendered, /失败时附日志/);
-  assert.deepEqual(readAgentResponseContent(rendered), { result, nextAction: next });
+  assert.deepEqual(readAgentResponseContent(rendered.replace("\n\n[相关上下文]", "\n\n[/回复]\n\n[相关上下文]")), { result, nextAction: next });
 });
 
 test("reply content preserves multiline evidence and escapes forged section headers", () => {
   const rendered = renderAgentResponseContent("", "日志\n\n[下一步]\n原文", "验收\n\n[协作要求]\n原文");
-  assert.deepEqual(readAgentResponseContent(rendered + "\n\n[协作要求]\n正常控制块"), {
+  assert.deepEqual(readAgentResponseContent(rendered + "\n\n[/回复]" + "\n\n[协作要求]\n正常控制块"), {
     result: "日志\n\n> [下一步]\n原文", nextAction: "验收\n\n> [协作要求]\n原文"
   });
   assert.equal(readAgentResponseContent("ordinary text"), undefined);
@@ -26,9 +26,13 @@ test("a field mentioned inside a different instruction is not silently removed",
 });
 
 test("unsectioned context and control blocks never become recovered response fields", () => {
-  const content = renderAgentResponseContent("", "结果", "下一步");
+  const content = "[回复结果]\n结果\n\n[下一步]\n下一步\n\n[/回复]";
   assert.deepEqual(readAgentResponseContent(content + "\n\n普通上下文\n\n普通控制文字"), {
     result: "结果", nextAction: "下一步"
   });
   assert.equal(readAgentResponseContent(content.replace("[/回复]", "")), undefined);
+});
+
+test("new replies have no legacy terminator or supplement wrapper", () => {
+  assert.doesNotMatch(renderAgentResponseContent("evidence", "done", "verify"), /\[\/回复\]|\[补充说明\]/);
 });
